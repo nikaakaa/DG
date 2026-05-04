@@ -1,0 +1,11 @@
+[
+  {
+    "rule_id": "default",
+    "player_config_id": 1,
+    "start_x": 0,
+    "start_y": 0,
+    "step_x": 0,
+    "step_y": 1,
+    "max_attempts": 1024
+  }
+]

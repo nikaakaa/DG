@@ -1,0 +1,64 @@
+[
+  {
+    "config_id": 1,
+    "archetype_id": 1,
+    "entity_target": 1,
+    "components": [
+      1,
+      3,
+      4,
+      7
+    ],
+    "tags": [
+      "Entity.Player"
+    ],
+    "default_auto_move_interval_ticks": 1
+  },
+  {
+    "config_id": 1001,
+    "archetype_id": 2,
+    "entity_target": 2,
+    "components": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "tags": [
+      "Entity.Ball",
+      "Movement.Bouncable"
+    ],
+    "default_auto_move_interval_ticks": 1
+  },
+  {
+    "config_id": 1002,
+    "archetype_id": 3,
+    "entity_target": 3,
+    "components": [
+      1,
+      3,
+      4
+    ],
+    "tags": [
+      "Entity.Blocker"
+    ],
+    "default_auto_move_interval_ticks": 1
+  },
+  {
+    "config_id": 2001,
+    "archetype_id": 4,
+    "entity_target": 3,
+    "components": [
+      1,
+      2,
+      3,
+      8
+    ],
+    "tags": [
+      "Tile.Conveyor"
+    ],
+    "default_auto_move_interval_ticks": 1
+  }
+]

@@ -1,0 +1,47 @@
+[
+  {
+    "world_id": "demo",
+    "entity_id": 900000001,
+    "config_id": 1001,
+    "x": -2,
+    "y": 0,
+    "direction": 2,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
+    "entity_id": 900000100,
+    "config_id": 1002,
+    "x": 4,
+    "y": 0,
+    "direction": 0,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
+    "entity_id": 900000101,
+    "config_id": 1002,
+    "x": -4,
+    "y": 0,
+    "direction": 0,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
+    "entity_id": 900000200,
+    "config_id": 2001,
+    "x": 1,
+    "y": 0,
+    "direction": 2,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
+    "entity_id": 900000201,
+    "config_id": 2001,
+    "x": 3,
+    "y": 0,
+    "direction": 2,
+    "auto_move_interval_ticks": 1
+  }
+]

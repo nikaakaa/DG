@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>..\..\.build\DG.GameCore\bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>..\..\.build\DG.GameCore\obj\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>..\..\.build\DG.GameCore\obj\</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

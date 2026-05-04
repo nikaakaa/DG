@@ -1,0 +1,79 @@
+# ========================
+# Unity Client
+# ========================
+Client/DG_Client/Library/
+Client/DG_Client/Temp/
+Client/DG_Client/obj/
+Client/DG_Client/Logs/
+Client/DG_Client/UserSettings/
+Client/DG_Client/Build/
+Client/DG_Client/Builds/
+
+# Unity generated project files (NOT the source .csproj/.sln in Server)
+Client/DG_Client/*.csproj
+Client/DG_Client/*.sln
+Client/DG_Client/*.unityproj
+
+# Visual Studio / VS Code
+.vs/
+.vscode/
+**/.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.pidb
+
+# ========================
+# Local agent/editor settings
+# ========================
+.codex/
+.claude/
+
+# ========================
+# .NET Server
+# ========================
+Server/**/bin/
+Server/**/obj/
+
+# ========================
+# Java / Gradle (Ref/Minestom)
+# ========================
+Ref/
+Ref/**/.gradle/
+Ref/**/build/
+Ref/**/target/
+Ref/**/*.class
+Ref/**/*.jar
+Ref/**/*.war
+Ref/**/*.ear
+Ref/**/*.iml
+Ref/**/out/
+
+# ========================
+# Build outputs
+# ========================
+.build/
+*.apk
+*.aab
+*.app
+*.ipa
+*.appxbundle
+*.msix
+
+# ========================
+# OS generated
+# ========================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ========================
+# Other
+# ========================
+*.log

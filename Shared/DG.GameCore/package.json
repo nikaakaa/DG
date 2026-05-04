@@ -1,0 +1,7 @@
+{
+  "name": "com.dg.gamecore",
+  "version": "0.1.0",
+  "displayName": "DG GameCore",
+  "description": "Shared pure C# game rule core for DG.",
+  "unity": "2022.3"
+}

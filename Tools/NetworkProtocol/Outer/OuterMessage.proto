@@ -1,0 +1,134 @@
+syntax = "proto3";
+package Fantasy.Network.Message;
+// 协议分为:
+// ProtoBuf:可以在Outer和Inner文件里使用。
+// MemoryPack:可以在Outer和Inner文件里使用。
+// 使用方式:
+// 在message协议上方添加// Protocol+空格+协议名字
+// 例如:// Protocol ProtoBuf 或 // Protocol MemoryPack
+message C2G_TestMessage // IMessage
+{
+	string Tag = 1;
+}
+message C2G_TestRequest // IRequest,G2C_TestResponse
+{
+	string Tag = 1;
+}
+message G2C_TestResponse // IResponse
+{
+	string Tag = 1;
+}
+message C2G_JoinWorldRequest // IRequest,G2C_JoinWorldResponse
+{
+}
+message G2C_JoinWorldResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	int32 CurrentX = 3;
+	int32 CurrentY = 4;
+	string Reason = 5;
+}
+message C2G_MoveRequest // IRequest,G2C_MoveResponse
+{
+	int64 EntityId = 1;
+	int32 TargetX = 2;
+	int32 TargetY = 3;
+	int64 ClientTick = 4;
+}
+message G2C_MoveResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	int32 FinalX = 3;
+	int32 FinalY = 4;
+	int32 MoveErrorCode = 5;
+	string Reason = 6;
+	int64 ClientTick = 7;
+}
+message C2G_RegisterMoveObserverRequest // IRequest,G2C_RegisterMoveObserverResponse
+{
+	int64 EntityId = 1;
+}
+message G2C_RegisterMoveObserverResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	int32 CurrentX = 3;
+	int32 CurrentY = 4;
+	string Reason = 5;
+}
+message G2C_EntityMovedNotify // IMessage
+{
+	int64 EntityId = 1;
+	int32 FinalX = 2;
+	int32 FinalY = 3;
+	int64 ServerTick = 4;
+	int64 ClientTick = 5;
+}
+message G2C_WorldEntityState
+{
+	int64 EntityId = 1;
+	int32 ConfigId = 2;
+	int32 ArchetypeId = 3;
+	int32 EntityTarget = 4;
+	int32 X = 5;
+	int32 Y = 6;
+	int32 Direction = 7;
+	bool HasCollider = 8;
+	bool Blocking = 9;
+	bool Bouncable = 10;
+	bool AutoMove = 11;
+	bool PlayerControlled = 12;
+}
+message G2C_WorldSnapshotNotify // IMessage
+{
+	int64 ServerTick = 1;
+	repeated G2C_WorldEntityState Entities = 2;
+}
+message G2C_WorldDeltaNotify // IMessage
+{
+	int64 ServerTick = 1;
+	repeated G2C_WorldEntityState Entities = 2;
+	repeated int64 RemovedEntityIds = 3;
+}
+message C2G_DebugSpawnEntityRequest // IRequest,G2C_DebugSpawnEntityResponse
+{
+	int64 EntityId = 1;
+	int32 ConfigId = 2;
+	int32 X = 3;
+	int32 Y = 4;
+	int32 Direction = 5;
+	int64 PlayerId = 6;
+	int32 AutoMoveIntervalTicks = 7;
+}
+message G2C_DebugSpawnEntityResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	string Reason = 3;
+}
+message C2G_DebugMoveEntityRequest // IRequest,G2C_DebugMoveEntityResponse
+{
+	int64 EntityId = 1;
+	int32 TargetX = 2;
+	int32 TargetY = 3;
+}
+message G2C_DebugMoveEntityResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	int32 FinalX = 3;
+	int32 FinalY = 4;
+	string Reason = 5;
+}
+message C2G_DebugRemoveEntityRequest // IRequest,G2C_DebugRemoveEntityResponse
+{
+	int64 EntityId = 1;
+}
+message G2C_DebugRemoveEntityResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	string Reason = 3;
+}

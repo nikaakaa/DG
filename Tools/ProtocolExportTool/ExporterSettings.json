@@ -1,0 +1,16 @@
+{
+    "Export": {
+        "NetworkProtocolDirectory": {
+            "Value": "D:/Unity_Project_1/DG/Tools/NetworkProtocol",
+            "Comment": "ProtoBuf文件所在的文件夹位置"
+        },
+        "NetworkProtocolServerDirectory": {
+            "Value": "D:/Unity_Project_1/DG/Server/Entity/Generate/NetworkProtocol",
+            "Comment": "ProtoBuf生成到服务端的文件夹位置"
+        },
+        "NetworkProtocolClientDirectory": {
+            "Value": "D:/Unity_Project_1/DG/Client/DG_Client/Assets/Scripts/Generate/NetworkProtocol",
+            "Comment": "ProtoBuf生成到客户端的文件夹位置"
+        }
+    }
+}
