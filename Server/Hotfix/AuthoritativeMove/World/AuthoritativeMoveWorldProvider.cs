@@ -9,11 +9,9 @@ public static class AuthoritativeMoveWorldProvider
 
     public static IGameConfigProvider ConfigProvider { get; } = CreateConfigProvider();
     public static GameWorld World { get; } = CreateDefaultWorld(ConfigProvider);
-    public static MovementResolveSystem MovementResolveSystem { get; } = new();
-    public static AutoMoveSystem AutoMoveSystem { get; } = new(MovementResolveSystem);
-    public static PushOnEnterSystem PushOnEnterSystem { get; } = new(MovementResolveSystem);
+    public static AuthoritativeInputQueue InputQueue { get; } = new();
     public static AuthoritativeWorldSyncSystem SyncSystem { get; } = new(World);
-    public static AuthoritativeWorldTickRunner TickRunner { get; } = new(World, AutoMoveSystem, PushOnEnterSystem, SyncSystem, TickIntervalMs);
+    public static AuthoritativeWorldTickRunner TickRunner { get; } = new(World, InputQueue, SyncSystem, TickIntervalMs);
     public static MoveObserverRegistry<Session> Observers { get; } = new();
     public static MultiplayerEntityManager<Session> Players { get; } = new(World, ConfigProvider);
     public static DebugWorldEditService DebugEdit { get; } = new(World);

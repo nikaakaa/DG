@@ -48,10 +48,11 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
             beforeCoord.X,
             beforeCoord.Y);
 
-        long serverTick = AuthoritativeMoveWorldProvider.NextServerTick();
-        DG.GameCore.MoveResult result = AuthoritativeMoveWorldProvider.MovementResolveSystem.Resolve(
-            AuthoritativeMoveWorldProvider.World,
-            MoveCommand.ToTarget(request.EntityId, new GridCoord(request.TargetX, request.TargetY), MoveCommandSource.PlayerInput, serverTick, request.ClientTick));
+        AuthoritativeMoveInput input = AuthoritativeMoveWorldProvider.InputQueue.EnqueueMove(
+            request.EntityId,
+            new GridCoord(request.TargetX, request.TargetY),
+            request.ClientTick);
+        DG.GameCore.MoveResult result = await input.WaitAsync();
         bool hasAfter = TryGetCoord(request.EntityId, out GridCoord afterCoord);
         AuthoritativeMoveWorldProvider.Observers.RefreshOwner(request.EntityId, session);
 
@@ -78,31 +79,11 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
 
         if (!response.Success)
         {
-            Log.Info(
-                "[C2G_MoveRequestHandler] skip broadcast entity:{0} moveErrorCode:{1} reason:{2} clientTick:{3}",
-                response.EntityId,
-                response.MoveErrorCode,
-                response.Reason,
-                response.ClientTick);
             reply();
-            await FTask.CompletedTask;
             return;
         }
 
         reply();
-        IReadOnlyList<Session> observers = AuthoritativeMoveWorldProvider.Players.EnumerateAvailable(observer => !observer.IsDisposed);
-        Log.Info(
-            "[C2G_MoveRequestHandler] broadcast world delta entity:{0} final:({1},{2}) serverTick:{3} clientTick:{4} observers:{5}",
-            response.EntityId,
-            response.FinalX,
-            response.FinalY,
-            serverTick,
-            response.ClientTick,
-            observers.Count);
-
-        AuthoritativeMoveWorldProvider.SyncSystem.BroadcastDelta(observers);
-
-        await FTask.CompletedTask;
     }
 
     private static bool TryGetCoord(long entityId, out GridCoord coord)

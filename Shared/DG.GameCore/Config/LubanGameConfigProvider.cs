@@ -31,6 +31,14 @@ public sealed class LubanGameConfigProvider : IGameConfigProvider
         return true;
     }
 
+    public IReadOnlyList<EntityArchetype> GetEntityArchetypes()
+    {
+        return tables.TbEntityArchetype.DataList
+            .Select(ConvertArchetype)
+            .OrderBy(archetype => archetype.ConfigId)
+            .ToArray();
+    }
+
     public IReadOnlyList<EntitySpawnSpec> GetWorldSpawns(string worldId)
     {
         if (string.IsNullOrEmpty(worldId))
@@ -54,6 +62,19 @@ public sealed class LubanGameConfigProvider : IGameConfigProvider
         }
 
         rule = ConvertPlayerSpawnRule(row);
+        return true;
+    }
+
+    public bool TryGetPortConnector(int configId, out PortConnectorConfig config)
+    {
+        cfg.gamecore.PortConnectorConfig row = tables.TbPortConnectorConfig.GetOrDefault(configId);
+        if (row == null)
+        {
+            config = default;
+            return false;
+        }
+
+        config = new PortConnectorConfig(row.ConfigId, (DirectionMask)row.Ports);
         return true;
     }
 

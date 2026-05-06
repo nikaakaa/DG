@@ -10,6 +10,33 @@
   },
   {
     "world_id": "demo",
+    "entity_id": 900000099,
+    "config_id": 1003,
+    "x": 0,
+    "y": 1,
+    "direction": 0,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
+    "entity_id": 900000300,
+    "config_id": 1004,
+    "x": 0,
+    "y": -1,
+    "direction": 2,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
+    "entity_id": 900000301,
+    "config_id": 1004,
+    "x": 1,
+    "y": -1,
+    "direction": 2,
+    "auto_move_interval_ticks": 1
+  },
+  {
+    "world_id": "demo",
     "entity_id": 900000100,
     "config_id": 1002,
     "x": 4,

@@ -32,6 +32,13 @@
       },
       "url": "https://package.openupm.com"
     },
+    "com.firebox.prefab-annotator": {
+      "version": "https://github.com/wuchunpeng777/prefab-annotator.git",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "c081298d0cba11e7dc954a4c1b497efacb60f857"
+    },
     "com.unity.burst": {
       "version": "1.8.21",
       "depth": 1,

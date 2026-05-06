@@ -1,4 +1,5 @@
-﻿using DG.Map;
+using DG.Map;
+using Fantasy;
 using System;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -10,7 +11,7 @@ namespace DG.EditorTools
     {
         private const string ScenePath = "Assets/Scenes/ClientWorldRunnerDemo.unity";
 
-        [MenuItem("DG/Map/Create Client ClientMapWorld Runner Demo Scene")]
+        [MenuItem("DG/ClientWorld/Create Client ClientMapWorld Runner Demo Scene")]
         public static void CreateScene()
         {
             UnityEngine.SceneManagement.Scene scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
@@ -21,12 +22,14 @@ namespace DG.EditorTools
             ClientMapWorld.AddComponent<ClientMoveNetworkSubmitter>();
             ClientMapWorld.AddComponent<ClientWorldDemo>();
             ClientMapWorld.AddComponent<ClientWorldVisuals>();
-            ClientMapWorld.AddComponent<ClientNetworkDebugOverlay>();
-            Type debugEditorType = Type.GetType("DG.Map.ClientWorldDebugEditor, Assembly-CSharp");
-            if (debugEditorType != null)
-            {
-                ClientMapWorld.AddComponent(debugEditorType);
-            }
+            ClientMapWorld.AddComponent<ClientWorldDebugEditor>();
+
+            GameObject fantasyRuntimeObject = new GameObject("FantasyRuntime");
+            FantasyRuntime fantasyRuntime = fantasyRuntimeObject.AddComponent<FantasyRuntime>();
+            fantasyRuntime.remoteIP = "127.0.0.1";
+            fantasyRuntime.remotePort = 20000;
+            fantasyRuntime.protocol = FantasyRuntime.NetworkProtocolType.KCP;
+            fantasyRuntime.enableHeartbeat = true;
 
             GameObject cameraObject = new GameObject("Main Camera");
             Camera camera = cameraObject.AddComponent<Camera>();

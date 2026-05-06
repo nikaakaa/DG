@@ -20,7 +20,7 @@ namespace DG.EditorTools
         private bool drawLabels = true;
         private string entityIndexCheckResult = "";
 
-        [MenuItem("DG/Map/Chunk Debug")]
+        [MenuItem("DG/ClientWorld/Chunk Debug")]
         private static void Open()
         {
             Instance = GetWindow<MapChunkDebugWindow>("Chunk Debug");

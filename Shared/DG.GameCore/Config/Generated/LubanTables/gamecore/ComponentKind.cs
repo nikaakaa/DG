@@ -21,6 +21,8 @@ namespace cfg.gamecore
         AutoMove = 6,
         PlayerControl = 7,
         PushOnEnter = 8,
+        Pushable = 9,
+        PortConnector = 10,
     }
 
 } 

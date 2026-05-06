@@ -16,6 +16,7 @@ public partial class Tables
     public gamecore.TbEntityArchetype TbEntityArchetype {get; }
     public gamecore.TbWorldSpawn TbWorldSpawn {get; }
     public gamecore.TbPlayerSpawnRule TbPlayerSpawnRule {get; }
+    public gamecore.TbPortConnectorConfig TbPortConnectorConfig {get; }
 
 
       public Tables(System.Func<string, JArray> loader)
@@ -23,6 +24,7 @@ public partial class Tables
         TbEntityArchetype = new gamecore.TbEntityArchetype(loader("gamecore_tbentityarchetype"));
         TbWorldSpawn = new gamecore.TbWorldSpawn(loader("gamecore_tbworldspawn"));
         TbPlayerSpawnRule = new gamecore.TbPlayerSpawnRule(loader("gamecore_tbplayerspawnrule"));
+        TbPortConnectorConfig = new gamecore.TbPortConnectorConfig(loader("gamecore_tbportconnectorconfig"));
         ResolveRef();
     }
     
@@ -31,6 +33,7 @@ public partial class Tables
         TbEntityArchetype.ResolveRef(this);
         TbWorldSpawn.ResolveRef(this);
         TbPlayerSpawnRule.ResolveRef(this);
+        TbPortConnectorConfig.ResolveRef(this);
     }
 }
 

@@ -157,6 +157,20 @@ namespace Fantasy
 			request.EntityId = entityId;
 			return (G2C_DebugRemoveEntityResponse)await session.Call(request);
 		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_DebugSetEntityTagResponse> C2G_DebugSetEntityTagRequest(this Session session, C2G_DebugSetEntityTagRequest request)
+		{
+			return (G2C_DebugSetEntityTagResponse)await session.Call(request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_DebugSetEntityTagResponse> C2G_DebugSetEntityTagRequest(this Session session, long entityId, int tag, bool enabled)
+		{
+			using var request = Fantasy.C2G_DebugSetEntityTagRequest.Create();
+			request.EntityId = entityId;
+			request.Tag = tag;
+			request.Enabled = enabled;
+			return (G2C_DebugSetEntityTagResponse)await session.Call(request);
+		}
 
    }
 }

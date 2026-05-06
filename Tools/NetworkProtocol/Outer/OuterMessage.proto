@@ -132,3 +132,17 @@ message G2C_DebugRemoveEntityResponse // IResponse
 	int64 EntityId = 2;
 	string Reason = 3;
 }
+message C2G_DebugSetEntityTagRequest // IRequest,G2C_DebugSetEntityTagResponse
+{
+	int64 EntityId = 1;
+	int32 Tag = 2;
+	bool Enabled = 3;
+}
+message G2C_DebugSetEntityTagResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	int32 Tag = 3;
+	bool Enabled = 4;
+	string Reason = 5;
+}

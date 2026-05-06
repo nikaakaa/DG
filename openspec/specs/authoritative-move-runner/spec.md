@@ -1,4 +1,4 @@
-# authoritative-move-runner Specification
+﻿# authoritative-move-runner Specification
 
 ## Purpose
 TBD - created by archiving change add-authoritative-move-runner. Update Purpose after archive.
@@ -23,7 +23,7 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **AND** 移动规则失败原因使用独立的 `MoveErrorCode` 和 `Reason`
 
 ### Requirement: 服务端最小移动世界
-服务端 SHALL 维护独立于 Unity 客户端的权威 GameWorld 状态，用于裁决玩家和自动移动实体是否可以进入目标坐标。该权威 GameWorld SHALL 基于共享 GameCore 的实体、组件、坐标、MoveCommand 和 MovementResolveSystem，而不是只维护玩家 id 到坐标的专用字典。
+服务端 SHALL 维护独立于 Unity 客户端的权威 GameWorld 状态，用于裁决玩家和自动移动实体是否可以进入目标坐标。该权威 GameWorld SHALL 基于共享 GameCore 的实体、组件、坐标、WorldAction、BehaviorIntent 和 state-driven rule system，而不是只维护玩家 id 到坐标的专用字典。
 
 #### Scenario: 注册玩家坐标
 - **WHEN** 服务端最小世界接收一个玩家 id 和初始坐标
@@ -32,8 +32,8 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 
 #### Scenario: 合法移动更新坐标
 - **WHEN** 玩家请求移动到可进入坐标
-- **THEN** 服务端移动世界把请求转换为 MoveCommand
-- **AND** MovementResolveSystem 更新该玩家坐标
+- **THEN** 服务端移动世界把请求转换为玩家 movement action
+- **AND** state-driven rule system 通过 action / intent / plan / commit 管线更新该玩家坐标
 - **AND** 返回成功结果和最终坐标
 
 #### Scenario: 阻挡格拒绝移动
@@ -48,24 +48,24 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **AND** 它可以引用 Shared GameCore
 
 ### Requirement: 移动 RPC Handler
-服务端 SHALL 使用 Fantasy RPC Handler 接收 `C2G_MoveRequest`，验证 session 与 player entity 绑定，然后提交玩家输入 MoveCommand 给服务端权威 GameWorld，并返回 `G2C_MoveResponse`。
+服务端 SHALL 使用 Fantasy RPC Handler 接收 `C2G_MoveRequest`，验证 session 与 player entity 绑定，然后提交玩家 movement action 给服务端权威 GameWorld，并返回 `G2C_MoveResponse`。
 
 #### Scenario: Handler 处理合法移动
 - **WHEN** 客户端发送合法 `C2G_MoveRequest`
 - **THEN** Handler 验证该 session 可以移动该 player entity
-- **AND** Handler 提交玩家输入 MoveCommand
+- **AND** Handler 提交玩家 movement action
 - **AND** 响应 `Success=true`
 - **AND** 响应包含玩家 id、最终坐标和原始 `ClientTick`
 
 #### Scenario: Handler 处理非法移动
 - **WHEN** 客户端发送目标不可进入的 `C2G_MoveRequest`
-- **THEN** Handler 提交玩家输入 MoveCommand 并接收失败结果
+- **THEN** Handler 提交玩家 movement action 并接收失败结果
 - **AND** 响应 `Success=false`
 - **AND** 响应包含当前最终坐标、`MoveErrorCode`、`Reason` 和原始 `ClientTick`
 
 #### Scenario: Handler 日志可验证
 - **WHEN** Handler 收到移动请求
-- **THEN** 服务端日志记录请求玩家、目标坐标、MoveCommand 来源和处理结果
+- **THEN** 服务端日志记录请求玩家、目标坐标、movement action 来源和处理结果
 
 ### Requirement: 服务端推进器验证
 服务端 SHALL 提供可重复的构建和规则验证方式，证明合法移动被接受且非法移动被拒绝。
@@ -133,7 +133,7 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **AND** 该 session 不阻塞其他 observer 收到通知
 
 ### Requirement: 成功移动广播
-服务端 SHALL 在玩家 MoveCommand 成功裁决后，回复发起者并向在线 observer 广播统一 WorldDelta。
+服务端 SHALL 在玩家 movement action 成功裁决后，回复发起者并向在线 observer 广播统一 WorldDelta。
 
 #### Scenario: 合法移动广播给发起者和其他客户端
 - **WHEN** 客户端 A 发送合法 `C2G_MoveRequest`
@@ -175,12 +175,12 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 
 #### Scenario: 推动系统参与服务端 tick
 - **WHEN** 服务端 tick 推进
-- **THEN** 服务端先执行现有自动移动规则
-- **AND** 服务端再执行进入推动规则
+- **THEN** 服务端先把自动移动生成 state-driven auto movement action 或 intent
+- **AND** 服务端再把进入推动生成 state-driven mechanism push action 或 intent
 - **AND** 服务端最后广播包含推动结果的 WorldDelta
 
 #### Scenario: 推动结果同步给观察者
-- **WHEN** `PushOnEnterSystem` 成功推动一个 player entity
+- **WHEN** state-driven mechanism push 成功推动一个 player entity
 - **THEN** 服务端 GameWorld 标记该 entity dirty
 - **AND** 在线 observer 收到包含该 entity 最终坐标的 WorldDelta
 - **AND** 客户端不通过本地传送带规则推导权威坐标
@@ -248,7 +248,7 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **WHEN** 在 `Tools/ProtocolExportTool` 运行协议导出
 - **THEN** 服务端和客户端生成 `C2G_DebugMoveEntityRequest` 与响应类型
 - **AND** 请求包含 entity id 和目标坐标
-- **AND** 该请求语义为调试传送而不是普通 MoveCommand
+- **AND** 该请求语义为调试传送而不是普通 movement action
 
 #### Scenario: 生成调试删除协议
 - **WHEN** 在 `Tools/ProtocolExportTool` 运行协议导出
@@ -284,4 +284,5 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **THEN** 服务端响应失败并返回 reason
 - **AND** 权威 GameWorld 不产生状态变化
 - **AND** 服务端不广播 WorldDelta
+
 

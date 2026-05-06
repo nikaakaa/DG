@@ -17,9 +17,14 @@ public sealed class DebugWorldEditService
 
     public bool Enabled { get; set; } = true;
 
+    public long ResolveSpawnEntityId(long requestedEntityId)
+    {
+        return requestedEntityId > 0 ? requestedEntityId : AllocateEntityId();
+    }
+
     public bool TrySpawn(long requestedEntityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, out long entityId, out string reason)
     {
-        entityId = requestedEntityId > 0 ? requestedEntityId : AllocateEntityId();
+        entityId = ResolveSpawnEntityId(requestedEntityId);
         if (!Enabled)
         {
             reason = "debug edit disabled";
@@ -83,6 +88,40 @@ public sealed class DebugWorldEditService
             return false;
         }
 
+        reason = string.Empty;
+        return true;
+    }
+
+    public bool TrySetTag(long entityId, WorldTag tag, bool enabled, out string reason)
+    {
+        if (!Enabled)
+        {
+            reason = "debug edit disabled";
+            return false;
+        }
+
+        if (tag == WorldTag.None)
+        {
+            reason = "invalid tag";
+            return false;
+        }
+
+        if (!World.TryGetEntity(entityId, out GameEntity entity))
+        {
+            reason = "entity not found";
+            return false;
+        }
+
+        if (enabled)
+        {
+            World.AddTag(entity, tag);
+        }
+        else
+        {
+            World.RemoveTag(entity, tag);
+        }
+
+        World.MarkDirty(entityId);
         reason = string.Empty;
         return true;
     }

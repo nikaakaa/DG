@@ -6,6 +6,8 @@ namespace DG.GameCore
 {
 public static class EntityBuilder
 {
+    private static readonly ComponentApplicationRegistry Registry = ComponentApplicationRegistry.Default;
+
     public static bool AddEntity(GameWorld world, IGameConfigProvider provider, EntitySpawnSpec spawn)
     {
         if (world == null || provider == null || !provider.TryGetArchetype(spawn.ConfigId, out EntityArchetype archetype))
@@ -24,7 +26,7 @@ public static class EntityBuilder
             return false;
         }
 
-        ApplyComponents(world, entity, archetype, spawn);
+        ApplyComponents(world, provider, entity, archetype, spawn);
         return true;
     }
 
@@ -43,45 +45,17 @@ public static class EntityBuilder
         return AddEntity(world, provider, spawn);
     }
 
-    private static void ApplyComponents(GameWorld world, GameEntity entity, EntityArchetype archetype, EntitySpawnSpec spawn)
+    private static void ApplyComponents(GameWorld world, IGameConfigProvider provider, GameEntity entity, EntityArchetype archetype, EntitySpawnSpec spawn)
     {
         for (int i = 0; i < archetype.Components.Count; i++)
         {
-            ApplyComponent(world, entity, archetype, spawn, archetype.Components[i]);
+            ApplyComponent(world, provider, entity, archetype, spawn, archetype.Components[i]);
         }
     }
 
-    private static void ApplyComponent(GameWorld world, GameEntity entity, EntityArchetype archetype, EntitySpawnSpec spawn, ComponentKind kind)
+    private static void ApplyComponent(GameWorld world, IGameConfigProvider provider, GameEntity entity, EntityArchetype archetype, EntitySpawnSpec spawn, ComponentKind kind)
     {
-        switch (kind)
-        {
-            case ComponentKind.Position:
-                world.SetComponent(entity, new PositionComponent(spawn.Position));
-                break;
-            case ComponentKind.Direction:
-                world.SetComponent(entity, new DirectionComponent(spawn.Direction));
-                break;
-            case ComponentKind.Collider:
-                world.SetComponent(entity, new ColliderComponent());
-                break;
-            case ComponentKind.Blocking:
-                world.SetComponent(entity, new BlockingComponent());
-                break;
-            case ComponentKind.Bouncable:
-                world.SetComponent(entity, new BouncableComponent());
-                break;
-            case ComponentKind.AutoMove:
-                world.SetComponent(entity, new AutoMoveComponent(spawn.AutoMoveIntervalTicks > 0 ? spawn.AutoMoveIntervalTicks : archetype.DefaultAutoMoveIntervalTicks));
-                break;
-            case ComponentKind.PlayerControl:
-                world.SetComponent(entity, new PlayerControlComponent(spawn.PlayerId != 0 ? spawn.PlayerId : spawn.EntityId));
-                break;
-            case ComponentKind.PushOnEnter:
-                world.SetComponent(entity, new PushOnEnterComponent());
-                break;
-            default:
-                throw new InvalidOperationException("Unsupported component kind: " + kind);
-        }
+        Registry.Apply(world, provider, entity, archetype, spawn, kind);
     }
 }
 }

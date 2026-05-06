@@ -1,4 +1,4 @@
-# client-world-runner Specification
+﻿# client-world-runner Specification
 
 ## Purpose
 TBD - created by archiving change add-client-world-runner. Update Purpose after archive.
@@ -387,7 +387,7 @@ Unity client SHALL be able to compile and execute the shared `DG.GameCore` rule 
 
 #### Scenario: Unity test executes shared movement rule
 - **WHEN** a Unity TestFramework EditMode test creates a `GameWorld` with a movable entity and a blocking entity
-- **THEN** the test can execute `MovementResolveSystem`
+- **THEN** the test can execute the state-driven rule system
 - **AND** the result matches the same component-driven blocking behavior used by the server
 
 ### Requirement: Client World Rule Truth Boundary
@@ -407,4 +407,43 @@ Unity client SHALL treat Shared GameCore state as the rule truth for shared-rule
 - **WHEN** this migration is implemented
 - **THEN** the client is not required to perform prediction, rollback, or reconciliation
 - **AND** the migration only establishes the shared rule/runtime foundation required by later prediction work
+
+### Requirement: 客户端本地 legacy 规则迁移边界
+Unity 客户端 SHALL NOT keep the legacy `MovementResolveSystem` as the default authority for server-authoritative movement. If a local movement system remains for offline tests or non-authoritative tooling, it MUST be explicitly separated from the server-authoritative runtime path and MUST NOT update authoritative mirror state while server-authoritative mode is enabled.
+
+#### Scenario: 服务端权威模式不执行本地 legacy 移动裁决
+- **WHEN** Unity 客户端处于 server-authoritative movement mode
+- **AND** the local player submits movement input
+- **THEN** the client sends the movement request through the network submitter
+- **AND** the local legacy movement resolver does not update the authoritative mirror position before server response or world delta
+
+#### Scenario: 本地辅助路径必须显式标识
+- **WHEN** a local movement system remains for EditMode tests, sandbox local mode, or offline debugging
+- **THEN** it is named and wired as a non-authoritative helper
+- **AND** tests distinguish it from the server-authoritative world mirror path
+
+### Requirement: Unity ClientWorld Source Layout
+Unity client world runtime code SHALL live under a folder that represents the client world module instead of a generic map module.
+
+#### Scenario: Client world files are discoverable
+- **WHEN** a developer looks for client world bootstrap, runtime tick, networking, view, debug, input, interaction, or spatial adapter code
+- **THEN** those files are discoverable under `Client/DG_Client/Assets/Scripts/ClientWorld`
+
+#### Scenario: Map naming does not hide world mirror responsibility
+- **WHEN** a developer reviews the client runtime directory
+- **THEN** the folder naming makes it clear that the module mirrors and displays server-authoritative world state
+- **AND** it is not presented as a local gameplay rule authority
+
+### Requirement: ClientWorld Migration Preserves Server Authority
+The client world folder migration SHALL preserve the existing server-authoritative movement and sync behavior.
+
+#### Scenario: Directory migration does not reintroduce local movement authority
+- **WHEN** the client world runner advances a tick
+- **THEN** it does not locally resolve movement rules through a legacy movement resolver
+- **AND** player coordinate changes still come from server response, snapshot, or delta application
+
+#### Scenario: Unity references survive migration
+- **WHEN** Unity refreshes scripts after the folder migration
+- **THEN** `ClientWorldRunner`, networking submitter, view, debug, and test scripts remain compilable
+- **AND** EditMode tests can run through Unity TestFramework without requiring a Unity Player build
 

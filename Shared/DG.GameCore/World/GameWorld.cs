@@ -331,6 +331,28 @@ public sealed class GameWorld
         SetComponent(entity, component);
     }
 
+    public bool HasTag(GameEntity entity, WorldTag tag)
+    {
+        return TryGetComponent(entity, out TagSetComponent component) && component.Has(tag);
+    }
+
+    public void AddTag(GameEntity entity, WorldTag tag)
+    {
+        TagSetComponent component = TryGetComponent(entity, out TagSetComponent existing) ? existing : new TagSetComponent(WorldTag.None);
+        SetComponent(entity, component.Add(tag));
+    }
+
+    public bool RemoveTag(GameEntity entity, WorldTag tag)
+    {
+        if (!TryGetComponent(entity, out TagSetComponent component) || !component.Has(tag))
+        {
+            return false;
+        }
+
+        SetComponent(entity, component.Remove(tag));
+        return true;
+    }
+
     public void SetComponent(GameEntity entity, PositionComponent component)
     {
         if (TryGetComponent(entity, out PositionComponent oldPosition) &&

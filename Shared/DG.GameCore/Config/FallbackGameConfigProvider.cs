@@ -31,6 +31,20 @@ public sealed class FallbackGameConfigProvider : IGameConfigProvider
             new[] { ComponentKind.Position, ComponentKind.Collider, ComponentKind.Blocking },
             new[] { "Entity.Blocker" },
             1),
+        [DefaultWorldConfig.PushableBlockerConfigId] = new EntityArchetype(
+            DefaultWorldConfig.PushableBlockerConfigId,
+            DefaultWorldConfig.PushableBlockerArchetypeId,
+            DefaultWorldConfig.BlockerTarget,
+            new[] { ComponentKind.Position, ComponentKind.Collider, ComponentKind.Blocking, ComponentKind.Pushable },
+            new[] { "Entity.PushableBlocker" },
+            1),
+        [DefaultWorldConfig.PortConnectorBlockerConfigId] = new EntityArchetype(
+            DefaultWorldConfig.PortConnectorBlockerConfigId,
+            DefaultWorldConfig.PortConnectorBlockerArchetypeId,
+            DefaultWorldConfig.BlockerTarget,
+            new[] { ComponentKind.Position, ComponentKind.Direction, ComponentKind.Collider, ComponentKind.Blocking, ComponentKind.Pushable, ComponentKind.PortConnector },
+            new[] { "Entity.PortConnectorBlocker" },
+            1),
         [DefaultWorldConfig.ConveyorConfigId] = new EntityArchetype(
             DefaultWorldConfig.ConveyorConfigId,
             DefaultWorldConfig.ConveyorArchetypeId,
@@ -43,6 +57,9 @@ public sealed class FallbackGameConfigProvider : IGameConfigProvider
     private readonly EntitySpawnSpec[] demoSpawns =
     {
         DefaultWorldConfig.BallSpawn(DefaultWorldConfig.BallEntityId, new GridCoord(-2, 0), Direction.Right, 1),
+        DefaultWorldConfig.PushableBlockerSpawn(DefaultWorldConfig.FirstBlockerEntityId - 1, new GridCoord(0, 1)),
+        DefaultWorldConfig.PortConnectorBlockerSpawn(DefaultWorldConfig.PortConnectorEntityId, new GridCoord(0, -1), Direction.Right),
+        DefaultWorldConfig.PortConnectorBlockerSpawn(DefaultWorldConfig.PortConnectorEntityId + 1, new GridCoord(1, -1), Direction.Right),
         DefaultWorldConfig.BlockerSpawn(DefaultWorldConfig.FirstBlockerEntityId, new GridCoord(4, 0)),
         DefaultWorldConfig.BlockerSpawn(DefaultWorldConfig.FirstBlockerEntityId + 1, new GridCoord(-4, 0)),
         DefaultWorldConfig.ConveyorSpawn(DefaultWorldConfig.ConveyorEntityId, new GridCoord(1, 0), Direction.Right),
@@ -50,10 +67,21 @@ public sealed class FallbackGameConfigProvider : IGameConfigProvider
     };
 
     private readonly PlayerSpawnRule defaultSpawnRule = new PlayerSpawnRule(DefaultWorldConfig.DefaultPlayerSpawnRuleId, DefaultWorldConfig.PlayerConfigId, new GridCoord(0, 0), new GridCoord(0, 1), 1024);
+    private readonly Dictionary<int, PortConnectorConfig> portConnectors = new Dictionary<int, PortConnectorConfig>
+    {
+        [DefaultWorldConfig.PortConnectorBlockerConfigId] = new PortConnectorConfig(DefaultWorldConfig.PortConnectorBlockerConfigId, DirectionMask.Left | DirectionMask.Right)
+    };
 
     public bool TryGetArchetype(int configId, out EntityArchetype archetype)
     {
         return archetypes.TryGetValue(configId, out archetype);
+    }
+
+    public IReadOnlyList<EntityArchetype> GetEntityArchetypes()
+    {
+        return archetypes.Values
+            .OrderBy(archetype => archetype.ConfigId)
+            .ToArray();
     }
 
     public IReadOnlyList<EntitySpawnSpec> GetWorldSpawns(string worldId)
@@ -71,6 +99,11 @@ public sealed class FallbackGameConfigProvider : IGameConfigProvider
 
         rule = default;
         return false;
+    }
+
+    public bool TryGetPortConnector(int configId, out PortConnectorConfig config)
+    {
+        return portConnectors.TryGetValue(configId, out config);
     }
 }
 }

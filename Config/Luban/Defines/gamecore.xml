@@ -8,6 +8,8 @@
         <var name="AutoMove" value="6"/>
         <var name="PlayerControl" value="7"/>
         <var name="PushOnEnter" value="8"/>
+        <var name="Pushable" value="9"/>
+        <var name="PortConnector" value="10"/>
     </enum>
 
     <enum name="EntityTarget">
@@ -54,7 +56,13 @@
         <var name="max_attempts" type="int"/>
     </bean>
 
+    <bean name="PortConnectorConfig">
+        <var name="config_id" type="int"/>
+        <var name="ports" type="int"/>
+    </bean>
+
     <table name="TbEntityArchetype" index="config_id" value="EntityArchetype" input="gamecore/entity_archetype.xlsx"/>
     <table name="TbWorldSpawn" mode="list" value="WorldSpawn" input="gamecore/world_spawn.xlsx"/>
     <table name="TbPlayerSpawnRule" index="rule_id" value="PlayerSpawnRule" input="gamecore/player_spawn_rule.xlsx"/>
+    <table name="TbPortConnectorConfig" index="config_id" value="PortConnectorConfig" input="gamecore/port_connector_config.xlsx"/>
 </module>

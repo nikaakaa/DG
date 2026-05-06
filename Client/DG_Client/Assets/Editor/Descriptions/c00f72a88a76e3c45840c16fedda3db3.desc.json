@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "nodes": {
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-3180826625172927281-0": {
+      "description": "根物体,按F4唤起",
+      "ignored": false
+    },
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-7774672367985160318-0": {
+      "description": "这个是窗口框顶部栏,鼠标拖拽可以移动",
+      "ignored": false
+    },
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-7536033486418307709-0": {
+      "description": "一个Toggle组",
+      "ignored": false
+    },
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-2310206747259190365-0": {
+      "description": "点击切换到对于实体进行增删移动,加tag/component",
+      "ignored": false
+    },
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-7638053571842611974-0": {
+      "description": "用于展览所有从luban搞的配置",
+      "ignored": false
+    },
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-693737351433773732-0": {
+      "description": "关闭按钮",
+      "ignored": false
+    },
+    "GlobalObjectId_V1-2-c00f72a88a76e3c45840c16fedda3db3-8466190499589950028-0": {
+      "description": "用于显示展出应该做的东西,子物体还没展示",
+      "ignored": false
+    }
+  }
+}

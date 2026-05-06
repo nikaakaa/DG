@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Fantasy.Async;
 using Fantasy.Network;
 using Fantasy.Network.Interface;
@@ -11,12 +10,19 @@ public sealed class C2G_DebugMoveEntityRequestHandler : MessageRPC<C2G_DebugMove
 {
     protected override async FTask Run(Session session, C2G_DebugMoveEntityRequest request, G2C_DebugMoveEntityResponse response, Action reply)
     {
-        AuthoritativeMoveWorldProvider.NextServerTick();
-        bool success = AuthoritativeMoveWorldProvider.DebugEdit.TryMove(
-            request.EntityId,
-            new GridCoord(request.TargetX, request.TargetY),
-            out GridCoord finalCoord,
-            out string reason);
+        bool success = AuthoritativeMoveWorldProvider.DebugEdit.Enabled;
+        string reason = success ? string.Empty : "debug edit disabled";
+        GridCoord finalCoord = new(request.TargetX, request.TargetY);
+        if (success)
+        {
+            AuthoritativeDebugActionInput input = AuthoritativeMoveWorldProvider.InputQueue.EnqueueDebugMove(
+                request.EntityId,
+                new GridCoord(request.TargetX, request.TargetY));
+            MoveResult result = await input.WaitAsync();
+            success = result.Success;
+            finalCoord = result.FinalCoord;
+            reason = result.Reason;
+        }
 
         response.Success = success;
         response.EntityId = request.EntityId;
@@ -33,17 +39,7 @@ public sealed class C2G_DebugMoveEntityRequestHandler : MessageRPC<C2G_DebugMove
             response.Reason);
 
         reply();
-        if (success)
-        {
-            BroadcastDelta();
-        }
 
         await FTask.CompletedTask;
-    }
-
-    private static void BroadcastDelta()
-    {
-        IReadOnlyList<Session> observers = AuthoritativeMoveWorldProvider.Players.EnumerateAvailable(observer => !observer.IsDisposed);
-        AuthoritativeMoveWorldProvider.SyncSystem.BroadcastDelta(observers);
     }
 }

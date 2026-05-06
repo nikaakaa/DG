@@ -1,8 +1,8 @@
 using System;
-using System.Collections.Generic;
 using Fantasy.Async;
 using Fantasy.Network;
 using Fantasy.Network.Interface;
+using DG.GameCore;
 
 namespace Fantasy;
 
@@ -10,8 +10,15 @@ public sealed class C2G_DebugRemoveEntityRequestHandler : MessageRPC<C2G_DebugRe
 {
     protected override async FTask Run(Session session, C2G_DebugRemoveEntityRequest request, G2C_DebugRemoveEntityResponse response, Action reply)
     {
-        AuthoritativeMoveWorldProvider.NextServerTick();
-        bool success = AuthoritativeMoveWorldProvider.DebugEdit.TryRemove(request.EntityId, out string reason);
+        bool success = AuthoritativeMoveWorldProvider.DebugEdit.Enabled;
+        string reason = success ? string.Empty : "debug edit disabled";
+        if (success)
+        {
+            AuthoritativeDebugActionInput input = AuthoritativeMoveWorldProvider.InputQueue.EnqueueDebugRemove(request.EntityId);
+            MoveResult result = await input.WaitAsync();
+            success = result.Success;
+            reason = result.Reason;
+        }
 
         response.Success = success;
         response.EntityId = request.EntityId;
@@ -24,17 +31,7 @@ public sealed class C2G_DebugRemoveEntityRequestHandler : MessageRPC<C2G_DebugRe
             response.Reason);
 
         reply();
-        if (success)
-        {
-            BroadcastDelta();
-        }
 
         await FTask.CompletedTask;
-    }
-
-    private static void BroadcastDelta()
-    {
-        IReadOnlyList<Session> observers = AuthoritativeMoveWorldProvider.Players.EnumerateAvailable(observer => !observer.IsDisposed);
-        AuthoritativeMoveWorldProvider.SyncSystem.BroadcastDelta(observers);
     }
 }

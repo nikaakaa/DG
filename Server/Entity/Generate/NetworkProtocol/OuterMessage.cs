@@ -560,4 +560,64 @@ namespace Fantasy
         public string Reason { get; set; }
     }
 
+    [Serializable]
+    [ProtoContract]
+    public partial class C2G_DebugSetEntityTagRequest : AMessage, IRequest
+    {
+        public static C2G_DebugSetEntityTagRequest Create()
+        {
+            return MessageObjectPool<C2G_DebugSetEntityTagRequest>.Rent();
+        }
+
+        public void Dispose()
+        {
+            EntityId = default;
+            Tag = default;
+            Enabled = default;
+            MessageObjectPool<C2G_DebugSetEntityTagRequest>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2G_DebugSetEntityTagRequest; } 
+        [ProtoIgnore]
+        public G2C_DebugSetEntityTagResponse ResponseType { get; set; }
+        [ProtoMember(1)]
+        public long EntityId { get; set; }
+        [ProtoMember(2)]
+        public int Tag { get; set; }
+        [ProtoMember(3)]
+        public bool Enabled { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class G2C_DebugSetEntityTagResponse : AMessage, IResponse
+    {
+        public static G2C_DebugSetEntityTagResponse Create()
+        {
+            return MessageObjectPool<G2C_DebugSetEntityTagResponse>.Rent();
+        }
+
+        public void Dispose()
+        {
+            Success = default;
+            EntityId = default;
+            Tag = default;
+            Enabled = default;
+            Reason = default;
+            MessageObjectPool<G2C_DebugSetEntityTagResponse>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.G2C_DebugSetEntityTagResponse; } 
+        [ProtoMember(1)]
+        public uint ErrorCode { get; set; }
+        [ProtoMember(2)]
+        public bool Success { get; set; }
+        [ProtoMember(3)]
+        public long EntityId { get; set; }
+        [ProtoMember(4)]
+        public int Tag { get; set; }
+        [ProtoMember(5)]
+        public bool Enabled { get; set; }
+        [ProtoMember(6)]
+        public string Reason { get; set; }
+    }
+
 }

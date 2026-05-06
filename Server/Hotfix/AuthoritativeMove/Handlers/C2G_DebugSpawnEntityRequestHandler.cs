@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Fantasy.Async;
 using Fantasy.Network;
 using Fantasy.Network.Interface;
@@ -11,16 +10,22 @@ public sealed class C2G_DebugSpawnEntityRequestHandler : MessageRPC<C2G_DebugSpa
 {
     protected override async FTask Run(Session session, C2G_DebugSpawnEntityRequest request, G2C_DebugSpawnEntityResponse response, Action reply)
     {
-        AuthoritativeMoveWorldProvider.NextServerTick();
-        bool success = AuthoritativeMoveWorldProvider.DebugEdit.TrySpawn(
-            request.EntityId,
-            request.ConfigId,
-            new GridCoord(request.X, request.Y),
-            (Direction)request.Direction,
-            request.PlayerId,
-            request.AutoMoveIntervalTicks,
-            out long entityId,
-            out string reason);
+        long entityId = AuthoritativeMoveWorldProvider.DebugEdit.ResolveSpawnEntityId(request.EntityId);
+        bool success = AuthoritativeMoveWorldProvider.DebugEdit.Enabled;
+        string reason = success ? string.Empty : "debug edit disabled";
+        if (success)
+        {
+            AuthoritativeDebugActionInput input = AuthoritativeMoveWorldProvider.InputQueue.EnqueueDebugSpawn(
+                entityId,
+                request.ConfigId,
+                new GridCoord(request.X, request.Y),
+                (Direction)request.Direction,
+                request.PlayerId,
+                request.AutoMoveIntervalTicks);
+            MoveResult result = await input.WaitAsync();
+            success = result.Success;
+            reason = result.Reason;
+        }
 
         response.Success = success;
         response.EntityId = entityId;
@@ -37,17 +42,7 @@ public sealed class C2G_DebugSpawnEntityRequestHandler : MessageRPC<C2G_DebugSpa
             response.Reason);
 
         reply();
-        if (success)
-        {
-            BroadcastDelta();
-        }
 
         await FTask.CompletedTask;
-    }
-
-    private static void BroadcastDelta()
-    {
-        IReadOnlyList<Session> observers = AuthoritativeMoveWorldProvider.Players.EnumerateAvailable(observer => !observer.IsDisposed);
-        AuthoritativeMoveWorldProvider.SyncSystem.BroadcastDelta(observers);
     }
 }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "DG Component System"
+  short_description: "DG 组件系统与 state-driven rule 工作流"
+  default_prompt: "Use $dg-component-system-workflow to add, review, or verify a DG component-system workflow."
