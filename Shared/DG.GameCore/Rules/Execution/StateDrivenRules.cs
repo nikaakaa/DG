@@ -6,7 +6,7 @@ namespace DG.GameCore
 public sealed class StateDrivenRuleExecutionSystem
 {
     private readonly CommitResolver commitResolver = new();
-    private readonly RulePlanner rulePlanner = new();
+    private readonly RulePlanner rulePlanner;
     private readonly ConflictResolver conflictResolver = new();
     private readonly ActionPrimitiveProcessor primitiveProcessor = new();
     private readonly ActionSpecRegistry actionSpecs;
@@ -20,6 +20,7 @@ public sealed class StateDrivenRuleExecutionSystem
     public StateDrivenRuleExecutionSystem(ActionSpecRegistry actionSpecs)
     {
         this.actionSpecs = actionSpecs;
+        rulePlanner = new RulePlanner(actionSpecs);
         actionAdapter = new ActionRequestAdapter(actionSpecs);
         actionArbiter = new ActionArbiter(actionSpecs);
     }
@@ -30,6 +31,7 @@ public sealed class StateDrivenRuleExecutionSystem
         var moveRequests = new List<ActionRequest>();
         var actionResults = new Dictionary<long, MoveResult>();
         var reasons = new List<string>();
+        var deferredActions = new List<DeferredAction>();
 
         for (int i = 0; i < actions.Count; i++)
         {
@@ -39,7 +41,8 @@ public sealed class StateDrivenRuleExecutionSystem
 
         AddPendingActionRequests(world, pendingStates, moveRequests, actionResults, reasons, serverTick);
         ActionArbitrationResult arbitration = actionArbiter.ArbitrateMoves(world, moveRequests, pendingStates, serverTick);
-        MergeArbitrationResult(arbitration, proposals, actionResults, reasons);
+        MergeArbitrationResult(arbitration, proposals, actionResults, reasons, deferredActions);
+        ApplyCompletedPendingStates(world, pendingStates, actionResults, reasons);
         ApplyRejectedArbitrationToPendingStates(world, pendingStates, arbitration.RejectedActions, actionResults, reasons, serverTick);
         ApplyDerivedArbitrationToReasons(arbitration.DerivedActions, reasons);
         IReadOnlyList<MovePlan> movePlans = CreateMovePlans(world, pendingStates, arbitration.AcceptedActions, actionResults, reasons, serverTick);
@@ -49,7 +52,26 @@ public sealed class StateDrivenRuleExecutionSystem
         ApplyProposalResultsToActions(actionResults, proposalResults, reasons);
         ApplyProposalResultsToPendingStates(world, pendingStates, proposalResults, actionResults, reasons, serverTick);
         pendingStates.CleanupInactive();
-        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, pendingStates.ActiveCount, reasons);
+        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, pendingStates.ActiveCount, reasons, deferredActions);
+    }
+
+    private static void ApplyCompletedPendingStates(GameWorld world, PendingRuleStateStore pendingStates, Dictionary<long, MoveResult> actionResults, List<string> reasons)
+    {
+        IReadOnlyList<PendingActionState> states = pendingStates.ActionStates;
+        for (int i = 0; i < states.Count; i++)
+        {
+            PendingActionState state = states[i];
+            if (state.Status != PendingRuleStatus.Completed || !state.ReportsOwnerResult || actionResults.ContainsKey(state.OwnerActionId))
+            {
+                continue;
+            }
+
+            actionResults[state.OwnerActionId] = new MoveResult(true, state.RootEntityId, CurrentCoord(world, state.RootEntityId), state.Direction, MoveErrorCode.None, state.Reason, false, default, state.ClientTick);
+            if (!string.IsNullOrEmpty(state.Reason))
+            {
+                reasons.Add(state.Reason);
+            }
+        }
     }
 
     private void RouteRequest(GameWorld world, ActionRequest request, PendingRuleStateStore pendingStates, List<CommitProposal> proposals, List<ActionRequest> moveRequests, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
@@ -89,14 +111,22 @@ public sealed class StateDrivenRuleExecutionSystem
 
             if (state.HasReadyUnit(serverTick))
             {
-                moveRequests.Add(actionAdapter.FromPendingActionState(state, serverTick));
+                IReadOnlyList<PendingActionUnit> readyUnits = state.ReadyUnits;
+                for (int unitIndex = 0; unitIndex < readyUnits.Count; unitIndex++)
+                {
+                    if (readyUnits[unitIndex].ReadyTick <= serverTick)
+                    {
+                        moveRequests.Add(actionAdapter.FromPendingActionUnit(state, readyUnits[unitIndex], serverTick));
+                    }
+                }
             }
         }
     }
 
-    private static void MergeArbitrationResult(ActionArbitrationResult arbitration, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons)
+    private static void MergeArbitrationResult(ActionArbitrationResult arbitration, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons, List<DeferredAction> deferredActions)
     {
         proposals.AddRange(arbitration.CommitProposals);
+        deferredActions.AddRange(arbitration.DeferredActions);
         foreach (KeyValuePair<long, MoveResult> pair in arbitration.ActionResults)
         {
             actionResults[pair.Key] = pair.Value;

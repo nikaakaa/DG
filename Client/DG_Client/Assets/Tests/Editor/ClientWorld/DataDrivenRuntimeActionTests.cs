@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using DG.GameCore;
@@ -29,12 +30,28 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void LegacyWorldAction_MapsToActionRequest()
+        public void LubanActionSpecRegistry_LoadsCurrentRuntimeActions()
+        {
+            ActionSpecRegistry registry = LubanActionSpecRegistry.FromDirectory(GameConfigDirectory());
+
+            AssertSpec(registry, "player_move", ActionPrimitive.Move, ActionSourceKind.Player, ActionTargetRule.TargetCoordOneStep);
+            AssertSpec(registry, "auto_move", ActionPrimitive.Move, ActionSourceKind.Auto, ActionTargetRule.DirectionFromComponent);
+            AssertSpec(registry, "mechanism_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, ActionTargetRule.DirectionFromRequest);
+            AssertSpec(registry, "debug_move", ActionPrimitive.Move, ActionSourceKind.Debug, ActionTargetRule.TargetCoordAny);
+            AssertSpec(registry, "debug_spawn", ActionPrimitive.Spawn, ActionSourceKind.Debug, ActionTargetRule.TargetCoordAny);
+            AssertSpec(registry, "debug_remove", ActionPrimitive.Remove, ActionSourceKind.Debug, ActionTargetRule.None);
+            Assert.AreEqual(new ActionSpecId("player_push"), registry.Get("player_move").Handoff.SpecId);
+            Assert.AreEqual(new ActionSpecId("mechanism_push"), registry.Get("mechanism_push").Handoff.SpecId);
+            Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").Handoff.SubjectKind);
+        }
+
+        [Test]
+        public void WorldAction_MapsToActionRequestBySpecId()
         {
             var adapter = new ActionRequestAdapter(ActionSpecRegistry.Default);
-            var player = new WorldAction(1, WorldActionPriority.Player, WorldActionKind.PlayerMove, 10, new GridCoord(1, 0), Direction.None, 7, 0, 0, 1);
-            var auto = new WorldAction(2, WorldActionPriority.Auto, WorldActionKind.AutoMove, 20, null, Direction.None, 0, 3, 4, 1);
-            var mechanism = new WorldAction(3, WorldActionPriority.Mechanism, WorldActionKind.MechanismPush, 30, null, Direction.Right, 0, 3, 4, 1);
+            var player = new WorldAction(1, WorldActionPriority.Player, "player_move", 10, new GridCoord(1, 0), Direction.None, 7, 0, 0, 1);
+            var auto = new WorldAction(2, WorldActionPriority.Auto, "auto_move", 20, null, Direction.None, 0, 3, 4, 1);
+            var mechanism = new WorldAction(3, WorldActionPriority.Mechanism, "mechanism_push", 30, null, Direction.Right, 0, 3, 4, 1);
 
             ActionRequest playerRequest = adapter.FromWorldAction(player);
             ActionRequest autoRequest = adapter.FromWorldAction(auto);
@@ -64,10 +81,26 @@ namespace DG.EditorTests
             Assert.IsTrue(world.TryGetEntity(100, out GameEntity entity));
             Assert.IsTrue(world.TryGetComponent(entity, out PositionComponent position));
             Assert.AreEqual(new GridCoord(1, 0), position.Coord);
+            Assert.AreEqual(new ActionSpecId("configured_wind_push"), action.SpecId);
         }
 
         [Test]
-        public void PlayerMoveConnectedBody_BlockedByExternalTargetHandoffs()
+        public void ConfiguredMoveAction_UsesInjectedRegistry()
+        {
+            var custom = new ActionSpecRegistry(new[]
+            {
+                new ActionSpec("custom_slide", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Debug, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.Reject, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None)
+            });
+            var queue = new WorldActionQueue(custom);
+
+            WorldAction action = queue.EnqueueConfiguredMove("custom_slide", 10, Direction.Right, 0, 1);
+
+            Assert.AreEqual(WorldActionPriority.Debug, action.Priority);
+            Assert.AreEqual(new ActionSpecId("custom_slide"), action.SpecId);
+        }
+
+        [Test]
+        public void PlayerMoveConnectedBody_BlockedByExternalTargetDefersOutput()
         {
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(110, 110, new GridCoord(0, 0))));
@@ -82,9 +115,10 @@ namespace DG.EditorTests
 
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
 
-            Assert.IsFalse(result.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(result.Reasons.Contains("handoff"));
-            Assert.AreEqual(1, pending.ActiveCount);
+            Assert.IsTrue(result.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(result.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(1, result.DeferredActions.Count);
+            Assert.AreEqual(0, pending.ActiveCount);
             AssertPosition(world, 110, new GridCoord(0, 0));
             AssertPosition(world, 111, new GridCoord(1, 0));
             AssertPosition(world, 112, new GridCoord(2, 0));
@@ -203,7 +237,7 @@ namespace DG.EditorTests
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(341, new GridCoord(1, 0))));
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(342, new GridCoord(2, 0))));
             var pending = new PendingRuleStateStore();
-            PendingActionState state = pending.AddHandoffActionState(MoveRequest(20, "player_move", WorldActionPriority.Player, 340, Direction.Right), 341, Direction.Right, 0);
+            PendingActionState state = pending.AddHandoffActionState(MoveRequest(20, "player_move", WorldActionPriority.Player, 340, Direction.Right), 341, Direction.Right, 0, specId: "player_push");
             var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromPendingActionState(state, 1);
 
             Assert.AreEqual(ActionSourceKind.Handoff, request.Source.Kind);
@@ -214,12 +248,10 @@ namespace DG.EditorTests
             Assert.AreEqual(0, result.AcceptedActions.Count);
             Assert.AreEqual(0, result.RejectedActions.Count);
             Assert.AreEqual(1, result.DerivedActions.Count);
-            Assert.AreEqual(ActionResultBranch.Handoff, result.DerivedActions[0].Branch);
-            Assert.AreEqual("handoff", result.DerivedActions[0].Reason);
-            Assert.AreEqual(PendingRuleStatus.Active, state.Status);
-            Assert.AreEqual(1, pending.ActiveCount);
-            Assert.IsTrue(pending.ActionStates.Any(item => item.Status == PendingRuleStatus.Active && item.ActiveHandoffEntityId == 342));
-            Assert.AreEqual(2, state.Units.Count);
+            Assert.AreEqual(ActionResultBranch.Noop, result.DerivedActions[0].Branch);
+            Assert.AreEqual("bounded/deferred-output", result.DerivedActions[0].Reason);
+            Assert.AreEqual(1, result.DeferredActions.Count);
+            Assert.AreEqual(342, result.DeferredActions[0].EntityId);
         }
 
         [Test]
@@ -234,17 +266,18 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsTrue(second.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), second.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 360, new GridCoord(0, 0));
@@ -266,20 +299,21 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsTrue(second.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), second.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             Assert.AreEqual(0, third.ActivePendingCount);
             Assert.AreEqual(0, fourth.ActivePendingCount);
@@ -368,16 +402,16 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsTrue(second.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), second.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 440, new GridCoord(0, 0));
@@ -401,14 +435,14 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsTrue(second.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), second.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 4410, new GridCoord(0, 0));
             AssertPosition(world, 4411, new GridCoord(2, 0));
@@ -432,26 +466,381 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            Assert.AreEqual(1, pending.ActiveCount);
-            Assert.IsTrue(pending.HasActiveActionInvolving(446));
-            Assert.IsTrue(pending.HasActiveActionInvolving(447));
-            Assert.IsTrue(pending.HasActiveActionInvolving(448));
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            Assert.AreEqual(0, pending.ActiveCount);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsTrue(second.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), second.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 445, new GridCoord(0, 0));
             AssertPosition(world, 446, new GridCoord(2, 0));
             AssertPosition(world, 447, new GridCoord(3, 0));
             AssertPosition(world, 448, new GridCoord(4, 0));
+        }
+
+        [Test]
+        public void ConnectedBodyMultiContact_CollectsDistinctExternalContacts()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(510, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(511, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(512, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(513, new GridCoord(1, 1))));
+            SetPorts(world, 510, DirectionMask.All);
+            SetPorts(world, 511, DirectionMask.All);
+            Assert.IsTrue(world.TryGetEntity(510, out GameEntity root));
+            Assert.IsTrue(new BodyResolver().TryResolve(world, root, out BehaviorBody body, out _));
+            var claims = new[]
+            {
+                new ActionClaim(1, body.BodyId, 510, ActionClaimKind.BodyMove, new GridCoord(0, 0), new GridCoord(1, 0), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism),
+                new ActionClaim(1, body.BodyId, 511, ActionClaimKind.BodyMove, new GridCoord(0, 1), new GridCoord(1, 1), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism)
+            };
+
+            IReadOnlyList<ExternalPushContact> contacts = new BodyCapabilityResolver().FindExternalPushContacts(world, claims, body);
+
+            Assert.AreEqual(2, contacts.Count);
+            Assert.AreEqual(512, contacts[0].BlockerEntityId);
+            Assert.AreEqual(513, contacts[1].BlockerEntityId);
+        }
+
+        [Test]
+        public void ContactSet_ExcludesInternalBodyAndKeepsDistinctContacts()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(520, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(521, new GridCoord(1, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(522, new GridCoord(2, 0))));
+            SetPorts(world, 520, DirectionMask.Right);
+            SetPorts(world, 521, DirectionMask.Left);
+            Assert.IsTrue(world.TryGetEntity(520, out GameEntity root));
+            Assert.IsTrue(new BodyResolver().TryResolve(world, root, out BehaviorBody body, out _));
+            var claims = new[]
+            {
+                new ActionClaim(1, body.BodyId, 520, ActionClaimKind.BodyMove, new GridCoord(0, 0), new GridCoord(1, 0), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism),
+                new ActionClaim(1, body.BodyId, 521, ActionClaimKind.BodyMove, new GridCoord(1, 0), new GridCoord(2, 0), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism),
+                new ActionClaim(1, body.BodyId, 520, ActionClaimKind.BodyMove, new GridCoord(0, 0), new GridCoord(2, 0), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism)
+            };
+
+            IReadOnlyList<ExternalPushContact> contacts = new BodyCapabilityResolver().FindExternalPushContacts(world, claims, body);
+
+            Assert.AreEqual(2, contacts.Count);
+            Assert.AreEqual(522, contacts[0].BlockerEntityId);
+            Assert.AreEqual(522, contacts[1].BlockerEntityId);
+        }
+
+        [Test]
+        public void MultiContactPush_CreatesTwoDeferredOutputs()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(530, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(531, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(532, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(533, new GridCoord(1, 1))));
+            SetPorts(world, 530, DirectionMask.All);
+            SetPorts(world, 531, DirectionMask.All);
+            AddMechanismAbility(world, 530, 531);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 530, Direction.Right, world.ServerTick - 1, 1);
+            var pending = new PendingRuleStateStore();
+
+            StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(2, first.DeferredActions.Count);
+            Assert.IsTrue(first.DeferredActions.All(output => output.CausalityId == action.ActionId));
+            Assert.IsTrue(first.DeferredActions.All(output => output.Direction == Direction.Right));
+        }
+
+        [Test]
+        public void MultiContactPush_DeduplicatesChildUnitsByResolvedSubject()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(570, new GridCoord(0, 0), Direction.None)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(571, new GridCoord(0, 1), Direction.None)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(572, new GridCoord(1, 0), Direction.None)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(573, new GridCoord(1, 1), Direction.None)));
+            SetPorts(world, 570, DirectionMask.Up | DirectionMask.Down);
+            SetPorts(world, 571, DirectionMask.Up | DirectionMask.Down);
+            SetPorts(world, 572, DirectionMask.Up | DirectionMask.Down);
+            SetPorts(world, 573, DirectionMask.Up | DirectionMask.Down);
+            RefreshStaticPorts(world, 570, 571, 572, 573);
+            AddMechanismAbility(world, 570, 571);
+            Assert.IsTrue(world.TryGetEntity(570, out GameEntity root));
+            Assert.IsTrue(new BodyResolver().TryResolve(world, root, out BehaviorBody body, out _));
+            var claims = new[]
+            {
+                new ActionClaim(1, body.BodyId, 570, ActionClaimKind.BodyMove, new GridCoord(0, 0), new GridCoord(1, 0), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism),
+                new ActionClaim(1, body.BodyId, 571, ActionClaimKind.BodyMove, new GridCoord(0, 1), new GridCoord(1, 1), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism)
+            };
+            IReadOnlyList<ExternalPushContact> contacts = new BodyCapabilityResolver().FindExternalPushContacts(world, claims, body);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 570, Direction.Right, world.ServerTick - 1, 1);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+
+            Assert.AreEqual(2, contacts.Count);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.AreEqual(0, pending.ActiveCount);
+            world.NextTick();
+            for (int i = 0; i < first.DeferredActions.Count; i++)
+            {
+                queue.EnqueueDeferred(first.DeferredActions[i]);
+            }
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.AreEqual(0, second.ActivePendingCount);
+            AssertPosition(world, 570, new GridCoord(0, 0));
+            AssertPosition(world, 571, new GridCoord(0, 1));
+            AssertPosition(world, 572, new GridCoord(2, 0));
+            AssertPosition(world, 573, new GridCoord(2, 1));
+        }
+
+        [Test]
+        public void MultiContactPush_MovesLargeDownstreamSubjectAsOneChildUnit()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(580, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(581, new GridCoord(1, 0), Direction.Right)));
+            AddMechanismAbility(world, 580, 581);
+            for (int i = 0; i < 9; i++)
+            {
+                long entityId = 590 + i;
+                Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(entityId, new GridCoord(i, 1), Direction.Right)));
+            }
+
+            Assert.IsTrue(world.TryGetEntity(580, out GameEntity root));
+            Assert.IsTrue(new BodyResolver().TryResolve(world, root, out BehaviorBody sourceBody, out _));
+            Assert.IsTrue(world.TryGetEntity(590, out GameEntity targetRoot));
+            Assert.IsTrue(new BodyResolver().TryResolve(world, targetRoot, out BehaviorBody targetBody, out _));
+            Assert.AreEqual(9, targetBody.Entities.Count);
+            var claims = new[]
+            {
+                new ActionClaim(1, sourceBody.BodyId, 580, ActionClaimKind.BodyMove, new GridCoord(0, 0), new GridCoord(0, 1), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism),
+                new ActionClaim(1, sourceBody.BodyId, 581, ActionClaimKind.BodyMove, new GridCoord(1, 0), new GridCoord(1, 1), "movement", ActionClaimMode.Exclusive, WorldActionPriority.Mechanism)
+            };
+            IReadOnlyList<ExternalPushContact> contacts = new BodyCapabilityResolver().FindExternalPushContacts(world, claims, sourceBody);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 580, Direction.Up, world.ServerTick - 1, 1);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+
+            Assert.AreEqual(2, contacts.Count);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.AreEqual(0, pending.ActiveCount);
+            world.NextTick();
+            for (int i = 0; i < first.DeferredActions.Count; i++)
+            {
+                queue.EnqueueDeferred(first.DeferredActions[i]);
+            }
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            AssertPosition(world, 580, new GridCoord(0, 0));
+            AssertPosition(world, 581, new GridCoord(1, 0));
+            for (int i = 0; i < 9; i++)
+            {
+                long entityId = 590 + i;
+                AssertPosition(world, entityId, new GridCoord(i, 2));
+            }
+        }
+
+        [Test]
+        public void SplitMiddleContacts_DoNotCreateCycleWhenTheyReachSameDownstreamBody()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(610, 610, new GridCoord(1, -1))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(620, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(621, new GridCoord(1, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(622, new GridCoord(2, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(623, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(624, new GridCoord(2, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(625, new GridCoord(0, 2), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(626, new GridCoord(1, 2), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(627, new GridCoord(2, 2), Direction.Right)));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(610, new GridCoord(1, 0), 33);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(1, -1), first.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
+            Assert.IsFalse(second.Reasons.Contains("push chain cycle"));
+            Assert.IsFalse(third.Reasons.Contains("push chain cycle"));
+            AssertPosition(world, 610, new GridCoord(1, -1));
+            AssertPosition(world, 620, new GridCoord(0, 0));
+            AssertPosition(world, 621, new GridCoord(1, 0));
+            AssertPosition(world, 622, new GridCoord(2, 0));
+            AssertPosition(world, 623, new GridCoord(0, 1));
+            AssertPosition(world, 624, new GridCoord(2, 1));
+            AssertPosition(world, 625, new GridCoord(0, 3));
+            AssertPosition(world, 626, new GridCoord(1, 3));
+            AssertPosition(world, 627, new GridCoord(2, 3));
+        }
+
+        [Test]
+        public void SplitMiddleContacts_WithExtraTopMember_DoesNotFailAsPendingDuplicate()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(630, 630, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(631, new GridCoord(1, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(632, new GridCoord(2, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(633, new GridCoord(3, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(634, new GridCoord(4, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(635, new GridCoord(4, 1), Direction.Up)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(636, new GridCoord(4, 2), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(637, new GridCoord(1, 1), Direction.Up)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(638, new GridCoord(1, 2), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(639, new GridCoord(2, 2), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(640, new GridCoord(3, 2), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(641, new GridCoord(2, 3), Direction.Up)));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(630, new GridCoord(1, 0), 34);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+            var reasons = new List<string>();
+
+            for (int i = 0; i < 8; i++)
+            {
+                StateDrivenRuleExecutionResult result = i == 0
+                    ? TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick))
+                    : TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+                reasons.AddRange(result.Reasons);
+                if (result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult))
+                {
+                    Assert.IsTrue(moveResult.Success, string.Join(",", reasons));
+                    return;
+                }
+
+                if (pending.ActiveCount == 0 && queue.Count == 0)
+                {
+                    break;
+                }
+
+                world.NextTick();
+            }
+
+            Assert.Fail(string.Join(",", reasons));
+        }
+
+        [Test]
+        public void MultiContactPush_AllChildrenSucceedBeforeOwnerCompletes()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(540, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(541, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(542, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(543, new GridCoord(1, 1))));
+            SetPorts(world, 540, DirectionMask.All);
+            SetPorts(world, 541, DirectionMask.All);
+            AddMechanismAbility(world, 540, 541);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 540, Direction.Right, world.ServerTick - 1, 1);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(0, first.ActivePendingCount);
+            Assert.AreEqual(0, second.ActivePendingCount);
+            Assert.AreEqual(0, third.ActivePendingCount);
+            AssertPosition(world, 540, new GridCoord(0, 0));
+            AssertPosition(world, 541, new GridCoord(0, 1));
+            AssertPosition(world, 542, new GridCoord(2, 0));
+            AssertPosition(world, 543, new GridCoord(2, 1));
+        }
+
+        [Test]
+        public void MultiContactPush_DeferredFailureDoesNotFailSource()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(550, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(551, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(552, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(553, new GridCoord(1, 1))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(554, new GridCoord(2, 1))));
+            SetPorts(world, 550, DirectionMask.All);
+            SetPorts(world, 551, DirectionMask.All);
+            AddMechanismAbility(world, 550, 551);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 550, Direction.Right, world.ServerTick - 1, 1);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(second.ActionResults.Values.Any(result => !result.Success));
+            Assert.AreEqual(0, first.ActivePendingCount);
+            Assert.AreEqual(0, second.ActivePendingCount);
+            AssertPosition(world, 552, new GridCoord(2, 0));
+            AssertPosition(world, 553, new GridCoord(1, 1));
+            AssertPosition(world, 550, new GridCoord(0, 0));
+            AssertPosition(world, 551, new GridCoord(0, 1));
+        }
+
+        [Test]
+        public void MultiContactPush_NonPushableContactRejectsWholeBlockedStep()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(560, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(561, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(562, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(563, new GridCoord(1, 1))));
+            SetPorts(world, 560, DirectionMask.All);
+            SetPorts(world, 561, DirectionMask.All);
+            AddMechanismAbility(world, 560, 561);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 560, Direction.Right, world.ServerTick - 1, 1);
+            var pending = new PendingRuleStateStore();
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+
+            Assert.IsFalse(result.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(0, pending.ActiveCount);
+            AssertPosition(world, 560, new GridCoord(0, 0));
+            AssertPosition(world, 561, new GridCoord(0, 1));
+            AssertPosition(world, 562, new GridCoord(1, 0));
+            AssertPosition(world, 563, new GridCoord(1, 1));
         }
 
         [Test]
@@ -510,13 +899,14 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsFalse(second.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 471, new GridCoord(1, 0));
             AssertPosition(world, 472, new GridCoord(2, 0));
@@ -538,13 +928,14 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsFalse(second.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 481, new GridCoord(1, 0));
             AssertPosition(world, 482, new GridCoord(2, 0));
@@ -573,7 +964,7 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void DerivedActionFailure_FailsOwnerAction()
+        public void DeferredPushFailure_DoesNotFailSourceAction()
         {
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(380, 380, new GridCoord(0, 0))));
@@ -585,20 +976,21 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsFalse(second.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 380, new GridCoord(0, 0));
             AssertPosition(world, 381, new GridCoord(1, 0));
         }
 
         [Test]
-        public void NestedPushableBlock_HandoffsUntilOnlyTailMoves()
+        public void NestedPushableBlock_DeferredOutputsUntilOnlyTailMoves()
         {
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(390, 390, new GridCoord(0, 0))));
@@ -610,22 +1002,19 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsFalse(second.ActionResults.ContainsKey(action.ActionId));
-            Assert.AreEqual(1, second.ActivePendingCount);
-            Assert.IsTrue(third.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), third.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(0, second.ActivePendingCount);
             Assert.AreEqual(0, third.ActivePendingCount);
             Assert.AreEqual(0, fourth.ActivePendingCount);
             Assert.AreEqual(0, fifth.ActivePendingCount);
@@ -635,7 +1024,7 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void ConnectedBodyChain_HandoffsUntilOnlyTailBodyMoves()
+        public void ConnectedBodyChain_DeferredOutputsUntilOnlyTailBodyMoves()
         {
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(490, 490, new GridCoord(0, 0))));
@@ -653,21 +1042,19 @@ namespace DG.EditorTests
             var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = system.Tick(world, Array.Empty<WorldAction>(), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.IsFalse(first.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(first.Reasons.Contains("handoff"));
-            Assert.IsFalse(second.ActionResults.ContainsKey(action.ActionId));
-            Assert.IsTrue(third.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(new GridCoord(0, 0), third.ActionResults[action.ActionId].FinalCoord);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
             Assert.AreEqual(0, third.ActivePendingCount);
             Assert.AreEqual(0, fourth.ActivePendingCount);
             Assert.AreEqual(0, fifth.ActivePendingCount);
@@ -679,40 +1066,184 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void PushChainCycleGuard_RejectsRepeatedSubject()
+        public void PushBlockedPath_DoesNotCreatePendingChildHandoff()
         {
             var world = new GameWorld();
-            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(500, new GridCoord(1, 0))));
-            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(501, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(720, 720, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(721, new GridCoord(1, 0))));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(720, new GridCoord(1, 0), 41);
             var pending = new PendingRuleStateStore();
-            PendingActionState state = pending.AddHandoffActionState(MoveRequest(30, "player_move", WorldActionPriority.Player, 500, Direction.Right), 501, Direction.Right, 0);
-            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromPendingActionState(state, 1);
+            var system = new StateDrivenRuleExecutionSystem();
 
-            ActionArbitrationResult result = new ActionArbiter().ArbitrateMoves(world, new[] { request }, pending, 1);
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
 
-            Assert.AreEqual(1, result.RejectedActions.Count);
-            Assert.AreEqual("push chain cycle", result.RejectedActions[0].Reason);
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            AssertPosition(world, 720, new GridCoord(0, 0));
+            AssertPosition(world, 721, new GridCoord(1, 0));
         }
 
         [Test]
-        public void PushChainDepthGuard_RejectsTooLongChain()
+        public void DeferredPushOutput_ReentersQueueAfterCost()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(730, 730, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(731, new GridCoord(1, 0))));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(730, new GridCoord(1, 0), 42);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.AreEqual(0, second.ActivePendingCount);
+            AssertPosition(world, 730, new GridCoord(0, 0));
+            AssertPosition(world, 731, new GridCoord(2, 0));
+        }
+
+        [Test]
+        public void DeferredOutputPolicy_EquivalentSpecsProduceEquivalentOutput()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(740, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(741, new GridCoord(0, 1), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(742, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(743, new GridCoord(1, 1))));
+            AddMechanismAbility(world, 740);
+            AddMechanismAbility(world, 741);
+            world.NextTick();
+            var registry = new ActionSpecRegistry(new[]
+            {
+                new ActionSpec("policy_a", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
+                new ActionSpec("policy_b", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
+                ActionSpecRegistry.Default.Get("configured_wind_push")
+            });
+
+            StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem(registry).Tick(world, new[]
+            {
+                new WorldAction(1, WorldActionPriority.Mechanism, "policy_a", 740, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1),
+                new WorldAction(2, WorldActionPriority.Mechanism, "policy_b", 741, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1)
+            }, new PendingRuleStateStore(), world.ServerTick);
+
+            Assert.AreEqual(2, first.DeferredActions.Count);
+            Assert.IsTrue(first.DeferredActions.All(output => output.SpecId.Equals(new ActionSpecId("configured_wind_push"))));
+            Assert.IsTrue(first.DeferredActions.All(output => output.Direction == Direction.Right));
+        }
+
+        [Test]
+        public void SurgingPushDevice_WithoutStrengthPolicyEmitsPeriodicDeferredOutput()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(750, 750, new GridCoord(-1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(751, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(752, new GridCoord(1, 0))));
+            SetPorts(world, 751, DirectionMask.All);
+            AddMechanismAbility(world, 751);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(750, new GridCoord(0, 0), 43);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.AreEqual(1, first.DeferredActions[0].CostTicks);
+            Assert.AreEqual(first.DeferredActions[0].CreatedTick + 1, first.DeferredActions[0].ReadyTick);
+            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
+            Assert.IsFalse(second.Reasons.Contains("push chain cycle"));
+        }
+
+        [Test]
+        public void PushSourceAction_DoesNotWaitForDownstreamDeferredResult()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(760, 760, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(761, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(762, new GridCoord(2, 0))));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(760, new GridCoord(1, 0), 44);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
+            Assert.AreEqual(0, pending.ActiveCount);
+            AssertPosition(world, 760, new GridCoord(0, 0));
+            AssertPosition(world, 761, new GridCoord(1, 0));
+        }
+
+        [Test]
+        public void ClosedLoopWithoutExternalOutput_CompletesWithoutDeferredOutput()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(770, 770, new GridCoord(-1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(771, new GridCoord(0, 0))));
+            SetPorts(world, 771, DirectionMask.All);
+            AddMechanismAbility(world, 771);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(770, new GridCoord(0, 0), 45);
+            var pending = new PendingRuleStateStore();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+
+            Assert.IsFalse(first.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(0, first.DeferredActions.Count);
+            Assert.AreEqual(0, pending.ActiveCount);
+        }
+
+        [Test]
+        public void PushChainCycleGuard_RejectsPartialSubjectOverlap()
         {
             var pending = new PendingRuleStateStore();
-            PendingActionState state = pending.AddHandoffActionState(MoveRequest(40, "player_move", WorldActionPriority.Player, 600, Direction.Right), 601, Direction.Right, 0);
-            string reason = string.Empty;
+            PendingActionState state = pending.AddHandoffActionState(MoveRequest(31, "player_move", WorldActionPriority.Player, 700, Direction.Right), 701, Direction.Right, 0, 1, "player_push", new[] { 701L, 702L });
 
-            for (int i = 0; i < PendingActionState.MaxChainDepth; i++)
+            bool added = state.TryAddChildUnits(MoveRequest(state.ReadyUnit.ActionUnitId, "player_push", WorldActionPriority.Player, 701, Direction.Right, state.StateId), new[]
             {
-                PendingActionUnit unit = state.ReadyUnit;
-                var request = MoveRequest(unit.ActionUnitId, unit.SpecId, unit.Priority, unit.EntityId, unit.Direction, state.StateId);
-                bool added = state.TryAddChildUnit(request, 700 + i, Direction.Right, i + 1, "player_push", new[] { 700L + i }, out reason);
-                if (!added)
-                {
-                    break;
-                }
-            }
+                new PendingChildUnitRequest(703, "player_push", new[] { 702L, 703L })
+            }, Direction.Right, 1, out string reason);
 
-            Assert.AreEqual("push chain depth exceeded", reason);
+            Assert.IsFalse(added);
+            Assert.AreEqual("push chain cycle", reason);
+            Assert.AreEqual(PendingRuleStatus.Active, state.Status);
+        }
+
+        [Test]
+        public void PendingSiblingBatch_UsesFilteredChildrenWhenSubjectAlreadyReady()
+        {
+            var pending = new PendingRuleStateStore();
+            PendingActionState state = pending.AddHandoffActionState(MoveRequest(41, "player_move", WorldActionPriority.Player, 610, Direction.Right), 611, Direction.Right, 0, 1, "player_push", new[] { 611L, 612L });
+
+            bool added = state.TryAddSiblingUnitsToReadyBatch(new[]
+            {
+                new PendingChildUnitRequest(611, "player_push", new[] { 611L, 612L }),
+                new PendingChildUnitRequest(612, "player_push", new[] { 611L, 612L })
+            }, Direction.Right, 1, out string reason);
+
+            Assert.IsTrue(added, reason);
+            Assert.AreEqual(1, state.Units.Count);
+            Assert.AreEqual(0, state.PushContactBatches.Count);
         }
 
         [Test]
@@ -738,11 +1269,14 @@ namespace DG.EditorTests
             string root = RepositoryRoot();
             string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Execution", "StateDrivenRules.cs"));
             string actions = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionSpecs.cs"));
+            string pending = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Pending", "PendingRuleStates.cs"));
+            string removedDefaultRegistryFactory = "private static ActionSpecRegistry " + "CreateDefault()";
+            int createDefault = actions.IndexOf(removedDefaultRegistryFactory, StringComparison.Ordinal);
+            string runtimeActions = createDefault >= 0 ? actions.Substring(0, createDefault) : actions;
 
-            Assert.IsFalse(execution.Contains("WorldActionKind.PlayerMove"));
-            Assert.IsFalse(execution.Contains("WorldActionKind.AutoMove"));
-            Assert.IsFalse(execution.Contains("WorldActionKind.MechanismPush"));
-            Assert.IsFalse(execution.Contains("WorldActionKind.DebugMove"));
+            string removedActionKindName = "WorldAction" + "Kind";
+            Assert.IsFalse(execution.Contains(removedActionKindName));
+            Assert.IsFalse(actions.Contains(removedActionKindName));
             Assert.IsFalse(execution.Contains("ProcessPushableBlock"));
             Assert.IsFalse(execution.Contains("ProcessBounceBlock"));
             Assert.IsFalse(execution.Contains("FindBlockingForBodyMove"));
@@ -752,6 +1286,9 @@ namespace DG.EditorTests
             Assert.IsFalse(actions.Contains("BehaviorIntentKind"));
             Assert.IsFalse(actions.Contains("ToBehaviorIntent"));
             Assert.IsFalse(actions.Contains("ToMoveIntent"));
+            Assert.IsFalse(runtimeActions.Contains("\"player_push\""));
+            Assert.IsFalse(runtimeActions.Contains("\"connected_body_move\""));
+            Assert.IsFalse(pending.Contains("\"player_push\""));
         }
 
         [Test]
@@ -798,15 +1335,51 @@ namespace DG.EditorTests
             Assert.AreEqual(expected, position.Coord);
         }
 
+        private static StateDrivenRuleExecutionResult TickAndEnqueueDeferred(StateDrivenRuleExecutionSystem system, GameWorld world, WorldActionQueue queue, PendingRuleStateStore pending, IReadOnlyList<WorldAction> actions)
+        {
+            StateDrivenRuleExecutionResult result = system.Tick(world, actions, pending, world.ServerTick);
+            for (int i = 0; i < result.DeferredActions.Count; i++)
+            {
+                queue.EnqueueDeferred(result.DeferredActions[i]);
+            }
+
+            return result;
+        }
+
         private static void SetPorts(GameWorld world, long entityId, DirectionMask ports)
         {
             Assert.IsTrue(world.TryGetEntity(entityId, out GameEntity entity));
             world.SetComponent(entity, new PortConnectorComponent(ports));
         }
 
+        private static void RefreshStaticPorts(GameWorld world, params long[] entityIds)
+        {
+            for (int i = 0; i < entityIds.Length; i++)
+            {
+                Assert.IsTrue(world.TryGetEntity(entityIds[i], out GameEntity entity));
+                world.CaptureStaticComponentSources(entity);
+            }
+
+            world.ResolveComponentResults();
+        }
+
+        private static void AddMechanismAbility(GameWorld world, params long[] entityIds)
+        {
+            for (int i = 0; i < entityIds.Length; i++)
+            {
+                Assert.IsTrue(world.TryGetEntity(entityIds[i], out GameEntity entity));
+                world.AddTag(entity, WorldTag.AbilityMechanismPush);
+            }
+        }
+
         private static string RepositoryRoot()
         {
             return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", ".."));
+        }
+
+        private static string GameConfigDirectory()
+        {
+            return Path.Combine(Application.streamingAssetsPath, "GameConfig");
         }
     }
 }

@@ -66,8 +66,17 @@ public sealed class AuthoritativeInputQueue
     private readonly Queue<AuthoritativeMoveInput> moveInputs = new();
     private readonly Dictionary<long, AuthoritativeDebugActionInput> debugInputs = new();
 
+    public AuthoritativeInputQueue() : this(ActionSpecRegistry.Default)
+    {
+    }
+
+    public AuthoritativeInputQueue(ActionSpecRegistry actionSpecs)
+    {
+        ActionQueue = new WorldActionQueue(actionSpecs);
+    }
+
     public int PendingMoveCount => moveInputs.Count;
-    public WorldActionQueue ActionQueue { get; } = new();
+    public WorldActionQueue ActionQueue { get; }
 
     public AuthoritativeMoveInput EnqueueMove(long entityId, GridCoord targetCoord, long clientTick)
     {

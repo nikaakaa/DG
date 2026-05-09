@@ -42,7 +42,7 @@ namespace DG.EditorTests
             world.NextTick();
 
             var queue = new WorldActionQueue();
-            queue.EnqueueMechanismPush(1, Direction.Right, world.ServerTick - 1, 1);
+            queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
 
             Assert.AreEqual(1, result.ActionResults.Count);
@@ -62,7 +62,7 @@ namespace DG.EditorTests
             world.NextTick();
 
             var queue = new WorldActionQueue();
-            queue.EnqueueMechanismPush(1, Direction.Right, world.ServerTick - 1, 1);
+            queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
 
             Assert.AreEqual(1, result.ActionResults.Count);
@@ -82,11 +82,35 @@ namespace DG.EditorTests
             world.NextTick();
 
             var queue = new WorldActionQueue();
-            queue.EnqueueMechanismPush(1, Direction.Right, world.ServerTick - 1, 1);
-            queue.EnqueueMechanismPush(1, Direction.Right, world.ServerTick - 1, 1);
+            queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
+            queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
 
             Assert.AreEqual(2, result.ActionResults.Count(item => item.Value.EntityId == 1));
+            Assert.IsTrue(world.TryGetEntity(1, out GameEntity player));
+            Assert.IsTrue(world.TryGetComponent(player, out PositionComponent position));
+            Assert.AreEqual(new GridCoord(1, 0), position.Coord);
+        }
+
+        [Test]
+        public void PushOnEnterOutput_UsesComponentSpecAndReadyCost()
+        {
+            var world = new GameWorld();
+            world.AddEntity(DefaultWorldConfig.ConveyorSpawn(100, new GridCoord(0, 0), Direction.Right));
+            world.AddEntity(DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            Assert.IsTrue(world.TryGetEntity(100, out GameEntity conveyor));
+            world.SetComponent(conveyor, new PushOnEnterComponent("configured_wind_push", 2));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+
+            int enqueued = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick);
+            StateDrivenRuleExecutionResult beforeReady = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 1), new PendingRuleStateStore(), world.ServerTick + 1);
+            StateDrivenRuleExecutionResult ready = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 2), new PendingRuleStateStore(), world.ServerTick + 2);
+
+            Assert.AreEqual(1, enqueued);
+            Assert.AreEqual(0, beforeReady.ActionResults.Count);
+            Assert.AreEqual(1, ready.ActionResults.Count);
+            Assert.IsTrue(ready.ActionResults.Values.Single().Success);
             Assert.IsTrue(world.TryGetEntity(1, out GameEntity player));
             Assert.IsTrue(world.TryGetComponent(player, out PositionComponent position));
             Assert.AreEqual(new GridCoord(1, 0), position.Coord);

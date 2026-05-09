@@ -83,6 +83,12 @@ public enum ActionBlockedPolicy
     BounceIfBouncable = 3
 }
 
+public enum ActionHandoffPolicy
+{
+    None = 0,
+    Configured = 1
+}
+
 public enum ActionConflictPolicy
 {
     None = 0,
@@ -135,6 +141,23 @@ public enum ActionClaimMode
 {
     Shared = 1,
     Exclusive = 2
+}
+
+public readonly struct ActionHandoffSpec
+{
+    public ActionHandoffSpec(ActionHandoffPolicy policy, ActionSpecId specId, ActionSubjectKind subjectKind)
+    {
+        Policy = policy;
+        SpecId = specId;
+        SubjectKind = subjectKind;
+    }
+
+    public ActionHandoffPolicy Policy { get; }
+    public ActionSpecId SpecId { get; }
+    public ActionSubjectKind SubjectKind { get; }
+    public bool IsEnabled => Policy != ActionHandoffPolicy.None && SpecId.IsValid;
+
+    public static ActionHandoffSpec None => new(ActionHandoffPolicy.None, default, ActionSubjectKind.HitEntity);
 }
 
 public readonly struct ActionRuntimeParams
@@ -204,7 +227,9 @@ public sealed class ActionSpec
         ActionMergePolicy mergePolicy,
         ActionPlanRule planRule,
         ActionCommitRule commitRules,
-        ActionSubjectKind subjectKind = ActionSubjectKind.HitEntity)
+        ActionSubjectKind subjectKind = ActionSubjectKind.HitEntity,
+        ActionHandoffSpec handoff = default,
+        int defaultCostTicks = 1)
     {
         SpecId = specId;
         Primitive = primitive;
@@ -222,6 +247,8 @@ public sealed class ActionSpec
         PlanRule = planRule;
         CommitRules = commitRules;
         SubjectKind = subjectKind;
+        Handoff = handoff.Policy == ActionHandoffPolicy.None && !handoff.SpecId.IsValid ? ActionHandoffSpec.None : handoff;
+        DefaultCostTicks = Math.Max(1, defaultCostTicks);
     }
 
     public ActionSpecId SpecId { get; }
@@ -240,6 +267,8 @@ public sealed class ActionSpec
     public ActionPlanRule PlanRule { get; }
     public ActionCommitRule CommitRules { get; }
     public ActionSubjectKind SubjectKind { get; }
+    public ActionHandoffSpec Handoff { get; }
+    public int DefaultCostTicks { get; }
     public bool AllowsConnectedBodySubject => SubjectKind == ActionSubjectKind.ConnectedBodyIfAny;
 }
 
@@ -367,6 +396,7 @@ public sealed class ActionArbitrationResult
     private readonly List<AcceptedAction> acceptedActions = new();
     private readonly List<RejectedAction> rejectedActions = new();
     private readonly List<DerivedAction> derivedActions = new();
+    private readonly List<DeferredAction> deferredActions = new();
     private readonly List<CommitProposal> commitProposals = new();
     private readonly Dictionary<long, MoveResult> actionResults = new();
     private readonly List<string> reasons = new();
@@ -374,6 +404,7 @@ public sealed class ActionArbitrationResult
     public IReadOnlyList<AcceptedAction> AcceptedActions => acceptedActions;
     public IReadOnlyList<RejectedAction> RejectedActions => rejectedActions;
     public IReadOnlyList<DerivedAction> DerivedActions => derivedActions;
+    public IReadOnlyList<DeferredAction> DeferredActions => deferredActions;
     public IReadOnlyList<CommitProposal> CommitProposals => commitProposals;
     public IReadOnlyDictionary<long, MoveResult> ActionResults => actionResults;
     public IReadOnlyList<string> Reasons => reasons;
@@ -414,6 +445,11 @@ public sealed class ActionArbitrationResult
         commitProposals.Add(proposal);
     }
 
+    public void AddDeferred(DeferredAction action)
+    {
+        deferredActions.Add(action);
+    }
+
     public void AddReason(string reason)
     {
         if (!string.IsNullOrEmpty(reason))
@@ -426,15 +462,27 @@ public sealed class ActionArbitrationResult
 public sealed class ActionSpecRegistry
 {
     private readonly Dictionary<ActionSpecId, ActionSpec> specs;
-    private readonly Dictionary<WorldActionKind, ActionSpecId> legacyIds;
 
-    public ActionSpecRegistry(IEnumerable<ActionSpec> specs, IReadOnlyDictionary<WorldActionKind, ActionSpecId> legacyIds)
+    public ActionSpecRegistry(IEnumerable<ActionSpec> specs)
     {
-        this.specs = specs.ToDictionary(spec => spec.SpecId, spec => spec);
-        this.legacyIds = new Dictionary<WorldActionKind, ActionSpecId>(legacyIds);
+        this.specs = new Dictionary<ActionSpecId, ActionSpec>();
+        foreach (ActionSpec spec in specs)
+        {
+            if (!spec.SpecId.IsValid)
+            {
+                throw new InvalidOperationException("Action spec id is empty.");
+            }
+
+            if (this.specs.ContainsKey(spec.SpecId))
+            {
+                throw new InvalidOperationException("Duplicate action spec id: " + spec.SpecId);
+            }
+
+            this.specs.Add(spec.SpecId, spec);
+        }
     }
 
-    public static ActionSpecRegistry Default { get; } = CreateDefault();
+    public static ActionSpecRegistry Default { get; } = LubanActionSpecRegistry.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory());
 
     public IReadOnlyCollection<ActionSpec> Specs => specs.Values.ToArray();
 
@@ -453,41 +501,6 @@ public sealed class ActionSpecRegistry
         return spec;
     }
 
-    public ActionSpecId GetLegacySpecId(WorldActionKind kind)
-    {
-        if (!legacyIds.TryGetValue(kind, out ActionSpecId id))
-        {
-            throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown legacy action kind");
-        }
-
-        return id;
-    }
-
-    private static ActionSpecRegistry CreateDefault()
-    {
-        var list = new[]
-        {
-            new ActionSpec("player_move", ActionPrimitive.Move, ActionSourceKind.Player, WorldActionPriority.Player, WorldTag.SourcePlayer, WorldTag.AbilityMove, WorldTag.None, WorldTag.BlockPlayerMove | WorldTag.StateStunned | WorldTag.StateRooted, ActionTargetRule.TargetCoordOneStep, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny),
-            new ActionSpec("auto_move", ActionPrimitive.Move, ActionSourceKind.Auto, WorldActionPriority.Auto, WorldTag.SourceAuto, WorldTag.AbilityAutoMove, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromComponent, ActionBlockedPolicy.BounceIfBouncable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.SetAutoMoveTick | ActionCommitRule.SetDirectionOnBounce),
-            new ActionSpec("mechanism_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.ImmuneMechanismPush, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny),
-            new ActionSpec("debug_move", ActionPrimitive.Move, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.AbilityMove, WorldTag.None, WorldTag.None, ActionTargetRule.TargetCoordAny, ActionBlockedPolicy.Reject, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None),
-            new ActionSpec("debug_spawn", ActionPrimitive.Spawn, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.TargetCoordAny, ActionBlockedPolicy.Reject, ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.SpawnEntity, ActionCommitRule.None),
-            new ActionSpec("debug_remove", ActionPrimitive.Remove, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, ActionBlockedPolicy.Reject, ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.RemoveEntity, ActionCommitRule.None),
-            new ActionSpec("player_push", ActionPrimitive.Move, ActionSourceKind.Player, WorldActionPriority.Player, WorldTag.SourcePlayer, WorldTag.AbilityPlayerPush, WorldTag.None, WorldTag.StateStunned, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny),
-            new ActionSpec("configured_wind_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.ImmuneMechanismPush, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny),
-            new ActionSpec("connected_body_move", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny)
-        };
-        var legacy = new Dictionary<WorldActionKind, ActionSpecId>
-        {
-            [WorldActionKind.PlayerMove] = "player_move",
-            [WorldActionKind.AutoMove] = "auto_move",
-            [WorldActionKind.MechanismPush] = "mechanism_push",
-            [WorldActionKind.DebugMove] = "debug_move",
-            [WorldActionKind.DebugSpawn] = "debug_spawn",
-            [WorldActionKind.DebugRemove] = "debug_remove"
-        };
-        return new ActionSpecRegistry(list, legacy);
-    }
 }
 
 public sealed class ActionRequestAdapter
@@ -501,16 +514,20 @@ public sealed class ActionRequestAdapter
 
     public ActionRequest FromWorldAction(WorldAction action)
     {
-        ActionSpecId specId = action.SpecId.IsValid ? action.SpecId : registry.GetLegacySpecId(action.Kind);
-        ActionSpec spec = registry.Get(specId);
+        ActionSpec spec = registry.Get(action.SpecId);
         var source = new ActionSourceContext(spec.DefaultSource, action.EntityId, 0, spec.SourceTag);
         var target = new ActionTarget(0, action.TargetCoord, action.Direction);
-        return new ActionRequest(action.ActionId, specId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick);
+        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick);
     }
 
     public ActionRequest FromPendingActionState(PendingActionState state, long serverTick)
     {
         PendingActionUnit unit = state.ReadyUnit;
+        return FromPendingActionUnit(state, unit, serverTick);
+    }
+
+    public ActionRequest FromPendingActionUnit(PendingActionState state, PendingActionUnit unit, long serverTick)
+    {
         ActionSpec spec = registry.Get(unit.SpecId);
         ActionSourceKind sourceKind = unit.DerivedFromUnitId != 0 ? ActionSourceKind.Handoff : spec.DefaultSource;
         var source = new ActionSourceContext(sourceKind, state.RootEntityId, state.StateId, spec.SourceTag);
@@ -635,10 +652,10 @@ public sealed class ActionArbiter
             return;
         }
 
-        GameEntity blocking = bodyCapabilities.FindExternalBlocking(world, claims, body);
-        if (blocking != null)
+        IReadOnlyList<ExternalPushContact> contacts = bodyCapabilities.FindExternalPushContacts(world, claims, body);
+        if (contacts.Count != 0)
         {
-            ResolveBlocked(world, request, spec, pendingStates, result, position.Coord, direction, blocking, serverTick);
+            ResolveBlocked(world, request, spec, pendingStates, result, position.Coord, direction, contacts, serverTick);
             return;
         }
 
@@ -732,11 +749,12 @@ public sealed class ActionArbiter
         }
     }
 
-    private void ResolveBlocked(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, ActionArbitrationResult result, GridCoord current, Direction direction, GameEntity blocking, long serverTick)
+    private void ResolveBlocked(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, ActionArbitrationResult result, GridCoord current, Direction direction, IReadOnlyList<ExternalPushContact> contacts, long serverTick)
     {
+        GameEntity blocking = FirstBlocking(world, contacts);
         if (spec.BlockedPolicy == ActionBlockedPolicy.StartPushIfPushable)
         {
-            ResolvePushableBlock(world, request, spec, pendingStates, result, current, direction, blocking, serverTick);
+            ResolvePushableBlock(world, request, spec, pendingStates, result, current, direction, contacts, serverTick);
             return;
         }
 
@@ -749,56 +767,94 @@ public sealed class ActionArbiter
         RejectBlocked(world, request, spec, result, current, direction, blocking);
     }
 
-    private void ResolvePushableBlock(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, ActionArbitrationResult result, GridCoord current, Direction direction, GameEntity blocking, long serverTick)
+    private void ResolvePushableBlock(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, ActionArbitrationResult result, GridCoord current, Direction direction, IReadOnlyList<ExternalPushContact> contacts, long serverTick)
     {
-        if (direction == Direction.None || !bodyCapabilities.CanPushEntry(world, blocking))
+        if (!TryResolvePushContacts(world, spec, contacts, out IReadOnlyList<DeferredAction> deferredActions, out GameEntity blocking, out bool playerControlled, request, direction, serverTick))
         {
-            if (request.Source.SourceStateId != 0)
-            {
-                bool playerControlled = world.HasComponent<PlayerControlComponent>(blocking);
-                Reject(world, request, spec, current, direction, playerControlled ? MoveErrorCode.Occupied : MoveErrorCode.Blocked, playerControlled ? "push occupied by player" : "push blocked", false, new CollisionInfo(blocking.EntityId, true, playerControlled), result);
-                return;
-            }
-
-            RejectBlocked(world, request, spec, result, current, direction, blocking);
+            RejectPushBlocked(world, request, spec, result, current, direction, blocking, playerControlled);
             return;
         }
 
+        if (direction == Direction.None || !spec.Handoff.IsEnabled)
+        {
+            RejectPushBlocked(world, request, spec, result, current, direction, blocking, playerControlled);
+            return;
+        }
+
+        for (int i = 0; i < deferredActions.Count; i++)
+        {
+            result.AddDeferred(deferredActions[i]);
+        }
+
+        result.Derive(new DerivedAction(request, spec, ActionResultBranch.Noop, "bounded/deferred-output"), BuildDeferredOutputResult(current, direction, request, blocking));
+    }
+
+    private bool TryResolvePushContacts(GameWorld world, ActionSpec spec, IReadOnlyList<ExternalPushContact> contacts, out IReadOnlyList<DeferredAction> deferredActions, out GameEntity firstBlocking, out bool firstBlockingPlayerControlled, ActionRequest request, Direction direction, long serverTick)
+    {
+        var result = new List<DeferredAction>();
+        var seenSubjects = new HashSet<string>();
+        firstBlocking = null!;
+        firstBlockingPlayerControlled = false;
+        for (int i = 0; i < contacts.Count; i++)
+        {
+            if (!world.TryGetEntity(contacts[i].BlockerEntityId, out GameEntity blocking))
+            {
+                deferredActions = Array.Empty<DeferredAction>();
+                return false;
+            }
+
+            if (firstBlocking == null)
+            {
+                firstBlocking = blocking;
+                firstBlockingPlayerControlled = world.HasComponent<PlayerControlComponent>(blocking);
+            }
+
+            if (!bodyCapabilities.CanPushEntry(world, blocking))
+            {
+                firstBlocking = blocking;
+                firstBlockingPlayerControlled = world.HasComponent<PlayerControlComponent>(blocking);
+                deferredActions = Array.Empty<DeferredAction>();
+                return false;
+            }
+
+            ResolveHandoffSubject(world, spec, blocking, out ActionSpecId handoffSpecId, out IReadOnlyList<long> subjectEntityIds);
+            if (!seenSubjects.Add(BuildSubjectKey(blocking.EntityId, subjectEntityIds)))
+            {
+                continue;
+            }
+
+            result.Add(new DeferredAction(handoffSpecId, blocking.EntityId, subjectEntityIds, direction, serverTick, serverTick + spec.DefaultCostTicks, spec.DefaultCostTicks, request.OwnerActionId, BuildDeferredDedupeKey(request, blocking.EntityId, subjectEntityIds, direction, serverTick)));
+        }
+
+        deferredActions = result;
+        return result.Count != 0;
+    }
+
+    private static string BuildDeferredDedupeKey(ActionRequest request, long targetEntityId, IReadOnlyList<long> subjectEntityIds, Direction direction, long serverTick)
+    {
+        return request.OwnerActionId + ":" + serverTick + ":" + direction + ":" + BuildSubjectKey(targetEntityId, subjectEntityIds);
+    }
+
+    private static string BuildSubjectKey(long targetEntityId, IReadOnlyList<long> subjectEntityIds)
+    {
+        IReadOnlyList<long> ids = subjectEntityIds == null || subjectEntityIds.Count == 0 ? new[] { targetEntityId } : subjectEntityIds;
+        return string.Join("|", ids.OrderBy(id => id));
+    }
+
+    private void RejectPushBlocked(GameWorld world, ActionRequest request, ActionSpec spec, ActionArbitrationResult result, GridCoord current, Direction direction, GameEntity blocking, bool playerControlled)
+    {
         if (request.Source.SourceStateId != 0)
         {
-            PendingActionState state = FindActionState(pendingStates, request.Source.SourceStateId);
-            if (state == null)
-            {
-                Reject(world, request, spec, current, direction, MoveErrorCode.Blocked, "push state missing", false, new CollisionInfo(blocking.EntityId, true, false), result);
-                return;
-            }
-
-            ResolveHandoffSubject(world, request, blocking, out ActionSpecId nestedHandoffSpecId, out IReadOnlyList<long> nestedSubjectEntityIds);
-            if (pendingStates.HasActiveActionInvolvingAny(nestedSubjectEntityIds, state.StateId))
-            {
-                Reject(world, request, spec, current, direction, MoveErrorCode.Blocked, "push already pending", false, new CollisionInfo(blocking.EntityId, true, false), result);
-                return;
-            }
-
-            if (!state.TryAddChildUnit(request, blocking.EntityId, direction, serverTick, nestedHandoffSpecId, nestedSubjectEntityIds, out string chainReason))
-            {
-                Reject(world, request, spec, current, direction, MoveErrorCode.Blocked, chainReason, false, new CollisionInfo(blocking.EntityId, true, false), result);
-                return;
-            }
-
-            result.Derive(new DerivedAction(request, spec, "handoff"), null);
+            Reject(world, request, spec, current, direction, playerControlled ? MoveErrorCode.Occupied : MoveErrorCode.Blocked, playerControlled ? "push occupied by player" : "push blocked", false, new CollisionInfo(blocking.EntityId, true, playerControlled), result);
             return;
         }
 
-        ResolveHandoffSubject(world, request, blocking, out ActionSpecId handoffSpecId, out IReadOnlyList<long> subjectEntityIds);
-        if (pendingStates.HasActiveActionInvolvingAny(subjectEntityIds))
-        {
-            Reject(world, request, spec, current, direction, MoveErrorCode.Blocked, "push already pending", false, new CollisionInfo(blocking.EntityId, true, false), result);
-            return;
-        }
+        RejectBlocked(world, request, spec, result, current, direction, blocking);
+    }
 
-        pendingStates.AddHandoffActionState(request, blocking.EntityId, direction, serverTick, specId: handoffSpecId, subjectEntityIds: subjectEntityIds);
-        result.Derive(new DerivedAction(request, spec, "handoff"), null);
+    private static GameEntity FirstBlocking(GameWorld world, IReadOnlyList<ExternalPushContact> contacts)
+    {
+        return contacts.Count != 0 && world.TryGetEntity(contacts[0].BlockerEntityId, out GameEntity blocking) ? blocking : null!;
     }
 
     private void ResolveBounceBlock(GameWorld world, ActionRequest request, ActionSpec spec, ActionArbitrationResult result, GridCoord current, Direction direction, GameEntity blocking, long serverTick)
@@ -958,17 +1014,17 @@ public sealed class ActionArbiter
         return true;
     }
 
-    private void ResolveHandoffSubject(GameWorld world, ActionRequest request, GameEntity blocking, out ActionSpecId specId, out IReadOnlyList<long> subjectEntityIds)
+    private void ResolveHandoffSubject(GameWorld world, ActionSpec spec, GameEntity blocking, out ActionSpecId specId, out IReadOnlyList<long> subjectEntityIds)
     {
-        if (!bodyResolver.TryResolve(world, blocking, out BehaviorBody body, out _) ||
+        specId = spec.Handoff.SpecId;
+        if (spec.Handoff.SubjectKind != ActionSubjectKind.ConnectedBodyIfAny ||
+            !bodyResolver.TryResolve(world, blocking, out BehaviorBody body, out _) ||
             body.Kind != BehaviorBodyKind.PortConnected)
         {
-            specId = "player_push";
             subjectEntityIds = new[] { blocking.EntityId };
             return;
         }
 
-        specId = "connected_body_move";
         subjectEntityIds = body.Entities.Select(entity => entity.EntityId).ToArray();
     }
 
@@ -1007,9 +1063,9 @@ public sealed class ActionArbiter
         return new MoveResult(true, action.Request.EntityId, finalCoord, action.Direction, MoveErrorCode.None, string.Empty, false, default, action.Request.ClientTick);
     }
 
-    private static MoveResult BuildHandoffResult(GridCoord current, Direction direction, ActionRequest request, GameEntity blocking)
+    private static MoveResult BuildDeferredOutputResult(GridCoord current, Direction direction, ActionRequest request, GameEntity blocking)
     {
-        return new MoveResult(true, request.EntityId, current, direction, MoveErrorCode.None, "handoff", false, new CollisionInfo(blocking.EntityId, true, false), request.ClientTick);
+        return new MoveResult(true, request.EntityId, current, direction, MoveErrorCode.None, "bounded/deferred-output", false, new CollisionInfo(blocking.EntityId, true, false), request.ClientTick);
     }
 
     private static GridCoord CurrentCoord(GameWorld world, long entityId)

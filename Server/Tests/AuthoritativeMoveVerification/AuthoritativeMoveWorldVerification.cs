@@ -431,7 +431,7 @@ public static class AuthoritativeMoveWorldVerification
         world.FlushDelta();
         world.NextTick();
         var queue = new WorldActionQueue();
-        queue.EnqueueMechanismPush(1, Direction.Right, world.ServerTick - 1, 1);
+        queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
         StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
         if (result.ActionResults.Count != 1 ||
             !result.ActionResults.Values.First().Success ||
@@ -450,7 +450,7 @@ public static class AuthoritativeMoveWorldVerification
         blockedWorld.AddEntity(DefaultWorldConfig.BlockerSpawn(3, new GridCoord(1, 0)));
         blockedWorld.NextTick();
         var blockedQueue = new WorldActionQueue();
-        blockedQueue.EnqueueMechanismPush(2, Direction.Right, blockedWorld.ServerTick - 1, 1);
+        blockedQueue.EnqueueConfiguredMove("mechanism_push", 2, Direction.Right, blockedWorld.ServerTick - 1, 1);
         StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), new PendingRuleStateStore(), blockedWorld.ServerTick);
         if (blockedResult.ActionResults.Count != 1 ||
             blockedResult.ActionResults.Values.First().Success ||
@@ -736,15 +736,18 @@ public static class AuthoritativeMoveWorldVerification
         var pushBlockedSystem = new StateDrivenRuleExecutionSystem();
         WorldAction pushBlockedAction = pushBlockedQueue.EnqueuePlayerMove(950, new GridCoord(1, 0), 15);
         StateDrivenRuleExecutionResult pushBlockedFirst = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedStore, pushBlockedWorld.ServerTick);
+        for (int i = 0; i < pushBlockedFirst.DeferredActions.Count; i++)
+        {
+            pushBlockedQueue.EnqueueDeferred(pushBlockedFirst.DeferredActions[i]);
+        }
         pushBlockedWorld.NextTick();
-        StateDrivenRuleExecutionResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, Array.Empty<WorldAction>(), pushBlockedStore, pushBlockedWorld.ServerTick);
-        if (pushBlockedFirst.ActionResults.ContainsKey(pushBlockedAction.ActionId) ||
-            !pushBlockedFirst.Reasons.Contains("handoff") ||
-            pushBlockedFirst.ActivePendingCount != 1 ||
-            !pushBlockedSecond.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlockedFailed) ||
-            pushBlockedFailed.Success ||
+        StateDrivenRuleExecutionResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedStore, pushBlockedWorld.ServerTick);
+        if (!pushBlockedFirst.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlockedSource) ||
+            !pushBlockedSource.Success ||
+            !pushBlockedFirst.Reasons.Contains("bounded/deferred-output") ||
+            pushBlockedFirst.ActivePendingCount != 0 ||
             pushBlockedSecond.ActivePendingCount != 0 ||
-            !pushBlockedSecond.Reasons.Contains("push blocked") ||
+            !pushBlockedSecond.Reasons.Contains("blocked cell") ||
             pushBlockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
             !pushBlockedWorld.TryGetEntity(950, out GameEntity pushBlockedPlayer) ||
             !pushBlockedWorld.TryGetEntity(951, out GameEntity pushBlockedBox) ||
@@ -864,6 +867,7 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(pushWorld),
             1);
         pushRunner.Tick();
+        pushRunner.Tick();
         if (!pushWorld.TryGetEntity(21, out GameEntity pushedPlayer) ||
             !pushWorld.TryGetComponent(pushedPlayer, out PositionComponent pushedPosition) ||
             pushedPosition.Coord != new GridCoord(1, 0))
@@ -891,22 +895,22 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput singleInput = singleQueue.EnqueueMove(930, new GridCoord(1, 0), 13);
         WorldDelta singleFirstDelta = singleRunner.Tick();
-        if (singleRunner.ActivePendingStateCount != 1 ||
+        MoveResult singleResult = singleInput.WaitAsync().GetResult();
+        if (singleRunner.ActivePendingStateCount != 0 ||
+            !singleResult.Success ||
+            singleResult.FinalCoord != new GridCoord(0, 0) ||
             singleFirstDelta.ChangedEntities.Count != 0)
         {
-            reason = "state push did not handoff without immediate movement";
+            reason = "state push did not defer without immediate movement";
             return false;
         }
 
         WorldDelta singleSecondDelta = singleRunner.Tick();
-        MoveResult singleResult = singleInput.WaitAsync().GetResult();
         if (singleRunner.ActivePendingStateCount != 0 ||
             singleSecondDelta.ChangedEntities.Count != 1 ||
-            !singleSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 931 && snapshot.X == 2 && snapshot.Y == 0) ||
-            !singleResult.Success ||
-            singleResult.FinalCoord != new GridCoord(0, 0))
+            !singleSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 931 && snapshot.X == 2 && snapshot.Y == 0))
         {
-            reason = "state handoff did not move target entity on next tick";
+            reason = "state deferred push did not move target entity on next tick";
             return false;
         }
 
@@ -939,15 +943,22 @@ public static class AuthoritativeMoveWorldVerification
         repeatedRunner.Tick();
         MoveResult firstRepeatedResult = firstRepeatedInput.WaitAsync().GetResult();
         MoveResult secondRepeatedResult = secondRepeatedInput.WaitAsync().GetResult();
+        PositionComponent repeatedBoxPosition = default;
+        bool hasRepeatedBox = repeatedWorld.TryGetEntity(961, out GameEntity repeatedBox);
+        if (hasRepeatedBox)
+        {
+            hasRepeatedBox = repeatedWorld.TryGetComponent(repeatedBox, out repeatedBoxPosition);
+        }
+        GridCoord repeatedBoxCoord = hasRepeatedBox ? repeatedBoxPosition.Coord : default;
         if (!firstRepeatedResult.Success ||
             firstRepeatedResult.FinalCoord != new GridCoord(0, 0) ||
-            secondRepeatedResult.Success ||
-            secondRepeatedResult.Reason != "push already pending" ||
-            !repeatedWorld.TryGetEntity(961, out GameEntity repeatedBox) ||
-            !repeatedWorld.TryGetComponent(repeatedBox, out PositionComponent repeatedBoxPosition) ||
-            repeatedBoxPosition.Coord != new GridCoord(2, 0))
+            !secondRepeatedResult.Success ||
+            secondRepeatedResult.FinalCoord != new GridCoord(0, 0) ||
+            repeatedRunner.ActivePendingStateCount != 0 ||
+            !hasRepeatedBox ||
+            repeatedBoxCoord != new GridCoord(3, 0))
         {
-            reason = "repeated push moved tail more than once while first push was pending";
+            reason = $"repeated push did not resolve as independent later action first={firstRepeatedResult.Success}:{firstRepeatedResult.FinalCoord.X},{firstRepeatedResult.FinalCoord.Y}:{firstRepeatedResult.Reason} second={secondRepeatedResult.Success}:{secondRepeatedResult.FinalCoord.X},{secondRepeatedResult.FinalCoord.Y}:{secondRepeatedResult.Reason} pending={repeatedRunner.ActivePendingStateCount} box=({repeatedBoxCoord.X},{repeatedBoxCoord.Y})";
             return false;
         }
 
@@ -1376,6 +1387,7 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(world),
             1);
 
+        runner.Tick();
         WorldDelta delta = runner.Tick();
         if (!world.TryGetEntity(1341, out GameEntity first) ||
             !world.TryGetEntity(1342, out GameEntity second) ||
@@ -1430,7 +1442,10 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput input = queue.EnqueueMove(973, new GridCoord(1, 0), 31);
         runner.Tick();
-        if (runner.ActivePendingStateCount != 1 ||
+        MoveResult result = input.WaitAsync().GetResult();
+        if (!result.Success ||
+            result.FinalCoord != new GridCoord(0, 0) ||
+            runner.ActivePendingStateCount != 0 ||
             !world.TryGetEntity(973, out GameEntity player) ||
             !world.TryGetEntity(974, out GameEntity first) ||
             !world.TryGetEntity(975, out GameEntity second) ||
@@ -1441,39 +1456,12 @@ public static class AuthoritativeMoveWorldVerification
             firstPosition.Coord != new GridCoord(1, 0) ||
             secondPosition.Coord != new GridCoord(2, 0))
         {
-            reason = "port matched push did not stay isolated as handoff";
+            reason = "port matched push did not stay isolated as deferred output";
             return false;
         }
 
         runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        MoveResult result = input.WaitAsync().GetResult();
-        if (!result.Success ||
-            result.FinalCoord != new GridCoord(0, 0) ||
-            !world.TryGetComponent(player, out playerPosition) ||
+        if (!world.TryGetComponent(player, out playerPosition) ||
             !world.TryGetComponent(first, out firstPosition) ||
             !world.TryGetComponent(second, out secondPosition) ||
             playerPosition.Coord != new GridCoord(0, 0) ||
@@ -1504,7 +1492,10 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput input = queue.EnqueueMove(976, new GridCoord(1, 0), 32);
         runner.Tick();
-        if (runner.ActivePendingStateCount != 1 ||
+        MoveResult result = input.WaitAsync().GetResult();
+        if (!result.Success ||
+            result.FinalCoord != new GridCoord(0, 0) ||
+            runner.ActivePendingStateCount != 0 ||
             !world.TryGetEntity(976, out GameEntity player) ||
             !world.TryGetEntity(977, out GameEntity first) ||
             !world.TryGetEntity(978, out GameEntity second) ||
@@ -1515,23 +1506,17 @@ public static class AuthoritativeMoveWorldVerification
             firstPosition.Coord != new GridCoord(1, 0) ||
             secondPosition.Coord != new GridCoord(2, 0))
         {
-            reason = "port mismatch handoff did not keep source and port members isolated";
+            reason = "port mismatch deferred output did not keep source and port members isolated";
             return false;
         }
 
         runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        runner.Tick();
-        MoveResult result = input.WaitAsync().GetResult();
-        if (!result.Success ||
-            result.FinalCoord != new GridCoord(0, 0) ||
-            !world.TryGetComponent(player, out playerPosition) ||
+        if (!world.TryGetComponent(player, out playerPosition) ||
             !world.TryGetComponent(first, out firstPosition) ||
             !world.TryGetComponent(second, out secondPosition) ||
             playerPosition.Coord != new GridCoord(0, 0) ||
             firstPosition.Coord != new GridCoord(1, 0) ||
-            secondPosition.Coord != new GridCoord(3, 0))
+            secondPosition.Coord != new GridCoord(2, 0))
         {
             GridCoord playerCoord = world.TryGetComponent(player, out playerPosition) ? playerPosition.Coord : default;
             GridCoord firstCoord = world.TryGetComponent(first, out firstPosition) ? firstPosition.Coord : default;
@@ -1561,9 +1546,12 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput input = queue.EnqueueMove(979, new GridCoord(1, 0), 33);
         runner.Tick();
-        if (runner.ActivePendingStateCount != 1)
+        MoveResult result = input.WaitAsync().GetResult();
+        if (!result.Success ||
+            result.FinalCoord != new GridCoord(0, 0) ||
+            runner.ActivePendingStateCount != 0)
         {
-            reason = "port blocked group did not handoff source action";
+            reason = "port blocked group did not defer source action";
             return false;
         }
 
@@ -1579,11 +1567,9 @@ public static class AuthoritativeMoveWorldVerification
         }
 
         runner.Tick();
-        MoveResult result = input.WaitAsync().GetResult();
-        if (result.Success ||
-            runner.ActivePendingStateCount != 0)
+        if (runner.ActivePendingStateCount != 0)
         {
-            reason = "port blocked group did not fail owner after body blocker failed";
+            reason = "port blocked group left pending state after deferred blocker failed";
             return false;
         }
 
@@ -1636,7 +1622,7 @@ public static class AuthoritativeMoveWorldVerification
         world.FlushDelta();
         var store = new PendingRuleStateStore();
         var sourceRequest = new ActionRequest(10, "player_move", WorldActionPriority.Player, new ActionSourceContext(ActionSourceKind.Player, 1, 0, WorldTag.SourcePlayer), 1, new ActionTarget(0, null, Direction.Right), default, 1, 1, 0);
-        store.AddHandoffActionState(sourceRequest, 2, Direction.Right, 1, 2);
+        store.AddHandoffActionState(sourceRequest, 2, Direction.Right, 1, 2, "player_push");
         var system = new StateDrivenRuleExecutionSystem();
         StateDrivenRuleExecutionResult earlyResult = system.Tick(world, Array.Empty<WorldAction>(), store, 2);
         if (earlyResult.ActivePendingCount != 1 ||

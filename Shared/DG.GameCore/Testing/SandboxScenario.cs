@@ -750,9 +750,14 @@ public sealed class LocalSandboxScenarioRunner
     {
         long serverTick = world.NextTick();
         EnqueueAutoMoveActions(serverTick);
-        EnqueueMechanismPushActions(serverTick);
+        ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, actionQueue, serverTick);
         IReadOnlyList<WorldAction> actions = actionQueue.DrainReady(serverTick);
         StateDrivenRuleExecutionResult result = ruleSystem.Tick(world, actions, pendingStates, serverTick);
+        foreach (DeferredAction deferredAction in result.DeferredActions)
+        {
+            actionQueue.EnqueueDeferred(deferredAction);
+        }
+
         lastResult = ResolveLastResult(actions, result);
         world.FlushDelta();
     }
@@ -790,37 +795,6 @@ public sealed class LocalSandboxScenarioRunner
             if (serverTick - autoMove.LastMoveTick >= autoMove.IntervalTicks)
             {
                 actionQueue.EnqueueAutoMove(entity.EntityId, serverTick - 1, 1);
-            }
-        }
-    }
-
-    private void EnqueueMechanismPushActions(long serverTick)
-    {
-        var moved = new HashSet<long>();
-        IReadOnlyList<GameEntity> triggers = world.EnumerateEntities();
-        for (int i = 0; i < triggers.Count; i++)
-        {
-            GameEntity trigger = triggers[i];
-            if (!world.TryGetComponent(trigger, out PositionComponent triggerPosition) ||
-                !world.TryGetComponent(trigger, out DirectionComponent triggerDirection) ||
-                !world.HasComponent<PushOnEnterComponent>(trigger))
-            {
-                continue;
-            }
-
-            IReadOnlyList<GameEntity> targets = world.GetEntitiesAt(triggerPosition.Coord);
-            for (int targetIndex = 0; targetIndex < targets.Count; targetIndex++)
-            {
-                GameEntity target = targets[targetIndex];
-                if (target.EntityId == trigger.EntityId ||
-                    moved.Contains(target.EntityId) ||
-                    !world.TryGetComponent(target, out PositionComponent _))
-                {
-                    continue;
-                }
-
-                moved.Add(target.EntityId);
-                actionQueue.EnqueueMechanismPush(target.EntityId, triggerDirection.Direction, serverTick - 1, 1);
             }
         }
     }

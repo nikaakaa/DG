@@ -20,8 +20,9 @@ namespace DG.Map
         Ball = 1,
         Conveyor = 2,
         PortConnector = 3,
-        Drag = 4,
-        Delete = 5
+        Select = 4,
+        Drag = 5,
+        Delete = 6
     }
 
     public sealed class DGDebugPanelController : MonoBehaviour
@@ -72,6 +73,7 @@ namespace DG.Map
         public Direction BuildDirection => buildDirection;
         public string LastResult => lastResult;
         public bool Visible => visible;
+        public long SelectedEntityId => selectedEntityId;
 
         private void Awake()
         {
@@ -147,7 +149,10 @@ namespace DG.Map
             if (tool != DGDebugPanelTool.Drag)
             {
                 dragging = false;
-                selectedEntityId = 0;
+                if (tool != DGDebugPanelTool.Select)
+                {
+                    selectedEntityId = 0;
+                }
             }
 
             lastResult = "tool: " + tool;
@@ -164,6 +169,14 @@ namespace DG.Map
                 _ => Direction.Right
             };
             lastResult = "direction: " + buildDirection;
+            Rebuild();
+        }
+
+        public void SelectEntity(long entityId)
+        {
+            selectedEntityId = entityId;
+            dragging = false;
+            lastResult = "selected " + entityId;
             Rebuild();
         }
 
@@ -327,9 +340,13 @@ namespace DG.Map
             }
             if (Input.GetKeyDown(KeyCode.Alpha5))
             {
-                SelectTool(DGDebugPanelTool.Drag);
+                SelectTool(DGDebugPanelTool.Select);
             }
             if (Input.GetKeyDown(KeyCode.Alpha6))
+            {
+                SelectTool(DGDebugPanelTool.Drag);
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha7))
             {
                 SelectTool(DGDebugPanelTool.Delete);
             }
@@ -362,6 +379,18 @@ namespace DG.Map
 
         private void ExecuteCurrentTool()
         {
+            if (currentTool == DGDebugPanelTool.Select)
+            {
+                if (!TryPickEntity(hoveredCoord, out long pickedEntityId))
+                {
+                    lastResult = "no entity at cell";
+                    return;
+                }
+
+                SelectEntity(pickedEntityId);
+                return;
+            }
+
             if (networkSubmitter == null)
             {
                 networkSubmitter = FindObjectOfType<ClientMoveNetworkSubmitter>();
@@ -517,12 +546,17 @@ namespace DG.Map
         {
             if (manageActionsRoot == null)
             {
-                AddButton("5 Drag / Move", () => SelectTool(DGDebugPanelTool.Drag));
-                AddButton("6 Delete", () => SelectTool(DGDebugPanelTool.Delete));
+                AddButton("5 Select", () => SelectTool(DGDebugPanelTool.Select));
+                AddButton("6 Drag / Move", () => SelectTool(DGDebugPanelTool.Drag));
+                AddButton("7 Delete", () => SelectTool(DGDebugPanelTool.Delete));
                 AddButton("Add ImmuneMechanismPush", () => ApplyTag(WorldTag.ImmuneMechanismPush, true));
                 AddButton("Remove ImmuneMechanismPush", () => ApplyTag(WorldTag.ImmuneMechanismPush, false));
                 AddButton("Add BlockPlayerMove", () => ApplyTag(WorldTag.BlockPlayerMove, true));
                 AddButton("Remove BlockPlayerMove", () => ApplyTag(WorldTag.BlockPlayerMove, false));
+            }
+            else
+            {
+                AddButton("5 Select", () => SelectTool(DGDebugPanelTool.Select));
             }
             AddHeader("World Snapshots");
 
@@ -690,6 +724,7 @@ namespace DG.Map
                 DGDebugPanelTool.Conveyor => new Color(0.35f, 1f, 0.45f, alpha),
                 DGDebugPanelTool.PortConnector => new Color(0.5f, 0.65f, 1f, alpha),
                 DGDebugPanelTool.Delete => new Color(1f, 0.2f, 0.2f, alpha),
+                DGDebugPanelTool.Select => new Color(0.95f, 1f, 0.45f, alpha),
                 DGDebugPanelTool.Drag => new Color(0.6f, 0.8f, 1f, alpha),
                 _ => new Color(1f, 0.35f, 0.2f, alpha)
             };

@@ -27,6 +27,82 @@
         <var name="Down" value="4"/>
     </enum>
 
+    <enum name="ActionPrimitive">
+        <var name="Move" value="1"/>
+        <var name="Spawn" value="2"/>
+        <var name="Remove" value="3"/>
+        <var name="SetComponentResult" value="4"/>
+        <var name="ApplyRuntimeEffect" value="5"/>
+    </enum>
+
+    <enum name="ActionSourceKind">
+        <var name="Player" value="1"/>
+        <var name="Auto" value="2"/>
+        <var name="Mechanism" value="3"/>
+        <var name="Debug" value="4"/>
+        <var name="Runtime" value="5"/>
+        <var name="Handoff" value="6"/>
+    </enum>
+
+    <enum name="ActionPriority">
+        <var name="Debug" value="1"/>
+        <var name="Player" value="2"/>
+        <var name="Mechanism" value="3"/>
+        <var name="Auto" value="4"/>
+    </enum>
+
+    <enum name="ActionTargetRule">
+        <var name="None" value="0"/>
+        <var name="TargetCoordOneStep" value="1"/>
+        <var name="TargetCoordAny" value="2"/>
+        <var name="DirectionFromRequest" value="3"/>
+        <var name="DirectionFromComponent" value="4"/>
+    </enum>
+
+    <enum name="ActionBlockedPolicy">
+        <var name="Reject" value="1"/>
+        <var name="StartPushIfPushable" value="2"/>
+        <var name="BounceIfBouncable" value="3"/>
+    </enum>
+
+    <enum name="ActionHandoffPolicy">
+        <var name="None" value="0"/>
+        <var name="Configured" value="1"/>
+    </enum>
+
+    <enum name="ActionConflictPolicy">
+        <var name="None" value="0"/>
+        <var name="ExclusiveTargetCell" value="1"/>
+    </enum>
+
+    <enum name="ActionInterruptPolicy">
+        <var name="None" value="0"/>
+        <var name="HigherPriorityInterruptsLower" value="1"/>
+    </enum>
+
+    <enum name="ActionMergePolicy">
+        <var name="None" value="0"/>
+        <var name="SameClaim" value="1"/>
+    </enum>
+
+    <enum name="ActionSubjectPolicy">
+        <var name="HitEntity" value="1"/>
+        <var name="ConnectedBodyIfAny" value="2"/>
+    </enum>
+
+    <enum name="ActionPlanRule">
+        <var name="None" value="0"/>
+        <var name="MoveBody" value="1"/>
+        <var name="SpawnEntity" value="2"/>
+        <var name="RemoveEntity" value="3"/>
+    </enum>
+
+    <enum name="ActionCommitRule">
+        <var name="None" value="0"/>
+        <var name="SetAutoMoveTick" value="1"/>
+        <var name="SetDirectionOnBounce" value="2"/>
+    </enum>
+
     <bean name="EntityArchetype">
         <var name="config_id" type="int"/>
         <var name="archetype_id" type="int"/>
@@ -61,8 +137,33 @@
         <var name="ports" type="int"/>
     </bean>
 
+    <bean name="ActionSpec">
+        <var name="spec_id" type="string"/>
+        <var name="primitive" type="ActionPrimitive"/>
+        <var name="source" type="ActionSourceKind"/>
+        <var name="priority" type="ActionPriority"/>
+        <var name="source_tag" type="string"/>
+        <var name="ability_tag" type="string"/>
+        <var name="required_tags" type="(list#sep=,),string"/>
+        <var name="blocked_tags" type="(list#sep=,),string"/>
+        <var name="target_rule" type="ActionTargetRule"/>
+        <var name="blocked_policy" type="ActionBlockedPolicy"/>
+        <var name="handoff_policy" type="ActionHandoffPolicy"/>
+        <var name="handoff_spec_id" type="string"/>
+        <var name="handoff_subject_policy" type="ActionSubjectPolicy"/>
+        <var name="max_chain_depth" type="int"/>
+        <var name="conflict_policy" type="ActionConflictPolicy"/>
+        <var name="interrupt_policy" type="ActionInterruptPolicy"/>
+        <var name="merge_policy" type="ActionMergePolicy"/>
+        <var name="subject_policy" type="ActionSubjectPolicy"/>
+        <var name="plan_rule" type="ActionPlanRule"/>
+        <var name="commit_rules" type="(list#sep=,),ActionCommitRule"/>
+        <var name="default_cost_ticks" type="int"/>
+    </bean>
+
     <table name="TbEntityArchetype" index="config_id" value="EntityArchetype" input="gamecore/entity_archetype.xlsx"/>
     <table name="TbWorldSpawn" mode="list" value="WorldSpawn" input="gamecore/world_spawn.xlsx"/>
     <table name="TbPlayerSpawnRule" index="rule_id" value="PlayerSpawnRule" input="gamecore/player_spawn_rule.xlsx"/>
     <table name="TbPortConnectorConfig" index="config_id" value="PortConnectorConfig" input="gamecore/port_connector_config.xlsx"/>
+    <table name="TbActionSpec" index="spec_id" value="ActionSpec" input="gamecore/action_spec.xlsx"/>
 </module>

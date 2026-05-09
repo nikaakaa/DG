@@ -124,10 +124,8 @@ namespace DG.EditorTests
     { ""kind"": ""spawn"", ""alias"": ""box"", ""configId"": 1003, ""x"": 0, ""y"": 0 },
     { ""kind"": ""setTag"", ""alias"": ""box"", ""tag"": ""ImmuneMechanismPush"", ""enabled"": true },
     { ""kind"": ""tick"", ""ticks"": 1 },
+    { ""kind"": ""expectLastResult"", ""success"": false, ""reason"": ""blocked by tag"" },
     { ""kind"": ""expectPosition"", ""alias"": ""box"", ""x"": 0, ""y"": 0 }
-  ],
-  ""expectations"": [
-    { ""kind"": ""expectLastResult"", ""success"": false, ""reason"": ""blocked by tag"" }
   ]
 }";
 

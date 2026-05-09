@@ -100,7 +100,7 @@ namespace DG.EditorTests
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(6, 6, new GridCoord(0, 0))));
             world.AddRuntimeEffect(RuntimeEffectSpec.Immobile(6));
-            var action = new WorldAction(1, WorldActionPriority.Player, WorldActionKind.PlayerMove, 6, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1);
+            var action = new WorldAction(1, WorldActionPriority.Player, "player_move", 6, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1);
 
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, new[] { action }, new PendingRuleStateStore(), 1);
 

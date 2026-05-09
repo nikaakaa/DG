@@ -238,15 +238,26 @@ public sealed class RulePlanner
 {
     private readonly BodyResolver bodyResolver;
     private readonly OccupancyResolver occupancyResolver;
+    private readonly ActionSpecRegistry actionSpecs;
 
     public RulePlanner() : this(new BodyResolver(), new OccupancyResolver())
     {
     }
 
+    public RulePlanner(ActionSpecRegistry actionSpecs) : this(new BodyResolver(), new OccupancyResolver(), actionSpecs)
+    {
+    }
+
     public RulePlanner(BodyResolver bodyResolver, OccupancyResolver occupancyResolver)
+        : this(bodyResolver, occupancyResolver, ActionSpecRegistry.Default)
+    {
+    }
+
+    public RulePlanner(BodyResolver bodyResolver, OccupancyResolver occupancyResolver, ActionSpecRegistry actionSpecs)
     {
         this.bodyResolver = bodyResolver;
         this.occupancyResolver = occupancyResolver;
+        this.actionSpecs = actionSpecs;
     }
 
     public bool TryPlanMove(GameWorld world, ActionRequest request, Direction direction, GridCoord? targetCoord, long serverTick, out MovePlan plan, out PlanResult result)
@@ -254,7 +265,7 @@ public sealed class RulePlanner
         ActionSpec spec;
         try
         {
-            spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            spec = actionSpecs.Get(request.SpecId);
         }
         catch (System.ArgumentOutOfRangeException)
         {

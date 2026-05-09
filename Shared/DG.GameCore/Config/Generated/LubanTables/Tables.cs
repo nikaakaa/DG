@@ -17,6 +17,7 @@ public partial class Tables
     public gamecore.TbWorldSpawn TbWorldSpawn {get; }
     public gamecore.TbPlayerSpawnRule TbPlayerSpawnRule {get; }
     public gamecore.TbPortConnectorConfig TbPortConnectorConfig {get; }
+    public gamecore.TbActionSpec TbActionSpec {get; }
 
 
       public Tables(System.Func<string, JArray> loader)
@@ -25,6 +26,7 @@ public partial class Tables
         TbWorldSpawn = new gamecore.TbWorldSpawn(loader("gamecore_tbworldspawn"));
         TbPlayerSpawnRule = new gamecore.TbPlayerSpawnRule(loader("gamecore_tbplayerspawnrule"));
         TbPortConnectorConfig = new gamecore.TbPortConnectorConfig(loader("gamecore_tbportconnectorconfig"));
+        TbActionSpec = new gamecore.TbActionSpec(loader("gamecore_tbactionspec"));
         ResolveRef();
     }
     
@@ -34,6 +36,7 @@ public partial class Tables
         TbWorldSpawn.ResolveRef(this);
         TbPlayerSpawnRule.ResolveRef(this);
         TbPortConnectorConfig.ResolveRef(this);
+        TbActionSpec.ResolveRef(this);
     }
 }
 

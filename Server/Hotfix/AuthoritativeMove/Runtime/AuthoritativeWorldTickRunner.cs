@@ -12,18 +12,24 @@ public sealed class AuthoritativeWorldTickRunner
     private readonly AuthoritativeWorldSyncSystem SyncSystem;
     private readonly WorldActionQueue ActionQueue;
     private readonly PendingRuleStateStore PendingStates = new();
-    private readonly StateDrivenRuleExecutionSystem RuleExecutionSystem = new();
+    private readonly StateDrivenRuleExecutionSystem RuleExecutionSystem;
     private readonly Dictionary<long, AuthoritativeMoveInput> pendingMoveInputs = new();
     private readonly int tickIntervalMs;
     private FCancellationToken? cancellationToken;
     private bool running;
 
     public AuthoritativeWorldTickRunner(GameWorld world, AuthoritativeInputQueue inputQueue, AuthoritativeWorldSyncSystem syncSystem, int tickIntervalMs)
+        : this(world, inputQueue, syncSystem, tickIntervalMs, ActionSpecRegistry.Default)
+    {
+    }
+
+    public AuthoritativeWorldTickRunner(GameWorld world, AuthoritativeInputQueue inputQueue, AuthoritativeWorldSyncSystem syncSystem, int tickIntervalMs, ActionSpecRegistry actionSpecs)
     {
         World = world;
         InputQueue = inputQueue;
         SyncSystem = syncSystem;
         ActionQueue = inputQueue.ActionQueue;
+        RuleExecutionSystem = new StateDrivenRuleExecutionSystem(actionSpecs);
         this.tickIntervalMs = tickIntervalMs;
     }
 
@@ -70,9 +76,11 @@ public sealed class AuthoritativeWorldTickRunner
         }
 
         EnqueueAutoMoveActions(serverTick);
-        EnqueueMechanismPushActions(serverTick);
+        ExplicitOutputPolicies.EnqueuePushOnEnterActions(World, ActionQueue, serverTick);
         IReadOnlyList<WorldAction> actions = ActionQueue.DrainReady(serverTick);
         StateDrivenRuleExecutionResult ruleResult = RuleExecutionSystem.Tick(World, actions, PendingStates, serverTick);
+        EnqueueDeferredActions(ruleResult.DeferredActions);
+        LogPushCycleDiagnostics(ruleResult, serverTick);
         foreach (KeyValuePair<long, AuthoritativeMoveInput> pair in pendingMoveInputs.ToArray())
         {
             if (ruleResult.ActionResults.TryGetValue(pair.Key, out MoveResult result))
@@ -100,6 +108,52 @@ public sealed class AuthoritativeWorldTickRunner
     public WorldDelta Tick()
     {
         return Tick(Array.Empty<Session>());
+    }
+
+    private void LogPushCycleDiagnostics(StateDrivenRuleExecutionResult ruleResult, long serverTick)
+    {
+        if (!ruleResult.Reasons.Contains("push chain cycle"))
+        {
+            return;
+        }
+
+        PendingCycleDiagnostic diagnostic = PendingStates.LastCycleDiagnostic;
+        string cycle = diagnostic.ConflictEntityId == 0
+            ? "none"
+            : "state:" + diagnostic.StateId +
+              " conflict:" + diagnostic.ConflictEntityId +
+              " inChain:" + diagnostic.ConflictInChain +
+              " inAdding:" + diagnostic.ConflictInAdding +
+              " candidate:" + string.Join(",", diagnostic.CandidateSubjectEntityIds.OrderBy(entityId => entityId)) +
+              " chain:" + string.Join(",", diagnostic.ChainEntityIds.OrderBy(entityId => entityId));
+        string states = string.Join(" || ", PendingStates.ActionStates.Select(state =>
+            "state:" + state.StateId +
+            " status:" + state.Status +
+            " chain:" + string.Join(",", state.Chain.OrderBy(entityId => entityId)) +
+            " units:" + string.Join(";", state.Units.Select(unit =>
+                unit.ActionUnitId + ":" + unit.Status + ":" + string.Join(".", unit.SubjectEntityIds.OrderBy(entityId => entityId))))));
+        string snapshots = string.Join(" || ", World.CreateSnapshot()
+            .OrderBy(snapshot => snapshot.Y)
+            .ThenBy(snapshot => snapshot.X)
+            .ThenBy(snapshot => snapshot.EntityId)
+            .Select(snapshot =>
+                snapshot.EntityId +
+                " cfg:" + snapshot.ConfigId +
+                " pos:(" + snapshot.X + "," + snapshot.Y + ")" +
+                " dir:" + snapshot.Direction +
+                " ports:" + snapshot.PortLocalPorts +
+                " push:" + snapshot.Pushable +
+                " move:" + snapshot.CanMove +
+                " bePushed:" + snapshot.CanBePushed));
+        Log.Info("[AuthoritativeWorldTickRunner] push cycle diagnostics tick:{0} cycle:{1} states:{2} snapshots:{3}", serverTick, cycle, states, snapshots);
+    }
+
+    private void EnqueueDeferredActions(IReadOnlyList<DeferredAction> deferredActions)
+    {
+        for (int i = 0; i < deferredActions.Count; i++)
+        {
+            ActionQueue.EnqueueDeferred(deferredActions[i]);
+        }
     }
 
     private async FTask Run(Scene scene, Func<IReadOnlyList<Session>> observerProvider, FCancellationToken token)
@@ -138,34 +192,4 @@ public sealed class AuthoritativeWorldTickRunner
         }
     }
 
-    private void EnqueueMechanismPushActions(long serverTick)
-    {
-        var moved = new HashSet<long>();
-        IReadOnlyList<GameEntity> triggers = World.EnumerateEntities();
-        for (int i = 0; i < triggers.Count; i++)
-        {
-            GameEntity trigger = triggers[i];
-            if (!World.TryGetComponent(trigger, out PositionComponent triggerPosition) ||
-                !World.TryGetComponent(trigger, out DirectionComponent triggerDirection) ||
-                !World.HasComponent<PushOnEnterComponent>(trigger))
-            {
-                continue;
-            }
-
-            IReadOnlyList<GameEntity> targets = World.GetEntitiesAt(triggerPosition.Coord);
-            for (int targetIndex = 0; targetIndex < targets.Count; targetIndex++)
-            {
-                GameEntity target = targets[targetIndex];
-                if (target.EntityId == trigger.EntityId ||
-                    moved.Contains(target.EntityId) ||
-                    !World.TryGetComponent(target, out PositionComponent _))
-                {
-                    continue;
-                }
-
-                moved.Add(target.EntityId);
-                ActionQueue.EnqueueMechanismPush(target.EntityId, triggerDirection.Direction, serverTick - 1, 1);
-            }
-        }
-    }
 }

@@ -45,7 +45,7 @@ public sealed class ComponentApplicationRegistry
             [ComponentKind.Bouncable] = (world, _, entity, _, _) => world.SetComponent(entity, new BouncableComponent()),
             [ComponentKind.AutoMove] = (world, _, entity, archetype, spawn) => world.AddStaticComponentSource(ComponentSourceContribution.AutoMove(entity.EntityId, ComponentSourceKey.Static(entity.EntityId), spawn.AutoMoveIntervalTicks > 0 ? spawn.AutoMoveIntervalTicks : archetype.DefaultAutoMoveIntervalTicks)),
             [ComponentKind.PlayerControl] = (world, _, entity, _, spawn) => world.SetComponent(entity, new PlayerControlComponent(spawn.PlayerId != 0 ? spawn.PlayerId : spawn.EntityId)),
-            [ComponentKind.PushOnEnter] = (world, _, entity, _, _) => world.SetComponent(entity, new PushOnEnterComponent()),
+            [ComponentKind.PushOnEnter] = (world, _, entity, _, _) => world.SetComponent(entity, new PushOnEnterComponent("mechanism_push")),
             [ComponentKind.Pushable] = (world, _, entity, _, _) => world.AddStaticComponentSource(ComponentSourceContribution.Pushable(entity.EntityId, ComponentSourceKey.Static(entity.EntityId))),
             [ComponentKind.PortConnector] = (world, provider, entity, archetype, _) =>
             {

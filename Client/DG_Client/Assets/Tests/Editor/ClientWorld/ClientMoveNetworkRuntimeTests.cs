@@ -179,6 +179,41 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void ClientWorldDebugEditor_SelectSlotKeepsSelectedEntity()
+        {
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+
+            editor.SelectEntity(42);
+            editor.SelectSlot(DebugWorldEditorSlot.Select);
+
+            Assert.AreEqual(DebugWorldEditorSlot.Select, editor.CurrentSlot);
+            Assert.AreEqual(42, editor.SelectedEntityId);
+
+            editor.SelectSlot(DebugWorldEditorSlot.Delete);
+
+            Assert.AreEqual(0, editor.SelectedEntityId);
+        }
+
+        [Test]
+        public void DGDebugPanelController_SelectToolKeepsSelectedEntity()
+        {
+            GameObject gameObject = new GameObject("DebugPanel");
+            var panel = gameObject.AddComponent<DGDebugPanelController>();
+
+            panel.SelectEntity(42);
+            panel.SelectTool(DGDebugPanelTool.Select);
+
+            Assert.AreEqual(DGDebugPanelTool.Select, panel.CurrentTool);
+            Assert.AreEqual(42, panel.SelectedEntityId);
+
+            panel.SelectTool(DGDebugPanelTool.Delete);
+
+            Assert.AreEqual(DGDebugPanelTool.Delete, panel.CurrentTool);
+            Assert.AreEqual(0, panel.SelectedEntityId);
+        }
+
+        [Test]
         public void ClientWorldDebugEditor_ConfiguresRuntimeEffectControls()
         {
             GameObject gameObject = new GameObject("DebugEditor");

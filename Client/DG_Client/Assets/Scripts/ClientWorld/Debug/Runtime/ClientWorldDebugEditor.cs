@@ -10,8 +10,9 @@ namespace DG.Map
         Ball = 1,
         Conveyor = 2,
         PortConnector = 3,
-        Drag = 4,
-        Delete = 5
+        Select = 4,
+        Drag = 5,
+        Delete = 6
     }
 
     public sealed class ClientWorldDebugEditor : MonoBehaviour
@@ -80,7 +81,7 @@ namespace DG.Map
         {
             const int slotWidth = 108;
             const int slotHeight = 42;
-            int totalWidth = slotWidth * 6;
+            int totalWidth = slotWidth * 7;
             int startX = (Screen.width - totalWidth) / 2;
             int y = Screen.height - slotHeight - 18;
 
@@ -88,8 +89,9 @@ namespace DG.Map
             DrawSlot(startX + slotWidth, y, slotWidth, slotHeight, DebugWorldEditorSlot.Ball, "2 Ball");
             DrawSlot(startX + slotWidth * 2, y, slotWidth, slotHeight, DebugWorldEditorSlot.Conveyor, "3 Belt");
             DrawSlot(startX + slotWidth * 3, y, slotWidth, slotHeight, DebugWorldEditorSlot.PortConnector, "4 Port");
-            DrawSlot(startX + slotWidth * 4, y, slotWidth, slotHeight, DebugWorldEditorSlot.Drag, "5 Drag");
-            DrawSlot(startX + slotWidth * 5, y, slotWidth, slotHeight, DebugWorldEditorSlot.Delete, "6 Delete");
+            DrawSlot(startX + slotWidth * 4, y, slotWidth, slotHeight, DebugWorldEditorSlot.Select, "5 Select");
+            DrawSlot(startX + slotWidth * 5, y, slotWidth, slotHeight, DebugWorldEditorSlot.Drag, "6 Drag");
+            DrawSlot(startX + slotWidth * 6, y, slotWidth, slotHeight, DebugWorldEditorSlot.Delete, "7 Delete");
 
             GUI.Label(new Rect(18, Screen.height - 74, 560, 24), $"Coord: {(hasHover ? hoveredCoord.ToString() : "-")}  Direction: {buildDirection}  Selected: {selectedEntityId}");
             GUI.Label(new Rect(18, Screen.height - 48, 820, 24), lastResult);
@@ -102,7 +104,10 @@ namespace DG.Map
             if (slot != DebugWorldEditorSlot.Drag)
             {
                 dragging = false;
-                selectedEntityId = 0;
+                if (slot != DebugWorldEditorSlot.Select)
+                {
+                    selectedEntityId = 0;
+                }
             }
         }
 
@@ -172,9 +177,13 @@ namespace DG.Map
             }
             if (Input.GetKeyDown(KeyCode.Alpha5))
             {
-                SelectSlot(DebugWorldEditorSlot.Drag);
+                SelectSlot(DebugWorldEditorSlot.Select);
             }
             if (Input.GetKeyDown(KeyCode.Alpha6))
+            {
+                SelectSlot(DebugWorldEditorSlot.Drag);
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha7))
             {
                 SelectSlot(DebugWorldEditorSlot.Delete);
             }
@@ -207,6 +216,19 @@ namespace DG.Map
 
         private void ExecuteCurrentTool()
         {
+            if (currentSlot == DebugWorldEditorSlot.Select)
+            {
+                if (!TryPickEntity(hoveredCoord, out long pickedEntityId))
+                {
+                    lastResult = "no entity at cell";
+                    return;
+                }
+
+                SelectEntity(pickedEntityId);
+                lastResult = $"selected {pickedEntityId}";
+                return;
+            }
+
             if (networkSubmitter == null)
             {
                 lastResult = "debug submitter missing";
@@ -503,6 +525,7 @@ namespace DG.Map
                 DebugWorldEditorSlot.Conveyor => new Color(0.35f, 1f, 0.45f, alpha),
                 DebugWorldEditorSlot.PortConnector => new Color(0.5f, 0.65f, 1f, alpha),
                 DebugWorldEditorSlot.Delete => new Color(1f, 0.2f, 0.2f, alpha),
+                DebugWorldEditorSlot.Select => new Color(0.95f, 1f, 0.45f, alpha),
                 DebugWorldEditorSlot.Drag => new Color(0.6f, 0.8f, 1f, alpha),
                 _ => new Color(1f, 0.35f, 0.2f, alpha)
             };
