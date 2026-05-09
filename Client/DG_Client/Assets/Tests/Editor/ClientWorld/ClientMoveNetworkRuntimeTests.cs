@@ -52,7 +52,8 @@ namespace DG.EditorTests
                     Direction = (int)Direction.Right,
                     HasCollider = true,
                     Bouncable = true,
-                    AutoMove = true
+                    AutoMove = true,
+                    AutoMoveIntervalTicks = 1
                 }
             };
 
@@ -98,7 +99,8 @@ namespace DG.EditorTests
                     Y = 0,
                     Direction = (int)Direction.None,
                     HasCollider = true,
-                    Blocking = true
+                    Blocking = true,
+                    Pushable = true
                 }
             };
 
@@ -134,7 +136,8 @@ namespace DG.EditorTests
                     Y = 0,
                     Direction = (int)Direction.None,
                     HasCollider = true,
-                    Blocking = true
+                    Blocking = true,
+                    Pushable = true
                 }
             };
 
@@ -173,6 +176,27 @@ namespace DG.EditorTests
 
             Assert.AreEqual(DebugWorldEditorSlot.PortConnector, editor.CurrentSlot);
             Assert.AreEqual(Direction.Down, editor.BuildDirection);
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_ConfiguresRuntimeEffectControls()
+        {
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+
+            editor.SelectEntity(42);
+            editor.SetRuntimeAutoMoveIntervalTicks(0);
+            editor.SetRuntimeExpireAfterTicks(-5);
+
+            Assert.AreEqual(42, editor.SelectedEntityId);
+            Assert.AreEqual(1, editor.RuntimeAutoMoveIntervalTicks);
+            Assert.AreEqual(0, editor.RuntimeExpireAfterTicks);
+
+            editor.SetRuntimeAutoMoveIntervalTicks(3);
+            editor.SetRuntimeExpireAfterTicks(5);
+
+            Assert.AreEqual(3, editor.RuntimeAutoMoveIntervalTicks);
+            Assert.AreEqual(5, editor.RuntimeExpireAfterTicks);
         }
 
         private static ClientWorldRunner CreateRunner()

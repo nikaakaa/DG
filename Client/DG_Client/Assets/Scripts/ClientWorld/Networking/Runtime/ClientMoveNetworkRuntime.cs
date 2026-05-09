@@ -63,6 +63,11 @@ namespace DG.Map
 
         public static bool ApplyWorldEntity(long serverTick, long entityId, int configId, int archetypeId, int entityTarget, int x, int y, int direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, bool playerControlled)
         {
+            return ApplyWorldEntity(serverTick, entityId, configId, archetypeId, entityTarget, x, y, direction, hasCollider, blocking, bouncable, autoMove, autoMove ? 1 : 0, playerControlled, false, 0, false, true, true);
+        }
+
+        public static bool ApplyWorldEntity(long serverTick, long entityId, int configId, int archetypeId, int entityTarget, int x, int y, int direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, int autoMoveIntervalTicks, bool playerControlled, bool pushable, int portLocalPorts, bool hasMovementPermission, bool canMove, bool canBePushed)
+        {
             if (Runner == null || Runner.Context == null)
             {
                 Debug.LogWarning($"[ClientWorldState] current ClientMapWorld unavailable entity:{entityId} config:{configId} serverTick:{serverTick}");
@@ -81,7 +86,13 @@ namespace DG.Map
                 blocking,
                 bouncable,
                 autoMove,
+                autoMoveIntervalTicks,
                 playerControlled,
+                pushable,
+                (DirectionMask)portLocalPorts,
+                hasMovementPermission,
+                canMove,
+                canBePushed,
                 serverTick);
 
             if (!Runner.ApplyServerSnapshot(snapshot))
@@ -118,7 +129,13 @@ namespace DG.Map
                     entity.Blocking,
                     entity.Bouncable,
                     entity.AutoMove,
-                    entity.PlayerControlled);
+                    entity.AutoMoveIntervalTicks,
+                    entity.PlayerControlled,
+                    entity.Pushable,
+                    entity.PortLocalPorts,
+                    entity.HasMovementPermission,
+                    entity.CanMove,
+                    entity.CanBePushed);
             }
 
             return allApplied;

@@ -13,6 +13,7 @@ public sealed class AuthoritativeWorldTickRunner
     private readonly WorldActionQueue ActionQueue;
     private readonly PendingRuleStateStore PendingStates = new();
     private readonly StateDrivenRuleExecutionSystem RuleExecutionSystem = new();
+    private readonly Dictionary<long, AuthoritativeMoveInput> pendingMoveInputs = new();
     private readonly int tickIntervalMs;
     private FCancellationToken? cancellationToken;
     private bool running;
@@ -46,6 +47,12 @@ public sealed class AuthoritativeWorldTickRunner
         cancellationToken = null;
         running = false;
         InputQueue.FailPending("tick runner stopped");
+        foreach (AuthoritativeMoveInput input in pendingMoveInputs.Values)
+        {
+            input.Complete(new MoveResult(false, input.EntityId, default, Direction.None, MoveErrorCode.UnknownEntity, "tick runner stopped", false, default, input.ClientTick));
+        }
+
+        pendingMoveInputs.Clear();
     }
 
     public int ActivePendingStateCount => PendingStates.ActiveCount;
@@ -53,28 +60,25 @@ public sealed class AuthoritativeWorldTickRunner
     public WorldDelta Tick(IReadOnlyList<Session> observers)
     {
         long serverTick = World.NextTick();
+        World.ExpireRuntimeEffects(serverTick);
         IReadOnlyList<AuthoritativeMoveInput> inputs = InputQueue.DrainMoves();
-        var inputActions = new Dictionary<long, AuthoritativeMoveInput>();
         for (int i = 0; i < inputs.Count; i++)
         {
             AuthoritativeMoveInput input = inputs[i];
             WorldAction action = ActionQueue.EnqueuePlayerMove(input.EntityId, input.TargetCoord, input.ClientTick);
-            inputActions[action.ActionId] = input;
+            pendingMoveInputs[action.ActionId] = input;
         }
 
         EnqueueAutoMoveActions(serverTick);
         EnqueueMechanismPushActions(serverTick);
         IReadOnlyList<WorldAction> actions = ActionQueue.DrainReady(serverTick);
         StateDrivenRuleExecutionResult ruleResult = RuleExecutionSystem.Tick(World, actions, PendingStates, serverTick);
-        foreach (KeyValuePair<long, AuthoritativeMoveInput> pair in inputActions)
+        foreach (KeyValuePair<long, AuthoritativeMoveInput> pair in pendingMoveInputs.ToArray())
         {
             if (ruleResult.ActionResults.TryGetValue(pair.Key, out MoveResult result))
             {
                 pair.Value.Complete(result);
-            }
-            else
-            {
-                pair.Value.Complete(new MoveResult(false, pair.Value.EntityId, default, Direction.None, MoveErrorCode.UnknownEntity, "action not resolved", false, default, pair.Value.ClientTick));
+                pendingMoveInputs.Remove(pair.Key);
             }
         }
         IReadOnlyList<AuthoritativeDebugActionInput> debugInputs = InputQueue.DrainDebugInputs(actions.Select(action => action.ActionId).ToArray());

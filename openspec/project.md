@@ -24,6 +24,8 @@ DG 是一个 Unity 客户端 + Fantasy 服务端 + Shared GameCore 的服务端�
 - `ComponentKind -> ComponentApplicationRegistry -> GameWorld.SetComponent` 是实体出生时应用组件的主路径。
 - component-system 是配置层和实体能力层，不是完整技能系统。
 - 会改变坐标、占用、tag、component state 或 world state 的运行时行为必须进入 action / intent / tick / commit 边界。
+- 行为必须数据驱动：`ActionSpecId` 只用于查找配置，规则层不得根据 action 名字硬编码行为；primitive、source、target rule、blocked policy、conflict policy、subject policy、commit rule 等行为策略必须来自 `ActionSpec` 字段。
+- `WorldTag` 只表达来源、能力、状态、免疫、阻挡等规则输入或过滤条件，不得替代 `ActionSpec` 策略字段；不得通过 tag 组合在规则层反向推断一套隐藏行为。
 - `ClientMapWorld` 只做 Shared `GameWorld` 的 Unity 镜像适配。
 - 服务端权威 `GameWorld` 是多人同步和规则裁决的真相源。
 
@@ -42,7 +44,7 @@ DG 是一个 Unity 客户端 + Fantasy 服务端 + Shared GameCore 的服务端�
 - 一个 world coord 等于一个格子，也等于 Unity 中 1 unit。
 - 一个 chunk 是 32x32 cell。
 - `WorldTag` 用于表达来源、能力、状态、免疫、阻挡语义。
-- `BehaviorIntent -> IntentArbiter -> RulePlanner -> MovePlan -> ConflictResolver -> Commit` 是当前移动/推动类行为的目标运行时管线。
+- `ActionSpec -> ActionRequest -> ActionArbiter -> RulePlanner -> MovePlan -> ConflictResolver -> Commit` 是当前移动/推动类行为的目标运行时管线。
 - 沙盒测试台用于验证 Luban 实体和临时组件组合，不生产正式 entity archetype，也不替代技能系统。
 
 ## Important Constraints
@@ -50,6 +52,7 @@ DG 是一个 Unity 客户端 + Fantasy 服务端 + Shared GameCore 的服务端�
 - 不要让 Unity UI 或 `ClientMapWorld` 直接裁决服务端权威规则。
 - 不要把沙盒 JSON 当成第二套正式配置源。
 - 不要把 component-system 扩成完整技能系统；技能/效果应作为单独 runtime pipeline 规划。
+- 不要用 action 名字、entity 名字或 tag 组合硬编码普通行为分支；新增普通行为应优先扩展 `ActionSpec` 数据字段或显式新增底层 policy。
 - OpenSpec proposal 阶段不得写实现代码。
 
 ## External Dependencies

@@ -35,6 +35,7 @@ public sealed class BehaviorBody
     public long BodyId { get; }
     public BehaviorBodyKind Kind { get; }
     public IReadOnlyList<GameEntity> Entities { get; }
+    public long RootEntityId => Entities.Count == 0 ? 0 : Entities[0].EntityId;
 }
 
 public enum BehaviorPlanKind
@@ -49,16 +50,24 @@ public enum BehaviorPlanKind
 
 public sealed class MovePlan
 {
-    public MovePlan(BehaviorIntent intent, long bodyId, BehaviorBodyKind bodyKind, Direction direction, IReadOnlyList<BodyMember> members)
+    public MovePlan(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, long serverTick, long bodyId, BehaviorBodyKind bodyKind, Direction direction, IReadOnlyList<BodyMember> members)
     {
-        Intent = intent;
+        Priority = priority;
+        SourceActionId = sourceActionId;
+        SourceStateId = sourceStateId;
+        EntityId = entityId;
+        ServerTick = serverTick;
         BodyId = bodyId;
         BodyKind = bodyKind;
         Direction = direction;
         Members = members;
     }
 
-    public BehaviorIntent Intent { get; }
+    public WorldActionPriority Priority { get; }
+    public long SourceActionId { get; }
+    public long SourceStateId { get; }
+    public long EntityId { get; }
+    public long ServerTick { get; }
     public long BodyId { get; }
     public BehaviorBodyKind BodyKind { get; }
     public Direction Direction { get; }
@@ -130,9 +139,9 @@ public sealed class BodyResolver
 
 public sealed class OccupancyResolver
 {
-    public bool TryCreateMovePlan(GameWorld world, BehaviorIntent intent, BehaviorBody body, out MovePlan plan, out PlanResult result)
+    public bool TryCreateMovePlan(GameWorld world, ActionRequest request, Direction direction, GridCoord? targetCoord, BehaviorBody body, long serverTick, out MovePlan plan, out PlanResult result)
     {
-        if (intent.Direction == Direction.None && !intent.TargetCoord.HasValue)
+        if (direction == Direction.None && !targetCoord.HasValue)
         {
             plan = null!;
             result = PlanResult.Failed(PlanFailureReason.InvalidDirection, "invalid direction");
@@ -153,10 +162,10 @@ public sealed class OccupancyResolver
                 return false;
             }
 
-            if (entity.EntityId == intent.EntityId)
+            if (entity.EntityId == request.EntityId)
             {
                 rootFrom = position.Coord;
-                rootTo = intent.TargetCoord;
+                rootTo = targetCoord;
             }
 
             members.Add(new BodyMember(entity.EntityId, position.Coord, position.Coord));
@@ -164,7 +173,7 @@ public sealed class OccupancyResolver
 
         int deltaX = 0;
         int deltaY = 0;
-        if (intent.TargetCoord.HasValue)
+        if (targetCoord.HasValue)
         {
             if (!rootFrom.HasValue)
             {
@@ -183,7 +192,7 @@ public sealed class OccupancyResolver
         for (int i = 0; i < members.Count; i++)
         {
             BodyMember member = members[i];
-            GridCoord to = intent.TargetCoord.HasValue ? new GridCoord(member.From.X + deltaX, member.From.Y + deltaY) : member.From.Add(intent.Direction);
+            GridCoord to = targetCoord.HasValue ? new GridCoord(member.From.X + deltaX, member.From.Y + deltaY) : member.From.Add(direction);
             resolvedMembers.Add(new BodyMember(member.EntityId, member.From, to));
         }
 
@@ -202,7 +211,7 @@ public sealed class OccupancyResolver
             return false;
         }
 
-        plan = new MovePlan(intent, body.BodyId, body.Kind, intent.Direction, resolvedMembers);
+        plan = new MovePlan(request.Priority, request.ActionId, request.Source.SourceStateId, request.EntityId, serverTick, body.BodyId, body.Kind, direction, resolvedMembers);
         result = PlanResult.AcceptedResult;
         return true;
     }
@@ -240,23 +249,76 @@ public sealed class RulePlanner
         this.occupancyResolver = occupancyResolver;
     }
 
-    public bool TryPlanMove(GameWorld world, BehaviorIntent intent, out MovePlan plan, out PlanResult result)
+    public bool TryPlanMove(GameWorld world, ActionRequest request, Direction direction, GridCoord? targetCoord, long serverTick, out MovePlan plan, out PlanResult result)
     {
-        if (!world.TryGetEntity(intent.EntityId, out GameEntity entity))
+        ActionSpec spec;
+        try
+        {
+            spec = ActionSpecRegistry.Default.Get(request.SpecId);
+        }
+        catch (System.ArgumentOutOfRangeException)
+        {
+            plan = null!;
+            result = PlanResult.Failed(PlanFailureReason.UnknownEntity, "unknown action spec");
+            return false;
+        }
+
+        if (!world.TryGetEntity(request.EntityId, out GameEntity entity))
         {
             plan = null!;
             result = PlanResult.Failed(PlanFailureReason.UnknownEntity, "entity not found");
             return false;
         }
 
-        if (!bodyResolver.TryResolve(world, entity, out BehaviorBody body, out string reason))
+        BehaviorBody body;
+        if (spec.AllowsConnectedBodySubject)
+        {
+            if (!bodyResolver.TryResolve(world, entity, out body, out string reason))
+            {
+                plan = null!;
+                result = PlanResult.Failed(PlanFailureReason.UnknownEntity, reason);
+                return false;
+            }
+        }
+        else
+        {
+            body = new BehaviorBody(entity.EntityId, BehaviorBodyKind.SingleEntity, new[] { entity });
+        }
+
+        return occupancyResolver.TryCreateMovePlan(world, request, direction, targetCoord, body, serverTick, out plan, out result);
+    }
+
+    public bool TryPlanMove(GameWorld world, AcceptedAction action, out MovePlan plan, out PlanResult result)
+    {
+        if (action.Direction == Direction.None && !action.TargetCoord.HasValue)
         {
             plan = null!;
-            result = PlanResult.Failed(PlanFailureReason.UnknownEntity, reason);
+            result = PlanResult.Failed(PlanFailureReason.InvalidDirection, "invalid direction");
             return false;
         }
 
-        return occupancyResolver.TryCreateMovePlan(world, intent, body, out plan, out result);
+        var members = new List<BodyMember>();
+        for (int i = 0; i < action.Claims.Count; i++)
+        {
+            ActionClaim claim = action.Claims[i];
+            if (claim.Kind != ActionClaimKind.BodyMove)
+            {
+                continue;
+            }
+
+            members.Add(new BodyMember(claim.EntityId, claim.FromCoord, claim.ToCoord));
+        }
+
+        if (members.Count == 0)
+        {
+            plan = null!;
+            result = PlanResult.Failed(PlanFailureReason.InvalidDirection, "missing move claims");
+            return false;
+        }
+
+        plan = new MovePlan(action.Request.Priority, action.Request.ActionId, action.Request.Source.SourceStateId, action.Request.EntityId, action.ServerTick, action.Body.BodyId, action.Body.Kind, action.Direction, members);
+        result = PlanResult.AcceptedResult;
+        return true;
     }
 }
 }

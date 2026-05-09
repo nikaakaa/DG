@@ -738,9 +738,11 @@ public static class AuthoritativeMoveWorldVerification
         StateDrivenRuleExecutionResult pushBlockedFirst = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedStore, pushBlockedWorld.ServerTick);
         pushBlockedWorld.NextTick();
         StateDrivenRuleExecutionResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, Array.Empty<WorldAction>(), pushBlockedStore, pushBlockedWorld.ServerTick);
-        if (!pushBlockedFirst.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlocked) ||
-            !pushBlocked.Success ||
+        if (pushBlockedFirst.ActionResults.ContainsKey(pushBlockedAction.ActionId) ||
+            !pushBlockedFirst.Reasons.Contains("handoff") ||
             pushBlockedFirst.ActivePendingCount != 1 ||
+            !pushBlockedSecond.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlockedFailed) ||
+            pushBlockedFailed.Success ||
             pushBlockedSecond.ActivePendingCount != 0 ||
             !pushBlockedSecond.Reasons.Contains("push blocked") ||
             pushBlockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
@@ -889,22 +891,33 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput singleInput = singleQueue.EnqueueMove(930, new GridCoord(1, 0), 13);
         WorldDelta singleFirstDelta = singleRunner.Tick();
-        MoveResult singleFirstResult = singleInput.WaitAsync().GetResult();
-        if (!singleFirstResult.Success ||
-            singleFirstResult.FinalCoord != new GridCoord(0, 0) ||
-            singleRunner.ActivePendingStateCount != 1 ||
+        if (singleRunner.ActivePendingStateCount != 1 ||
             singleFirstDelta.ChangedEntities.Count != 0)
         {
-            reason = "state push did not create pending state without immediate movement";
+            reason = "state push did not handoff without immediate movement";
             return false;
         }
 
         WorldDelta singleSecondDelta = singleRunner.Tick();
+        MoveResult singleResult = singleInput.WaitAsync().GetResult();
         if (singleRunner.ActivePendingStateCount != 0 ||
             singleSecondDelta.ChangedEntities.Count != 1 ||
-            !singleSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 931 && snapshot.X == 2 && snapshot.Y == 0))
+            !singleSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 931 && snapshot.X == 2 && snapshot.Y == 0) ||
+            !singleResult.Success ||
+            singleResult.FinalCoord != new GridCoord(0, 0))
         {
-            reason = "state push did not move tail entity on next tick";
+            reason = "state handoff did not move target entity on next tick";
+            return false;
+        }
+
+        WorldDelta singleThirdDelta = singleRunner.Tick();
+        if (!singleWorld.TryGetEntity(930, out GameEntity singlePlayer) ||
+            !singleWorld.TryGetComponent(singlePlayer, out PositionComponent singlePlayerPosition) ||
+            singlePlayerPosition.Coord != new GridCoord(0, 0) ||
+            singleRunner.ActivePendingStateCount != 0 ||
+            singleThirdDelta.ChangedEntities.Count != 0)
+        {
+            reason = "state handoff moved source after target moved";
             return false;
         }
 
@@ -923,10 +936,11 @@ public static class AuthoritativeMoveWorldVerification
         repeatedRunner.Tick();
         AuthoritativeMoveInput secondRepeatedInput = repeatedQueue.EnqueueMove(960, new GridCoord(1, 0), 22);
         repeatedRunner.Tick();
+        repeatedRunner.Tick();
         MoveResult firstRepeatedResult = firstRepeatedInput.WaitAsync().GetResult();
         MoveResult secondRepeatedResult = secondRepeatedInput.WaitAsync().GetResult();
-        repeatedRunner.Tick();
         if (!firstRepeatedResult.Success ||
+            firstRepeatedResult.FinalCoord != new GridCoord(0, 0) ||
             secondRepeatedResult.Success ||
             secondRepeatedResult.Reason != "push already pending" ||
             !repeatedWorld.TryGetEntity(961, out GameEntity repeatedBox) ||
@@ -934,16 +948,6 @@ public static class AuthoritativeMoveWorldVerification
             repeatedBoxPosition.Coord != new GridCoord(2, 0))
         {
             reason = "repeated push moved tail more than once while first push was pending";
-            return false;
-        }
-
-        WorldDelta singleThirdDelta = singleRunner.Tick();
-        if (singleThirdDelta.ChangedEntities.Count != 0 ||
-            !singleWorld.TryGetEntity(930, out GameEntity singlePlayer) ||
-            !singleWorld.TryGetComponent(singlePlayer, out PositionComponent singlePlayerPosition) ||
-            singlePlayerPosition.Coord != new GridCoord(0, 0))
-        {
-            reason = "state push moved conductor player";
             return false;
         }
 
@@ -959,45 +963,27 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(chainWorld),
             1);
 
-        chainQueue.EnqueueMove(940, new GridCoord(1, 0), 14);
+        AuthoritativeMoveInput chainInput = chainQueue.EnqueueMove(940, new GridCoord(1, 0), 14);
         chainRunner.Tick();
         chainRunner.Tick();
+        chainRunner.Tick();
+        chainRunner.Tick();
+        chainRunner.Tick();
+        MoveResult chainResult = chainInput.WaitAsync().GetResult();
         if (!chainWorld.TryGetEntity(941, out GameEntity chainBoxA) ||
             !chainWorld.TryGetEntity(942, out GameEntity chainBoxB) ||
+            !chainWorld.TryGetEntity(940, out GameEntity chainPlayer) ||
             !chainWorld.TryGetComponent(chainBoxA, out PositionComponent chainBoxAPosition) ||
             !chainWorld.TryGetComponent(chainBoxB, out PositionComponent chainBoxBPosition) ||
-            chainBoxAPosition.Coord != new GridCoord(1, 0) ||
-            chainBoxBPosition.Coord != new GridCoord(2, 0))
-        {
-            reason = "state chain push moved entities before propagation reached free cell";
-            return false;
-        }
-
-        chainWorld.MoveEntity(chainBoxB, new GridCoord(5, 0));
-        chainWorld.FlushDelta();
-        chainRunner.Tick();
-        if (!chainWorld.TryGetComponent(chainBoxA, out chainBoxAPosition) ||
-            !chainWorld.TryGetComponent(chainBoxB, out chainBoxBPosition) ||
-            chainBoxAPosition.Coord != new GridCoord(1, 0))
-        {
-            reason = "state chain push moved previous entity too early after debug move";
-            return false;
-        }
-
-        if (chainBoxBPosition.Coord != new GridCoord(6, 0))
-        {
-            reason = "state chain push did not use latest committed state after debug move";
-            return false;
-        }
-
-        chainRunner.Tick();
-        if (!chainWorld.TryGetComponent(chainBoxA, out chainBoxAPosition) ||
-            !chainWorld.TryGetEntity(940, out GameEntity chainPlayer) ||
             !chainWorld.TryGetComponent(chainPlayer, out PositionComponent chainPlayerPosition) ||
+            !chainResult.Success ||
+            chainResult.FinalCoord != new GridCoord(0, 0) ||
+            chainRunner.ActivePendingStateCount != 0 ||
+            chainPlayerPosition.Coord != new GridCoord(0, 0) ||
             chainBoxAPosition.Coord != new GridCoord(1, 0) ||
-            chainPlayerPosition.Coord != new GridCoord(0, 0))
+            chainBoxBPosition.Coord != new GridCoord(3, 0))
         {
-            reason = "state chain push moved conductor entity after tail moved";
+            reason = "state chain push did not leave sources in place";
             return false;
         }
 
@@ -1051,7 +1037,7 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        if (!VerifyPortMismatchBlocksPropagation(out reason))
+        if (!VerifyPortMismatchSingleSubjectPropagation(out reason))
         {
             return false;
         }
@@ -1082,6 +1068,16 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyConnectedBodyActionSubject(out reason))
+        {
+            return false;
+        }
+
+        if (!VerifyPlayerMoveConnectedBodyPolicy(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyBehaviorSameTickConflict(out reason))
         {
             return false;
@@ -1092,18 +1088,94 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        if (!VerifyPlayerPushInterruptsMechanismConflict(out reason))
-        {
-            return false;
-        }
-
-        if (!VerifyIntentTagsBlockMoveRules(out reason))
+        if (!VerifyActionTagsBlockMoveRules(out reason))
         {
             return false;
         }
 
         if (!VerifyConveyorPushesPortGroupThroughPlanner(out reason))
         {
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyConnectedBodyActionSubject(out string reason)
+    {
+        var world = new GameWorld();
+        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1325, new GridCoord(0, 0), Direction.Right));
+        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1326, new GridCoord(1, 0), Direction.Right));
+        world.FlushDelta();
+        world.NextTick();
+        var queue = new WorldActionQueue();
+        WorldAction action = queue.EnqueueConfiguredMove("connected_body_move", 1325, Direction.Right, world.ServerTick - 1, 1);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+        WorldDelta delta = world.FlushDelta();
+        if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
+            !moveResult.Success ||
+            delta.ChangedEntities.Count != 2 ||
+            !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1325 && snapshot.X == 1 && snapshot.Y == 0) ||
+            !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1326 && snapshot.X == 2 && snapshot.Y == 0))
+        {
+            reason = "connected body action subject did not move all members";
+            return false;
+        }
+
+        var blockedWorld = new GameWorld();
+        blockedWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1327, new GridCoord(0, 0), Direction.Right));
+        blockedWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1328, new GridCoord(1, 0), Direction.Right));
+        blockedWorld.AddEntity(DefaultWorldConfig.BlockerSpawn(1329, new GridCoord(2, 0)));
+        blockedWorld.FlushDelta();
+        blockedWorld.NextTick();
+        var blockedQueue = new WorldActionQueue();
+        WorldAction blockedAction = blockedQueue.EnqueueConfiguredMove("connected_body_move", 1327, Direction.Right, blockedWorld.ServerTick - 1, 1);
+        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), new PendingRuleStateStore(), blockedWorld.ServerTick);
+        if (!blockedResult.ActionResults.TryGetValue(blockedAction.ActionId, out MoveResult blockedMoveResult) ||
+            blockedMoveResult.Success ||
+            blockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
+            !blockedWorld.TryGetEntity(1327, out GameEntity blockedFirst) ||
+            !blockedWorld.TryGetEntity(1328, out GameEntity blockedSecond) ||
+            !blockedWorld.TryGetComponent(blockedFirst, out PositionComponent blockedFirstPosition) ||
+            !blockedWorld.TryGetComponent(blockedSecond, out PositionComponent blockedSecondPosition) ||
+            blockedFirstPosition.Coord != new GridCoord(0, 0) ||
+            blockedSecondPosition.Coord != new GridCoord(1, 0))
+        {
+            reason = "blocked connected body action subject did not reject all members";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyPlayerMoveConnectedBodyPolicy(out string reason)
+    {
+        var world = new GameWorld();
+        world.AddEntity(DefaultWorldConfig.PlayerSpawn(1332, 1332, new GridCoord(0, 0)));
+        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1333, new GridCoord(1, 0), Direction.Right));
+        if (world.TryGetEntity(1332, out GameEntity player))
+        {
+            world.SetComponent(player, new PortConnectorComponent(DirectionMask.Right));
+        }
+        world.FlushDelta();
+        world.NextTick();
+        var queue = new WorldActionQueue();
+        var pending = new PendingRuleStateStore();
+        WorldAction action = queue.EnqueuePlayerMove(1332, new GridCoord(1, 0), 1);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+        if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
+            !moveResult.Success ||
+            pending.ActiveCount != 0 ||
+            !world.TryGetEntity(1332, out GameEntity first) ||
+            !world.TryGetEntity(1333, out GameEntity second) ||
+            !world.TryGetComponent(first, out PositionComponent firstPosition) ||
+            !world.TryGetComponent(second, out PositionComponent secondPosition) ||
+            firstPosition.Coord != new GridCoord(1, 0) ||
+            secondPosition.Coord != new GridCoord(2, 0))
+        {
+            reason = "player move connected body policy did not move linked body";
             return false;
         }
 
@@ -1144,8 +1216,7 @@ public static class AuthoritativeMoveWorldVerification
         world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1311, new GridCoord(1, 0), Direction.Right));
         var planner = new RulePlanner();
         var resolver = new ConflictResolver();
-        var intent = new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 10, 0, 1310, Direction.Right, 1);
-        if (!planner.TryPlanMove(world, intent, out MovePlan plan, out PlanResult planResult) ||
+        if (!planner.TryPlanMove(world, MoveRequest(10, "mechanism_push", WorldActionPriority.Mechanism, 1310, Direction.Right), Direction.Right, null, 1, out MovePlan plan, out PlanResult planResult) ||
             !planResult.Accepted ||
             plan.Members.Count != 2)
         {
@@ -1179,8 +1250,7 @@ public static class AuthoritativeMoveWorldVerification
         world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1321, new GridCoord(1, 0), Direction.Right));
         world.AddEntity(DefaultWorldConfig.BlockerSpawn(1322, new GridCoord(2, 0)));
         var planner = new RulePlanner();
-        var intent = new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 11, 0, 1320, Direction.Right, 1);
-        if (planner.TryPlanMove(world, intent, out _, out PlanResult result) ||
+        if (planner.TryPlanMove(world, MoveRequest(11, "mechanism_push", WorldActionPriority.Mechanism, 1320, Direction.Right), Direction.Right, null, 1, out _, out PlanResult result) ||
             result.Reason != PlanFailureReason.BlockedCell ||
             !world.TryGetEntity(1320, out GameEntity first) ||
             !world.TryGetEntity(1321, out GameEntity second) ||
@@ -1203,8 +1273,8 @@ public static class AuthoritativeMoveWorldVerification
         world.AddEntity(DefaultWorldConfig.PlayerSpawn(1330, 1330, new GridCoord(0, 0)));
         world.AddEntity(DefaultWorldConfig.PlayerSpawn(1331, 1331, new GridCoord(1, 1)));
         var planner = new RulePlanner();
-        if (!planner.TryPlanMove(world, new BehaviorIntent(BehaviorIntentKind.Move, WorldActionPriority.Player, 21, 0, 1330, Direction.Right, 1), out MovePlan firstPlan, out _) ||
-            !planner.TryPlanMove(world, new BehaviorIntent(BehaviorIntentKind.Move, WorldActionPriority.Player, 22, 0, 1331, Direction.Down, 1), out MovePlan secondPlan, out _))
+        if (!planner.TryPlanMove(world, MoveRequest(21, "player_move", WorldActionPriority.Player, 1330, Direction.Right), Direction.Right, null, 1, out MovePlan firstPlan, out _) ||
+            !planner.TryPlanMove(world, MoveRequest(22, "player_move", WorldActionPriority.Player, 1331, Direction.Down), Direction.Down, null, 1, out MovePlan secondPlan, out _))
         {
             reason = "behavior planner did not create competing plans";
             return false;
@@ -1252,76 +1322,12 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        IntentArbitrationResult arbitration = new IntentArbiter().Arbitrate(world, new[]
-        {
-            new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 1, 0, 1352, Direction.Right, world.ServerTick),
-            new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 2, 0, 1353, Direction.Left, world.ServerTick)
-        });
-        if (arbitration.Items.Count != 2 ||
-            arbitration.Items.Any(item => item.Accepted) ||
-            arbitration.Items.Any(item => item.Message != "conflicting body intents"))
-        {
-            reason = "conflicting body intent reason was not stable";
-            return false;
-        }
-
         reason = string.Empty;
         return true;
     }
 
-    private static bool VerifyPlayerPushInterruptsMechanismConflict(out string reason)
+    private static bool VerifyActionTagsBlockMoveRules(out string reason)
     {
-        var world = new GameWorld();
-        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1360, new GridCoord(0, 0), Direction.Right));
-        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1361, new GridCoord(1, 0), Direction.Right));
-        IntentArbitrationResult arbitration = new IntentArbiter().Arbitrate(world, new[]
-        {
-            new BehaviorIntent(BehaviorIntentKind.Push, WorldActionPriority.Player, 1, 1, 1360, Direction.Right, 1),
-            new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 2, 0, 1360, Direction.Right, 1),
-            new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 3, 0, 1361, Direction.Left, 1)
-        });
-
-        if (arbitration.Items.Count != 3 ||
-            !arbitration.Items.Any(item => item.Accepted && item.Intent.SourceActionId == 1) ||
-            arbitration.Items.Where(item => item.Intent.SourceActionId != 1).Any(item => item.Accepted || item.Message != "interrupted by higher priority intent"))
-        {
-            reason = "player push did not interrupt lower priority mechanism conflict";
-            return false;
-        }
-
-        reason = string.Empty;
-        return true;
-    }
-
-    private static bool VerifyIntentTagsBlockMoveRules(out string reason)
-    {
-        var world = new GameWorld();
-        world.AddEntity(DefaultWorldConfig.PlayerSpawn(1370, 1370, new GridCoord(0, 0)));
-        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1371, new GridCoord(2, 0), Direction.Right));
-        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1372, new GridCoord(3, 0), Direction.Right));
-        if (!world.TryGetEntity(1370, out GameEntity player) ||
-            !world.TryGetEntity(1372, out GameEntity groupMember))
-        {
-            reason = "tag arbitration setup failed";
-            return false;
-        }
-
-        world.AddTag(player, WorldTag.BlockPlayerMove);
-        world.AddTag(groupMember, WorldTag.ImmuneMechanismPush);
-        IntentArbitrationResult arbitration = new IntentArbiter().Arbitrate(world, new[]
-        {
-            new BehaviorIntent(BehaviorIntentKind.Move, WorldActionPriority.Player, 1, 0, 1370, Direction.Right, 1),
-            new BehaviorIntent(BehaviorIntentKind.MechanismPush, WorldActionPriority.Mechanism, 2, 0, 1371, Direction.Right, 1)
-        });
-
-        if (arbitration.Items.Count != 2 ||
-            arbitration.Items.Any(item => item.Accepted) ||
-            arbitration.Items.Any(item => item.Message != "blocked by tag"))
-        {
-            reason = "intent tag blocking did not reject player and mechanism moves";
-            return false;
-        }
-
         var stunnedWorld = new GameWorld();
         stunnedWorld.AddEntity(DefaultWorldConfig.PlayerSpawn(1380, 1380, new GridCoord(0, 0)));
         if (!stunnedWorld.TryGetEntity(1380, out GameEntity stunnedPlayer))
@@ -1379,9 +1385,10 @@ public static class AuthoritativeMoveWorldVerification
             secondPosition.Coord != new GridCoord(2, 0) ||
             delta.ChangedEntities.Count != 2 ||
             !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1341 && snapshot.X == 1 && snapshot.Y == 0) ||
-            !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1342 && snapshot.X == 2 && snapshot.Y == 0))
+            !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1342 && snapshot.X == 2 && snapshot.Y == 0) ||
+            runner.ActivePendingStateCount != 0)
         {
-            reason = "conveyor did not push port group through behavior planner";
+            reason = "conveyor port push did not move connected body through subject policy";
             return false;
         }
 
@@ -1421,17 +1428,59 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(world),
             1);
 
-        queue.EnqueueMove(973, new GridCoord(1, 0), 31);
+        AuthoritativeMoveInput input = queue.EnqueueMove(973, new GridCoord(1, 0), 31);
         runner.Tick();
-        runner.Tick();
-        if (!world.TryGetEntity(974, out GameEntity first) ||
+        if (runner.ActivePendingStateCount != 1 ||
+            !world.TryGetEntity(973, out GameEntity player) ||
+            !world.TryGetEntity(974, out GameEntity first) ||
             !world.TryGetEntity(975, out GameEntity second) ||
+            !world.TryGetComponent(player, out PositionComponent playerPosition) ||
             !world.TryGetComponent(first, out PositionComponent firstPosition) ||
             !world.TryGetComponent(second, out PositionComponent secondPosition) ||
+            playerPosition.Coord != new GridCoord(0, 0) ||
+            firstPosition.Coord != new GridCoord(1, 0) ||
+            secondPosition.Coord != new GridCoord(2, 0))
+        {
+            reason = "port matched push did not stay isolated as handoff";
+            return false;
+        }
+
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        MoveResult result = input.WaitAsync().GetResult();
+        if (!result.Success ||
+            result.FinalCoord != new GridCoord(0, 0) ||
+            !world.TryGetComponent(player, out playerPosition) ||
+            !world.TryGetComponent(first, out firstPosition) ||
+            !world.TryGetComponent(second, out secondPosition) ||
+            playerPosition.Coord != new GridCoord(0, 0) ||
             firstPosition.Coord != new GridCoord(2, 0) ||
             secondPosition.Coord != new GridCoord(3, 0))
         {
-            reason = "port matched push did not move connected group";
+            reason = "port matched push did not complete owner at source position after body moved";
             return false;
         }
 
@@ -1439,7 +1488,7 @@ public static class AuthoritativeMoveWorldVerification
         return true;
     }
 
-    private static bool VerifyPortMismatchBlocksPropagation(out string reason)
+    private static bool VerifyPortMismatchSingleSubjectPropagation(out string reason)
     {
         var world = new GameWorld();
         world.AddEntity(DefaultWorldConfig.PlayerSpawn(976, 976, new GridCoord(0, 0)));
@@ -1455,18 +1504,39 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput input = queue.EnqueueMove(976, new GridCoord(1, 0), 32);
         runner.Tick();
-        runner.Tick();
-        MoveResult result = input.WaitAsync().GetResult();
-        if (!result.Success ||
-            runner.ActivePendingStateCount != 0 ||
+        if (runner.ActivePendingStateCount != 1 ||
+            !world.TryGetEntity(976, out GameEntity player) ||
             !world.TryGetEntity(977, out GameEntity first) ||
             !world.TryGetEntity(978, out GameEntity second) ||
+            !world.TryGetComponent(player, out PositionComponent playerPosition) ||
             !world.TryGetComponent(first, out PositionComponent firstPosition) ||
             !world.TryGetComponent(second, out PositionComponent secondPosition) ||
+            playerPosition.Coord != new GridCoord(0, 0) ||
             firstPosition.Coord != new GridCoord(1, 0) ||
             secondPosition.Coord != new GridCoord(2, 0))
         {
-            reason = "port mismatch did not keep disconnected external blocker in place";
+            reason = "port mismatch handoff did not keep source and port members isolated";
+            return false;
+        }
+
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        MoveResult result = input.WaitAsync().GetResult();
+        if (!result.Success ||
+            result.FinalCoord != new GridCoord(0, 0) ||
+            !world.TryGetComponent(player, out playerPosition) ||
+            !world.TryGetComponent(first, out firstPosition) ||
+            !world.TryGetComponent(second, out secondPosition) ||
+            playerPosition.Coord != new GridCoord(0, 0) ||
+            firstPosition.Coord != new GridCoord(1, 0) ||
+            secondPosition.Coord != new GridCoord(3, 0))
+        {
+            GridCoord playerCoord = world.TryGetComponent(player, out playerPosition) ? playerPosition.Coord : default;
+            GridCoord firstCoord = world.TryGetComponent(first, out firstPosition) ? firstPosition.Coord : default;
+            GridCoord secondCoord = world.TryGetComponent(second, out secondPosition) ? secondPosition.Coord : default;
+            reason = $"port mismatch push unexpected result success={result.Success} final=({result.FinalCoord.X},{result.FinalCoord.Y}) player=({playerCoord.X},{playerCoord.Y}) first=({firstCoord.X},{firstCoord.Y}) second=({secondCoord.X},{secondCoord.Y}) pending={runner.ActivePendingStateCount}";
             return false;
         }
 
@@ -1491,12 +1561,9 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput input = queue.EnqueueMove(979, new GridCoord(1, 0), 33);
         runner.Tick();
-        runner.Tick();
-        MoveResult result = input.WaitAsync().GetResult();
-
-        if (!result.Success || runner.ActivePendingStateCount != 0)
+        if (runner.ActivePendingStateCount != 1)
         {
-            reason = "port blocked group did not resolve";
+            reason = "port blocked group did not handoff source action";
             return false;
         }
 
@@ -1508,6 +1575,15 @@ public static class AuthoritativeMoveWorldVerification
             secondPosition.Coord != new GridCoord(2, 0))
         {
             reason = "port blocked group moved despite external blocker";
+            return false;
+        }
+
+        runner.Tick();
+        MoveResult result = input.WaitAsync().GetResult();
+        if (result.Success ||
+            runner.ActivePendingStateCount != 0)
+        {
+            reason = "port blocked group did not fail owner after body blocker failed";
             return false;
         }
 
@@ -1559,7 +1635,8 @@ public static class AuthoritativeMoveWorldVerification
         world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(2, new GridCoord(1, 0)));
         world.FlushDelta();
         var store = new PendingRuleStateStore();
-        store.AddPush(10, 1, 2, Direction.Right, 1, 2);
+        var sourceRequest = new ActionRequest(10, "player_move", WorldActionPriority.Player, new ActionSourceContext(ActionSourceKind.Player, 1, 0, WorldTag.SourcePlayer), 1, new ActionTarget(0, null, Direction.Right), default, 1, 1, 0);
+        store.AddHandoffActionState(sourceRequest, 2, Direction.Right, 1, 2);
         var system = new StateDrivenRuleExecutionSystem();
         StateDrivenRuleExecutionResult earlyResult = system.Tick(world, Array.Empty<WorldAction>(), store, 2);
         if (earlyResult.ActivePendingCount != 1 ||
@@ -1856,5 +1933,21 @@ public static class AuthoritativeMoveWorldVerification
 
         reason = string.Empty;
         return true;
+    }
+
+    private static ActionRequest MoveRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, long entityId, Direction direction, long sourceStateId = 0)
+    {
+        ActionSpec spec = ActionSpecRegistry.Default.Get(specId);
+        return new ActionRequest(
+            actionId,
+            specId,
+            priority,
+            new ActionSourceContext(spec.DefaultSource, entityId, sourceStateId, spec.SourceTag),
+            entityId,
+            new ActionTarget(0, null, direction),
+            default,
+            0,
+            0,
+            0);
     }
 }

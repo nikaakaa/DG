@@ -14,6 +14,8 @@ public sealed class GameWorld
     private readonly List<DirtyChange> dirtyChanges = new();
     private readonly List<long> removedEntityIds = new();
     private readonly IGameConfigProvider configProvider;
+    private readonly RuntimeEffectStore runtimeEffects = new();
+    private readonly ComponentStateResolver componentStateResolver = new();
 
     public GameWorld() : this(FallbackGameConfigProvider.Instance)
     {
@@ -29,6 +31,7 @@ public sealed class GameWorld
     public IReadOnlyDictionary<long, Chunk> LoadedChunks => chunks.LoadedChunks;
     public IReadOnlyCollection<long> ChangedCells => spatialDirty.ChangedCells;
     public IReadOnlyCollection<long> ChangedChunks => spatialDirty.ChangedChunks;
+    public RuntimeEffectStore RuntimeEffects => runtimeEffects;
 
     public long NextTick()
     {
@@ -54,7 +57,16 @@ public sealed class GameWorld
             ServerTick = snapshot.ServerTick;
         }
 
-        return AddOrUpdateEntity(EntitySpawnSpec.FromSnapshot(snapshot));
+        if (!AddOrUpdateEntity(EntitySpawnSpec.FromSnapshot(snapshot)) ||
+            !TryGetEntity(snapshot.EntityId, out GameEntity entity))
+        {
+            return false;
+        }
+
+        componentStateResolver.RemoveEntity(snapshot.EntityId);
+        ApplySnapshotFinalComponents(entity, snapshot);
+        MarkDirty(snapshot.EntityId);
+        return true;
     }
 
     public bool AddEntity(EntitySpawnSpec spawn)
@@ -84,6 +96,7 @@ public sealed class GameWorld
             store.Remove(entityId);
         }
 
+        componentStateResolver.RemoveEntity(entityId);
         MarkRemoved(entityId);
         return true;
     }
@@ -245,6 +258,50 @@ public sealed class GameWorld
         return true;
     }
 
+    public void CaptureStaticComponentSources(GameEntity entity)
+    {
+        componentStateResolver.CaptureStaticSources(this, entity);
+    }
+
+    public void AddStaticComponentSource(ComponentSourceContribution contribution)
+    {
+        componentStateResolver.AddStaticSource(contribution);
+    }
+
+    public void ResolveComponentResults()
+    {
+        componentStateResolver.Resolve(this, runtimeEffects, ServerTick);
+    }
+
+    public RuntimeEffectInstance AddRuntimeEffect(RuntimeEffectSpec spec)
+    {
+        RuntimeEffectInstance instance = runtimeEffects.Add(spec);
+        ResolveComponentResults();
+        return instance;
+    }
+
+    public bool RemoveRuntimeEffect(RuntimeEffectId id)
+    {
+        bool removed = runtimeEffects.Remove(id);
+        if (removed)
+        {
+            ResolveComponentResults();
+        }
+
+        return removed;
+    }
+
+    public IReadOnlyList<RuntimeEffectId> ExpireRuntimeEffects(long tick)
+    {
+        IReadOnlyList<RuntimeEffectId> expired = runtimeEffects.Expire(tick);
+        if (expired.Count > 0)
+        {
+            ResolveComponentResults();
+        }
+
+        return expired;
+    }
+
     public IReadOnlyList<DirtyChange> PeekDirtyChanges()
     {
         return dirtyChanges.ToArray();
@@ -298,6 +355,9 @@ public sealed class GameWorld
     {
         GridCoord coord = TryGetComponent(entity, out PositionComponent position) ? position.Coord : default;
         Direction direction = TryGetComponent(entity, out DirectionComponent directionComponent) ? directionComponent.Direction : Direction.None;
+        bool hasAutoMove = TryGetComponent(entity, out AutoMoveComponent autoMove);
+        bool hasPortConnector = TryGetComponent(entity, out PortConnectorComponent portConnector);
+        bool hasMovementPermission = TryGetComponent(entity, out MovementPermissionComponent permission);
         return new EntitySnapshot(
             entity.EntityId,
             entity.ConfigId,
@@ -309,8 +369,14 @@ public sealed class GameWorld
             HasComponent<ColliderComponent>(entity),
             HasComponent<BlockingComponent>(entity),
             HasComponent<BouncableComponent>(entity),
-            HasComponent<AutoMoveComponent>(entity),
+            hasAutoMove,
+            hasAutoMove ? autoMove.IntervalTicks : 0,
             HasComponent<PlayerControlComponent>(entity),
+            HasComponent<PushableComponent>(entity),
+            hasPortConnector ? portConnector.LocalPorts : DirectionMask.None,
+            hasMovementPermission,
+            hasMovementPermission && permission.CanMove,
+            !hasMovementPermission || permission.CanBePushed,
             ServerTick);
     }
 
@@ -492,6 +558,65 @@ public sealed class GameWorld
 
         store = default!;
         return false;
+    }
+
+    private void ApplySnapshotFinalComponents(GameEntity entity, EntitySnapshot snapshot)
+    {
+        ApplySnapshotPresence(entity, snapshot.Blocking, new BlockingComponent());
+        ApplySnapshotPresence(entity, snapshot.Pushable, new PushableComponent());
+        ApplySnapshotAutoMove(entity, snapshot);
+        ApplySnapshotPortConnector(entity, snapshot.PortLocalPorts);
+        ApplySnapshotMovementPermission(entity, snapshot);
+    }
+
+    private void ApplySnapshotPresence<TComponent>(GameEntity entity, bool desired, TComponent component) where TComponent : struct
+    {
+        if (desired)
+        {
+            SetComponent(entity, component);
+            return;
+        }
+
+        RemoveComponent<TComponent>(entity);
+    }
+
+    private void ApplySnapshotAutoMove(GameEntity entity, EntitySnapshot snapshot)
+    {
+        if (!snapshot.AutoMove)
+        {
+            RemoveComponent<AutoMoveComponent>(entity);
+            return;
+        }
+
+        int interval = snapshot.AutoMoveIntervalTicks > 0 ? snapshot.AutoMoveIntervalTicks : 1;
+        long lastMoveTick = TryGetComponent(entity, out AutoMoveComponent existing) ? existing.LastMoveTick : 0;
+        var component = new AutoMoveComponent(interval)
+        {
+            LastMoveTick = lastMoveTick
+        };
+        SetComponent(entity, component);
+    }
+
+    private void ApplySnapshotPortConnector(GameEntity entity, DirectionMask localPorts)
+    {
+        if (localPorts == DirectionMask.None)
+        {
+            RemoveComponent<PortConnectorComponent>(entity);
+            return;
+        }
+
+        SetComponent(entity, new PortConnectorComponent(localPorts));
+    }
+
+    private void ApplySnapshotMovementPermission(GameEntity entity, EntitySnapshot snapshot)
+    {
+        if (!snapshot.HasMovementPermission)
+        {
+            RemoveComponent<MovementPermissionComponent>(entity);
+            return;
+        }
+
+        SetComponent(entity, new MovementPermissionComponent(snapshot.CanMove, snapshot.CanBePushed));
     }
 }
 }

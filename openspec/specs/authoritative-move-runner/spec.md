@@ -23,7 +23,7 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **AND** 移动规则失败原因使用独立的 `MoveErrorCode` 和 `Reason`
 
 ### Requirement: 服务端最小移动世界
-服务端 SHALL 维护独立于 Unity 客户端的权威 GameWorld 状态，用于裁决玩家和自动移动实体是否可以进入目标坐标。该权威 GameWorld SHALL 基于共享 GameCore 的实体、组件、坐标、WorldAction、BehaviorIntent 和 state-driven rule system，而不是只维护玩家 id 到坐标的专用字典。
+服务端 SHALL 维护独立于 Unity 客户端的权威 GameWorld 状态，用于裁决玩家和自动移动实体是否可以进入目标坐标。该权威 GameWorld SHALL 基于共享 GameCore 的实体、组件、坐标、WorldAction、ActionSpec、ActionRequest 和 state-driven rule system，而不是只维护玩家 id 到坐标的专用字典。
 
 #### Scenario: 注册玩家坐标
 - **WHEN** 服务端最小世界接收一个玩家 id 和初始坐标

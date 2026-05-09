@@ -1,4 +1,5 @@
 using DG.GameCore;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace DG.Map
@@ -19,6 +20,8 @@ namespace DG.Map
         [SerializeField] private ClientMoveNetworkSubmitter networkSubmitter;
         [SerializeField] private Camera targetCamera;
         [SerializeField] private float cellSize = 1f;
+        [SerializeField] private int runtimeAutoMoveIntervalTicks = 1;
+        [SerializeField] private int runtimeExpireAfterTicks;
 
         private DebugWorldEditorSlot currentSlot;
         private Direction buildDirection = Direction.Right;
@@ -29,10 +32,14 @@ namespace DG.Map
         private string lastResult = "Debug editor ready";
         private Transform hoverView;
         private Transform ghostView;
+        private readonly Dictionary<string, long> runtimeEffectIds = new();
 
         public DebugWorldEditorSlot CurrentSlot => currentSlot;
         public Direction BuildDirection => buildDirection;
         public string LastResult => lastResult;
+        public long SelectedEntityId => selectedEntityId;
+        public int RuntimeAutoMoveIntervalTicks => runtimeAutoMoveIntervalTicks;
+        public int RuntimeExpireAfterTicks => runtimeExpireAfterTicks;
 
         private void Awake()
         {
@@ -86,6 +93,7 @@ namespace DG.Map
 
             GUI.Label(new Rect(18, Screen.height - 74, 560, 24), $"Coord: {(hasHover ? hoveredCoord.ToString() : "-")}  Direction: {buildDirection}  Selected: {selectedEntityId}");
             GUI.Label(new Rect(18, Screen.height - 48, 820, 24), lastResult);
+            DrawRuntimeEffectPanel();
         }
 
         public void SelectSlot(DebugWorldEditorSlot slot)
@@ -107,6 +115,22 @@ namespace DG.Map
                 Direction.Left => Direction.Up,
                 _ => Direction.Right
             };
+        }
+
+        public void SelectEntity(long entityId)
+        {
+            selectedEntityId = entityId;
+            dragging = false;
+        }
+
+        public void SetRuntimeAutoMoveIntervalTicks(int value)
+        {
+            runtimeAutoMoveIntervalTicks = Mathf.Max(1, value);
+        }
+
+        public void SetRuntimeExpireAfterTicks(int value)
+        {
+            runtimeExpireAfterTicks = Mathf.Max(0, value);
         }
 
         public bool TryPickCell(Vector3 screenPosition, out Vector2Int coord)
@@ -234,6 +258,190 @@ namespace DG.Map
                 selectedEntityId = entityId;
                 lastResult = $"selected {entityId}";
             }
+        }
+
+        private void DrawRuntimeEffectPanel()
+        {
+            const int width = 300;
+            Rect panel = new Rect(Screen.width - width - 16, 16, width, 500);
+            GUI.Box(panel, "Runtime Effects");
+            GUILayout.BeginArea(new Rect(panel.x + 12, panel.y + 28, panel.width - 24, panel.height - 40));
+            GUILayout.Label("Selected: " + (selectedEntityId == 0 ? "-" : selectedEntityId.ToString()));
+            GUILayout.Label("Final: " + DescribeSelectedEntity());
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Auto interval", GUILayout.Width(95));
+            if (GUILayout.Button("-", GUILayout.Width(28)))
+            {
+                SetRuntimeAutoMoveIntervalTicks(runtimeAutoMoveIntervalTicks - 1);
+            }
+            GUILayout.Label(runtimeAutoMoveIntervalTicks.ToString(), GUILayout.Width(32));
+            if (GUILayout.Button("+", GUILayout.Width(28)))
+            {
+                SetRuntimeAutoMoveIntervalTicks(runtimeAutoMoveIntervalTicks + 1);
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Expire +ticks", GUILayout.Width(95));
+            if (GUILayout.Button("-", GUILayout.Width(28)))
+            {
+                SetRuntimeExpireAfterTicks(runtimeExpireAfterTicks - 1);
+            }
+            GUILayout.Label(runtimeExpireAfterTicks == 0 ? "none" : runtimeExpireAfterTicks.ToString(), GUILayout.Width(44));
+            if (GUILayout.Button("+", GUILayout.Width(28)))
+            {
+                SetRuntimeExpireAfterTicks(runtimeExpireAfterTicks + 1);
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Label("Port direction: " + buildDirection);
+            DrawRuntimeEffectButtons("Blocking", RuntimeEffectKind.TemporaryBlocking);
+            DrawRuntimeEffectButtons("AutoMove", RuntimeEffectKind.TemporaryAutoMove);
+            DrawRuntimeEffectButtons("Pushable", RuntimeEffectKind.TemporaryPushable);
+            DrawRuntimeEffectButtons("Port", RuntimeEffectKind.TemporaryPort);
+            DrawRuntimeEffectButtons("Immobile", RuntimeEffectKind.TemporaryImmobile);
+            GUILayout.Space(8);
+            GUILayout.Label("Last: " + lastResult);
+            GUILayout.EndArea();
+        }
+
+        private void DrawRuntimeEffectButtons(string label, RuntimeEffectKind kind)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(78));
+            if (GUILayout.Button("Add", GUILayout.Width(72)))
+            {
+                ApplyRuntimeEffect(kind);
+            }
+            if (GUILayout.Button("Remove", GUILayout.Width(86)))
+            {
+                RemoveRuntimeEffect(kind);
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        private void ApplyRuntimeEffect(RuntimeEffectKind kind)
+        {
+            if (!CanEditRuntimeEffect(out string reason))
+            {
+                lastResult = reason;
+                return;
+            }
+
+            long entityId = selectedEntityId;
+            DirectionMask portMask = kind == RuntimeEffectKind.TemporaryPort ? DirectionToMask(buildDirection) : DirectionMask.None;
+            long expireTick = GetRuntimeExpireTick(entityId);
+            networkSubmitter.DebugApplyRuntimeEffect(entityId, kind, runtimeAutoMoveIntervalTicks, portMask, expireTick, (success, callbackReason, effectId) =>
+            {
+                if (success)
+                {
+                    runtimeEffectIds[RuntimeEffectKey(entityId, kind)] = effectId;
+                    lastResult = "effect add " + kind + " id:" + effectId;
+                    return;
+                }
+
+                lastResult = "effect add failed: " + callbackReason;
+            });
+        }
+
+        private void RemoveRuntimeEffect(RuntimeEffectKind kind)
+        {
+            if (!CanEditRuntimeEffect(out string reason))
+            {
+                lastResult = reason;
+                return;
+            }
+
+            long entityId = selectedEntityId;
+            runtimeEffectIds.TryGetValue(RuntimeEffectKey(entityId, kind), out long effectId);
+            networkSubmitter.DebugRemoveRuntimeEffect(entityId, kind, effectId, (success, callbackReason, removedEffectId) =>
+            {
+                if (success)
+                {
+                    runtimeEffectIds.Remove(RuntimeEffectKey(entityId, kind));
+                    lastResult = "effect remove " + kind + " id:" + removedEffectId;
+                    return;
+                }
+
+                lastResult = "effect remove failed: " + callbackReason;
+            });
+        }
+
+        private bool CanEditRuntimeEffect(out string reason)
+        {
+            if (selectedEntityId == 0)
+            {
+                reason = "select entity first";
+                return false;
+            }
+
+            if (networkSubmitter == null)
+            {
+                networkSubmitter = FindObjectOfType<ClientMoveNetworkSubmitter>();
+            }
+
+            if (networkSubmitter == null)
+            {
+                reason = "debug submitter missing";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
+        }
+
+        private long GetRuntimeExpireTick(long entityId)
+        {
+            if (runtimeExpireAfterTicks <= 0 || runner == null || runner.Context == null)
+            {
+                return 0;
+            }
+
+            if (runner.Context.ClientMapWorld.TryGetServerTick(entityId, out long serverTick))
+            {
+                return serverTick + runtimeExpireAfterTicks;
+            }
+
+            return runtimeExpireAfterTicks;
+        }
+
+        private string DescribeSelectedEntity()
+        {
+            if (selectedEntityId == 0 || runner == null || runner.Context == null)
+            {
+                return "-";
+            }
+
+            if (!runner.Context.ClientMapWorld.TryGetSnapshot(selectedEntityId, out EntitySnapshot snapshot))
+            {
+                return "missing";
+            }
+
+            string port = snapshot.PortLocalPorts == DirectionMask.None ? "-" : snapshot.PortLocalPorts.ToString();
+            string move = snapshot.HasMovementPermission ? " move:" + snapshot.CanMove + "/" + snapshot.CanBePushed : string.Empty;
+            return "B:" + snapshot.Blocking +
+                " A:" + snapshot.AutoMove +
+                " P:" + snapshot.Pushable +
+                " Port:" + port +
+                move;
+        }
+
+        private static DirectionMask DirectionToMask(Direction direction)
+        {
+            return direction switch
+            {
+                Direction.Up => DirectionMask.Up,
+                Direction.Down => DirectionMask.Down,
+                Direction.Left => DirectionMask.Left,
+                Direction.Right => DirectionMask.Right,
+                _ => DirectionMask.None
+            };
+        }
+
+        private static string RuntimeEffectKey(long entityId, RuntimeEffectKind kind)
+        {
+            return entityId + ":" + (int)kind;
         }
 
         private bool TryPickEntity(Vector2Int coord, out long entityId)

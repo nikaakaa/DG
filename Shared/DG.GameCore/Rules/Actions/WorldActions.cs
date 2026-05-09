@@ -25,10 +25,16 @@ public enum WorldActionKind
 public sealed class WorldAction
 {
     public WorldAction(long actionId, WorldActionPriority priority, WorldActionKind kind, long entityId, GridCoord? targetCoord, Direction direction, long clientTick, long createdTick, long readyTick, int costTicks)
+        : this(actionId, priority, kind, default, entityId, targetCoord, direction, clientTick, createdTick, readyTick, costTicks)
+    {
+    }
+
+    public WorldAction(long actionId, WorldActionPriority priority, WorldActionKind kind, ActionSpecId specId, long entityId, GridCoord? targetCoord, Direction direction, long clientTick, long createdTick, long readyTick, int costTicks)
     {
         ActionId = actionId;
         Priority = priority;
         Kind = kind;
+        SpecId = specId;
         EntityId = entityId;
         TargetCoord = targetCoord;
         Direction = direction;
@@ -41,6 +47,7 @@ public sealed class WorldAction
     public long ActionId { get; }
     public WorldActionPriority Priority { get; }
     public WorldActionKind Kind { get; }
+    public ActionSpecId SpecId { get; }
     public long EntityId { get; }
     public GridCoord? TargetCoord { get; }
     public Direction Direction { get; }
@@ -115,6 +122,14 @@ public sealed class WorldActionQueue
     public WorldAction EnqueueMechanismPush(long entityId, Direction direction, long createdTick, int costTicks)
     {
         var action = new WorldAction(nextActionId++, WorldActionPriority.Mechanism, WorldActionKind.MechanismPush, entityId, null, direction, 0, createdTick, createdTick + Math.Max(1, costTicks), costTicks);
+        actions.Add(action);
+        return action;
+    }
+
+    public WorldAction EnqueueConfiguredMove(ActionSpecId specId, long entityId, Direction direction, long createdTick, int costTicks)
+    {
+        var spec = ActionSpecRegistry.Default.Get(specId);
+        var action = new WorldAction(nextActionId++, spec.DefaultPriority, WorldActionKind.MechanismPush, specId, entityId, null, direction, 0, createdTick, createdTick + Math.Max(1, costTicks), costTicks);
         actions.Add(action);
         return action;
     }

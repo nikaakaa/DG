@@ -171,6 +171,36 @@ namespace Fantasy
 			request.Enabled = enabled;
 			return (G2C_DebugSetEntityTagResponse)await session.Call(request);
 		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_DebugApplyRuntimeEffectResponse> C2G_DebugApplyRuntimeEffectRequest(this Session session, C2G_DebugApplyRuntimeEffectRequest request)
+		{
+			return (G2C_DebugApplyRuntimeEffectResponse)await session.Call(request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_DebugApplyRuntimeEffectResponse> C2G_DebugApplyRuntimeEffectRequest(this Session session, long entityId, int effectKind, int autoMoveIntervalTicks, int portLocalPorts, long expireTick)
+		{
+			using var request = Fantasy.C2G_DebugApplyRuntimeEffectRequest.Create();
+			request.EntityId = entityId;
+			request.EffectKind = effectKind;
+			request.AutoMoveIntervalTicks = autoMoveIntervalTicks;
+			request.PortLocalPorts = portLocalPorts;
+			request.ExpireTick = expireTick;
+			return (G2C_DebugApplyRuntimeEffectResponse)await session.Call(request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_DebugRemoveRuntimeEffectResponse> C2G_DebugRemoveRuntimeEffectRequest(this Session session, C2G_DebugRemoveRuntimeEffectRequest request)
+		{
+			return (G2C_DebugRemoveRuntimeEffectResponse)await session.Call(request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_DebugRemoveRuntimeEffectResponse> C2G_DebugRemoveRuntimeEffectRequest(this Session session, long entityId, int effectKind, long runtimeEffectId)
+		{
+			using var request = Fantasy.C2G_DebugRemoveRuntimeEffectRequest.Create();
+			request.EntityId = entityId;
+			request.EffectKind = effectKind;
+			request.RuntimeEffectId = runtimeEffectId;
+			return (G2C_DebugRemoveRuntimeEffectResponse)await session.Call(request);
+		}
 
    }
 }

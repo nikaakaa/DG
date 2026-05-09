@@ -41,16 +41,19 @@ public sealed class ComponentApplicationRegistry
             [ComponentKind.Position] = (world, _, entity, _, spawn) => world.SetComponent(entity, new PositionComponent(spawn.Position)),
             [ComponentKind.Direction] = (world, _, entity, _, spawn) => world.SetComponent(entity, new DirectionComponent(spawn.Direction)),
             [ComponentKind.Collider] = (world, _, entity, _, _) => world.SetComponent(entity, new ColliderComponent()),
-            [ComponentKind.Blocking] = (world, _, entity, _, _) => world.SetComponent(entity, new BlockingComponent()),
+            [ComponentKind.Blocking] = (world, _, entity, _, _) => world.AddStaticComponentSource(ComponentSourceContribution.Blocking(entity.EntityId, ComponentSourceKey.Static(entity.EntityId))),
             [ComponentKind.Bouncable] = (world, _, entity, _, _) => world.SetComponent(entity, new BouncableComponent()),
-            [ComponentKind.AutoMove] = (world, _, entity, archetype, spawn) => world.SetComponent(entity, new AutoMoveComponent(spawn.AutoMoveIntervalTicks > 0 ? spawn.AutoMoveIntervalTicks : archetype.DefaultAutoMoveIntervalTicks)),
+            [ComponentKind.AutoMove] = (world, _, entity, archetype, spawn) => world.AddStaticComponentSource(ComponentSourceContribution.AutoMove(entity.EntityId, ComponentSourceKey.Static(entity.EntityId), spawn.AutoMoveIntervalTicks > 0 ? spawn.AutoMoveIntervalTicks : archetype.DefaultAutoMoveIntervalTicks)),
             [ComponentKind.PlayerControl] = (world, _, entity, _, spawn) => world.SetComponent(entity, new PlayerControlComponent(spawn.PlayerId != 0 ? spawn.PlayerId : spawn.EntityId)),
             [ComponentKind.PushOnEnter] = (world, _, entity, _, _) => world.SetComponent(entity, new PushOnEnterComponent()),
-            [ComponentKind.Pushable] = (world, _, entity, _, _) => world.SetComponent(entity, new PushableComponent()),
+            [ComponentKind.Pushable] = (world, _, entity, _, _) => world.AddStaticComponentSource(ComponentSourceContribution.Pushable(entity.EntityId, ComponentSourceKey.Static(entity.EntityId))),
             [ComponentKind.PortConnector] = (world, provider, entity, archetype, _) =>
             {
                 DirectionMask ports = provider.TryGetPortConnector(archetype.ConfigId, out PortConnectorConfig config) ? config.LocalPorts : DirectionMask.None;
-                world.SetComponent(entity, new PortConnectorComponent(ports));
+                if (ports != DirectionMask.None)
+                {
+                    world.AddStaticComponentSource(ComponentSourceContribution.PortConnector(entity.EntityId, ComponentSourceKey.Static(entity.EntityId), ports));
+                }
             }
         });
     }

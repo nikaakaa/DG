@@ -1,4 +1,5 @@
 using DG.GameCore;
+using System.Collections.Generic;
 
 namespace Fantasy;
 
@@ -124,6 +125,144 @@ public sealed class DebugWorldEditService
         World.MarkDirty(entityId);
         reason = string.Empty;
         return true;
+    }
+
+    public bool TryApplyRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectId effectId, out string reason)
+    {
+        effectId = default;
+        if (!Enabled)
+        {
+            reason = "debug edit disabled";
+            return false;
+        }
+
+        if (!World.TryGetEntity(entityId, out _))
+        {
+            reason = "entity not found";
+            return false;
+        }
+
+        if (!TryCreateRuntimeEffectSpec(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out RuntimeEffectSpec spec, out reason))
+        {
+            return false;
+        }
+
+        RuntimeEffectInstance instance = World.AddRuntimeEffect(spec);
+        effectId = instance.Id;
+        reason = string.Empty;
+        return true;
+    }
+
+    public bool TryRemoveRuntimeEffect(long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId, out RuntimeEffectId removedEffectId, out string reason)
+    {
+        removedEffectId = default;
+        if (!Enabled)
+        {
+            reason = "debug edit disabled";
+            return false;
+        }
+
+        if (!World.TryGetEntity(entityId, out _))
+        {
+            reason = "entity not found";
+            return false;
+        }
+
+        RuntimeEffectId effectId = requestedEffectId.IsValid ? FindRuntimeEffect(entityId, kind, requestedEffectId) : FindRuntimeEffect(entityId, kind);
+        if (!effectId.IsValid)
+        {
+            reason = "runtime effect not found";
+            return false;
+        }
+
+        if (!World.RemoveRuntimeEffect(effectId))
+        {
+            reason = "runtime effect not found";
+            return false;
+        }
+
+        removedEffectId = effectId;
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool TryCreateRuntimeEffectSpec(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectSpec spec, out string reason)
+    {
+        if (kind == RuntimeEffectKind.TemporaryBlocking)
+        {
+            spec = RuntimeEffectSpec.Blocking(entityId, World.ServerTick, expireTick);
+            reason = string.Empty;
+            return true;
+        }
+
+        if (kind == RuntimeEffectKind.TemporaryAutoMove)
+        {
+            spec = RuntimeEffectSpec.AutoMove(entityId, autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks, World.ServerTick, expireTick);
+            reason = string.Empty;
+            return true;
+        }
+
+        if (kind == RuntimeEffectKind.TemporaryPushable)
+        {
+            spec = RuntimeEffectSpec.Pushable(entityId, World.ServerTick, expireTick);
+            reason = string.Empty;
+            return true;
+        }
+
+        if (kind == RuntimeEffectKind.TemporaryPort)
+        {
+            if (portMask == DirectionMask.None)
+            {
+                reason = "invalid port mask";
+                spec = default;
+                return false;
+            }
+
+            spec = RuntimeEffectSpec.Port(entityId, portMask, World.ServerTick, expireTick);
+            reason = string.Empty;
+            return true;
+        }
+
+        if (kind == RuntimeEffectKind.TemporaryImmobile)
+        {
+            spec = RuntimeEffectSpec.Immobile(entityId, World.ServerTick, expireTick);
+            reason = string.Empty;
+            return true;
+        }
+
+        reason = "invalid runtime effect kind";
+        spec = default;
+        return false;
+    }
+
+    private RuntimeEffectId FindRuntimeEffect(long entityId, RuntimeEffectKind kind)
+    {
+        IReadOnlyList<RuntimeEffectInstance> active = World.RuntimeEffects.ActiveAt(World.ServerTick);
+        for (int i = active.Count - 1; i >= 0; i--)
+        {
+            RuntimeEffectInstance effect = active[i];
+            if (effect.TargetEntityId == entityId && effect.Kind == kind)
+            {
+                return effect.Id;
+            }
+        }
+
+        return default;
+    }
+
+    private RuntimeEffectId FindRuntimeEffect(long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId)
+    {
+        IReadOnlyList<RuntimeEffectInstance> active = World.RuntimeEffects.ActiveAt(World.ServerTick);
+        for (int i = active.Count - 1; i >= 0; i--)
+        {
+            RuntimeEffectInstance effect = active[i];
+            if (effect.Id.Equals(requestedEffectId) && effect.TargetEntityId == entityId && effect.Kind == kind)
+            {
+                return effect.Id;
+            }
+        }
+
+        return default;
     }
 
     private long AllocateEntityId()

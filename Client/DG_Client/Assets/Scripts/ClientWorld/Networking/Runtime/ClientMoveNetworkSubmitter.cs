@@ -3,6 +3,7 @@ using Fantasy.Async;
 using Fantasy.Network;
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using DG.GameCore;
 using UnityEngine;
 
@@ -119,6 +120,40 @@ namespace DG.Map
             }
 
             DebugSetTagAsync(entityId, tag, enabled, completed).Coroutine();
+        }
+
+        public void DebugApplyRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, Action<bool, string, long> completed)
+        {
+            if (!serverAuthoritative)
+            {
+                completed?.Invoke(TryApplyLocalRuntimeEffect(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out long effectId, out string reason), reason, effectId);
+                return;
+            }
+
+            if (!CanSubmitDebugRequest(out string submitReason))
+            {
+                completed?.Invoke(false, submitReason, 0);
+                return;
+            }
+
+            DebugApplyRuntimeEffectAsync(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, completed).Coroutine();
+        }
+
+        public void DebugRemoveRuntimeEffect(long entityId, RuntimeEffectKind kind, long runtimeEffectId, Action<bool, string, long> completed)
+        {
+            if (!serverAuthoritative)
+            {
+                completed?.Invoke(TryRemoveLocalRuntimeEffect(entityId, kind, new RuntimeEffectId(runtimeEffectId), out long removedEffectId, out string reason), reason, removedEffectId);
+                return;
+            }
+
+            if (!CanSubmitDebugRequest(out string submitReason))
+            {
+                completed?.Invoke(false, submitReason, 0);
+                return;
+            }
+
+            DebugRemoveRuntimeEffectAsync(entityId, kind, runtimeEffectId, completed).Coroutine();
         }
 
         public bool CanSubmitDebugRequest(out string reason)
@@ -304,6 +339,56 @@ namespace DG.Map
             Debug.Log($"[ClientDebugTag] success:{response.Success} entity:{response.EntityId} tag:{tag} enabled:{response.Enabled} reason:{response.Reason}");
         }
 
+        private async FTask DebugApplyRuntimeEffectAsync(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, Action<bool, string, long> completed)
+        {
+            if (!TryGetSession(out Session session))
+            {
+                completed?.Invoke(false, "session unavailable", 0);
+                return;
+            }
+
+            G2C_DebugApplyRuntimeEffectResponse response = await session.C2G_DebugApplyRuntimeEffectRequest(entityId, (int)kind, autoMoveIntervalTicks, (int)portMask, expireTick);
+            if (response.ErrorCode != 0)
+            {
+                ClientMoveNetworkRuntime.RecordRuleFailure($"rpc error:{response.ErrorCode}");
+                completed?.Invoke(false, $"rpc error:{response.ErrorCode}", 0);
+                return;
+            }
+
+            if (!response.Success)
+            {
+                ClientMoveNetworkRuntime.RecordRuleFailure(response.Reason);
+            }
+
+            completed?.Invoke(response.Success, response.Reason, response.RuntimeEffectId);
+            Debug.Log($"[ClientDebugEffectAdd] success:{response.Success} entity:{response.EntityId} effect:{kind} effectId:{response.RuntimeEffectId} reason:{response.Reason}");
+        }
+
+        private async FTask DebugRemoveRuntimeEffectAsync(long entityId, RuntimeEffectKind kind, long runtimeEffectId, Action<bool, string, long> completed)
+        {
+            if (!TryGetSession(out Session session))
+            {
+                completed?.Invoke(false, "session unavailable", 0);
+                return;
+            }
+
+            G2C_DebugRemoveRuntimeEffectResponse response = await session.C2G_DebugRemoveRuntimeEffectRequest(entityId, (int)kind, runtimeEffectId);
+            if (response.ErrorCode != 0)
+            {
+                ClientMoveNetworkRuntime.RecordRuleFailure($"rpc error:{response.ErrorCode}");
+                completed?.Invoke(false, $"rpc error:{response.ErrorCode}", 0);
+                return;
+            }
+
+            if (!response.Success)
+            {
+                ClientMoveNetworkRuntime.RecordRuleFailure(response.Reason);
+            }
+
+            completed?.Invoke(response.Success, response.Reason, response.RuntimeEffectId);
+            Debug.Log($"[ClientDebugEffectRemove] success:{response.Success} entity:{response.EntityId} effect:{kind} effectId:{response.RuntimeEffectId} reason:{response.Reason}");
+        }
+
         private async FTask RegisterObserverAsync(long entityId)
         {
             if (!TryGetSession(out Session session))
@@ -433,6 +518,151 @@ namespace DG.Map
 
             world.MarkDirty(entityId);
             return true;
+        }
+
+        private bool TryApplyLocalRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out long effectId, out string reason)
+        {
+            effectId = 0;
+            if (!TryGetLocalWorldEntity(entityId, out GameWorld world, out _, out reason))
+            {
+                return false;
+            }
+
+            if (!TryCreateRuntimeEffectSpec(world, entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out RuntimeEffectSpec spec, out reason))
+            {
+                return false;
+            }
+
+            RuntimeEffectInstance instance = world.AddRuntimeEffect(spec);
+            effectId = instance.Id.Value;
+            reason = string.Empty;
+            return true;
+        }
+
+        private bool TryRemoveLocalRuntimeEffect(long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId, out long removedEffectId, out string reason)
+        {
+            removedEffectId = 0;
+            if (!TryGetLocalWorldEntity(entityId, out GameWorld world, out _, out reason))
+            {
+                return false;
+            }
+
+            RuntimeEffectId effectId = requestedEffectId.IsValid ? FindLocalRuntimeEffect(world, entityId, kind, requestedEffectId) : FindLocalRuntimeEffect(world, entityId, kind);
+            if (!effectId.IsValid)
+            {
+                reason = "runtime effect not found";
+                return false;
+            }
+
+            if (!world.RemoveRuntimeEffect(effectId))
+            {
+                reason = "runtime effect not found";
+                return false;
+            }
+
+            removedEffectId = effectId.Value;
+            reason = string.Empty;
+            return true;
+        }
+
+        private bool TryGetLocalWorldEntity(long entityId, out GameWorld world, out GameEntity entity, out string reason)
+        {
+            world = null;
+            entity = default;
+            if (runner == null || runner.Context == null)
+            {
+                reason = "runner unavailable";
+                return false;
+            }
+
+            world = runner.Context.ClientMapWorld.CoreWorld;
+            if (!world.TryGetEntity(entityId, out entity))
+            {
+                reason = "entity not found";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
+        }
+
+        private static bool TryCreateRuntimeEffectSpec(GameWorld world, long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectSpec spec, out string reason)
+        {
+            if (kind == RuntimeEffectKind.TemporaryBlocking)
+            {
+                spec = RuntimeEffectSpec.Blocking(entityId, world.ServerTick, expireTick);
+                reason = string.Empty;
+                return true;
+            }
+
+            if (kind == RuntimeEffectKind.TemporaryAutoMove)
+            {
+                spec = RuntimeEffectSpec.AutoMove(entityId, autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks, world.ServerTick, expireTick);
+                reason = string.Empty;
+                return true;
+            }
+
+            if (kind == RuntimeEffectKind.TemporaryPushable)
+            {
+                spec = RuntimeEffectSpec.Pushable(entityId, world.ServerTick, expireTick);
+                reason = string.Empty;
+                return true;
+            }
+
+            if (kind == RuntimeEffectKind.TemporaryPort)
+            {
+                if (portMask == DirectionMask.None)
+                {
+                    spec = default;
+                    reason = "invalid port mask";
+                    return false;
+                }
+
+                spec = RuntimeEffectSpec.Port(entityId, portMask, world.ServerTick, expireTick);
+                reason = string.Empty;
+                return true;
+            }
+
+            if (kind == RuntimeEffectKind.TemporaryImmobile)
+            {
+                spec = RuntimeEffectSpec.Immobile(entityId, world.ServerTick, expireTick);
+                reason = string.Empty;
+                return true;
+            }
+
+            spec = default;
+            reason = "invalid runtime effect kind";
+            return false;
+        }
+
+        private static RuntimeEffectId FindLocalRuntimeEffect(GameWorld world, long entityId, RuntimeEffectKind kind)
+        {
+            IReadOnlyList<RuntimeEffectInstance> active = world.RuntimeEffects.ActiveAt(world.ServerTick);
+            for (int i = active.Count - 1; i >= 0; i--)
+            {
+                RuntimeEffectInstance effect = active[i];
+                if (effect.TargetEntityId == entityId && effect.Kind == kind)
+                {
+                    return effect.Id;
+                }
+            }
+
+            return default;
+        }
+
+        private static RuntimeEffectId FindLocalRuntimeEffect(GameWorld world, long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId)
+        {
+            IReadOnlyList<RuntimeEffectInstance> active = world.RuntimeEffects.ActiveAt(world.ServerTick);
+            for (int i = active.Count - 1; i >= 0; i--)
+            {
+                RuntimeEffectInstance effect = active[i];
+                if (effect.Id.Equals(requestedEffectId) && effect.TargetEntityId == entityId && effect.Kind == kind)
+                {
+                    return effect.Id;
+                }
+            }
+
+            return default;
         }
 
     }

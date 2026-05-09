@@ -311,6 +311,12 @@ namespace Fantasy
             Bouncable = default;
             AutoMove = default;
             PlayerControlled = default;
+            Pushable = default;
+            PortLocalPorts = default;
+            HasMovementPermission = default;
+            CanMove = default;
+            CanBePushed = default;
+            AutoMoveIntervalTicks = default;
             MessageObjectPool<G2C_WorldEntityState>.Return(this);
         }
         [ProtoMember(1)]
@@ -337,6 +343,18 @@ namespace Fantasy
         public bool AutoMove { get; set; }
         [ProtoMember(12)]
         public bool PlayerControlled { get; set; }
+        [ProtoMember(13)]
+        public bool Pushable { get; set; }
+        [ProtoMember(14)]
+        public int PortLocalPorts { get; set; }
+        [ProtoMember(15)]
+        public bool HasMovementPermission { get; set; }
+        [ProtoMember(16)]
+        public bool CanMove { get; set; }
+        [ProtoMember(17)]
+        public bool CanBePushed { get; set; }
+        [ProtoMember(18)]
+        public int AutoMoveIntervalTicks { get; set; }
     }
 
     [Serializable]
@@ -616,6 +634,132 @@ namespace Fantasy
         public int Tag { get; set; }
         [ProtoMember(5)]
         public bool Enabled { get; set; }
+        [ProtoMember(6)]
+        public string Reason { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class C2G_DebugApplyRuntimeEffectRequest : AMessage, IRequest
+    {
+        public static C2G_DebugApplyRuntimeEffectRequest Create()
+        {
+            return MessageObjectPool<C2G_DebugApplyRuntimeEffectRequest>.Rent();
+        }
+
+        public void Dispose()
+        {
+            EntityId = default;
+            EffectKind = default;
+            AutoMoveIntervalTicks = default;
+            PortLocalPorts = default;
+            ExpireTick = default;
+            MessageObjectPool<C2G_DebugApplyRuntimeEffectRequest>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2G_DebugApplyRuntimeEffectRequest; } 
+        [ProtoIgnore]
+        public G2C_DebugApplyRuntimeEffectResponse ResponseType { get; set; }
+        [ProtoMember(1)]
+        public long EntityId { get; set; }
+        [ProtoMember(2)]
+        public int EffectKind { get; set; }
+        [ProtoMember(3)]
+        public int AutoMoveIntervalTicks { get; set; }
+        [ProtoMember(4)]
+        public int PortLocalPorts { get; set; }
+        [ProtoMember(5)]
+        public long ExpireTick { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class G2C_DebugApplyRuntimeEffectResponse : AMessage, IResponse
+    {
+        public static G2C_DebugApplyRuntimeEffectResponse Create()
+        {
+            return MessageObjectPool<G2C_DebugApplyRuntimeEffectResponse>.Rent();
+        }
+
+        public void Dispose()
+        {
+            Success = default;
+            EntityId = default;
+            EffectKind = default;
+            RuntimeEffectId = default;
+            Reason = default;
+            MessageObjectPool<G2C_DebugApplyRuntimeEffectResponse>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.G2C_DebugApplyRuntimeEffectResponse; } 
+        [ProtoMember(1)]
+        public uint ErrorCode { get; set; }
+        [ProtoMember(2)]
+        public bool Success { get; set; }
+        [ProtoMember(3)]
+        public long EntityId { get; set; }
+        [ProtoMember(4)]
+        public int EffectKind { get; set; }
+        [ProtoMember(5)]
+        public long RuntimeEffectId { get; set; }
+        [ProtoMember(6)]
+        public string Reason { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class C2G_DebugRemoveRuntimeEffectRequest : AMessage, IRequest
+    {
+        public static C2G_DebugRemoveRuntimeEffectRequest Create()
+        {
+            return MessageObjectPool<C2G_DebugRemoveRuntimeEffectRequest>.Rent();
+        }
+
+        public void Dispose()
+        {
+            EntityId = default;
+            EffectKind = default;
+            RuntimeEffectId = default;
+            MessageObjectPool<C2G_DebugRemoveRuntimeEffectRequest>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2G_DebugRemoveRuntimeEffectRequest; } 
+        [ProtoIgnore]
+        public G2C_DebugRemoveRuntimeEffectResponse ResponseType { get; set; }
+        [ProtoMember(1)]
+        public long EntityId { get; set; }
+        [ProtoMember(2)]
+        public int EffectKind { get; set; }
+        [ProtoMember(3)]
+        public long RuntimeEffectId { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class G2C_DebugRemoveRuntimeEffectResponse : AMessage, IResponse
+    {
+        public static G2C_DebugRemoveRuntimeEffectResponse Create()
+        {
+            return MessageObjectPool<G2C_DebugRemoveRuntimeEffectResponse>.Rent();
+        }
+
+        public void Dispose()
+        {
+            Success = default;
+            EntityId = default;
+            EffectKind = default;
+            RuntimeEffectId = default;
+            Reason = default;
+            MessageObjectPool<G2C_DebugRemoveRuntimeEffectResponse>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.G2C_DebugRemoveRuntimeEffectResponse; } 
+        [ProtoMember(1)]
+        public uint ErrorCode { get; set; }
+        [ProtoMember(2)]
+        public bool Success { get; set; }
+        [ProtoMember(3)]
+        public long EntityId { get; set; }
+        [ProtoMember(4)]
+        public int EffectKind { get; set; }
+        [ProtoMember(5)]
+        public long RuntimeEffectId { get; set; }
         [ProtoMember(6)]
         public string Reason { get; set; }
     }

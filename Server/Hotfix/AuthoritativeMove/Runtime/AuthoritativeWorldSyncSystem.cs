@@ -121,7 +121,13 @@ public sealed class AuthoritativeWorldSyncSystem
             Blocking = snapshot.Blocking,
             Bouncable = snapshot.Bouncable,
             AutoMove = snapshot.AutoMove,
-            PlayerControlled = snapshot.PlayerControlled
+            PlayerControlled = snapshot.PlayerControlled,
+            Pushable = snapshot.Pushable,
+            PortLocalPorts = (int)snapshot.PortLocalPorts,
+            HasMovementPermission = snapshot.HasMovementPermission,
+            CanMove = snapshot.CanMove,
+            CanBePushed = snapshot.CanBePushed,
+            AutoMoveIntervalTicks = snapshot.AutoMoveIntervalTicks
         };
     }
 

@@ -19,6 +19,11 @@ public readonly struct DirtyChange
 public readonly struct EntitySnapshot
 {
     public EntitySnapshot(long entityId, int configId, int archetypeId, int entityTarget, int x, int y, Direction direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, bool playerControlled, long serverTick)
+        : this(entityId, configId, archetypeId, entityTarget, x, y, direction, hasCollider, blocking, bouncable, autoMove, autoMove ? 1 : 0, playerControlled, false, DirectionMask.None, false, true, true, serverTick)
+    {
+    }
+
+    public EntitySnapshot(long entityId, int configId, int archetypeId, int entityTarget, int x, int y, Direction direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, int autoMoveIntervalTicks, bool playerControlled, bool pushable, DirectionMask portLocalPorts, bool hasMovementPermission, bool canMove, bool canBePushed, long serverTick)
     {
         EntityId = entityId;
         ConfigId = configId;
@@ -31,7 +36,13 @@ public readonly struct EntitySnapshot
         Blocking = blocking;
         Bouncable = bouncable;
         AutoMove = autoMove;
+        AutoMoveIntervalTicks = autoMove ? Math.Max(1, autoMoveIntervalTicks) : 0;
         PlayerControlled = playerControlled;
+        Pushable = pushable;
+        PortLocalPorts = portLocalPorts;
+        HasMovementPermission = hasMovementPermission;
+        CanMove = !hasMovementPermission || canMove;
+        CanBePushed = !hasMovementPermission || canBePushed;
         ServerTick = serverTick;
     }
 
@@ -46,7 +57,13 @@ public readonly struct EntitySnapshot
     public bool Blocking { get; }
     public bool Bouncable { get; }
     public bool AutoMove { get; }
+    public int AutoMoveIntervalTicks { get; }
     public bool PlayerControlled { get; }
+    public bool Pushable { get; }
+    public DirectionMask PortLocalPorts { get; }
+    public bool HasMovementPermission { get; }
+    public bool CanMove { get; }
+    public bool CanBePushed { get; }
     public long ServerTick { get; }
 }
 

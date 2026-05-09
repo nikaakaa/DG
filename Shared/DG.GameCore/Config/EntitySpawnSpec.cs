@@ -31,7 +31,7 @@ public readonly struct EntitySpawnSpec
             new GridCoord(snapshot.X, snapshot.Y),
             snapshot.Direction,
             snapshot.PlayerControlled ? snapshot.EntityId : 0,
-            1);
+            snapshot.AutoMoveIntervalTicks);
     }
 }
 }

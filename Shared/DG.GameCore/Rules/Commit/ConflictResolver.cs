@@ -12,9 +12,9 @@ public sealed class ConflictResolver
         var occupiedTargets = new HashSet<GridCoord>();
         var acceptedKeys = new HashSet<string>();
         IReadOnlyList<MovePlan> ordered = plans
-            .OrderBy(plan => plan.Intent.Priority)
-            .ThenBy(plan => plan.Intent.SourceActionId)
-            .ThenBy(plan => plan.Intent.SourceStateId)
+            .OrderBy(plan => plan.Priority)
+            .ThenBy(plan => plan.SourceActionId)
+            .ThenBy(plan => plan.SourceStateId)
             .ThenBy(plan => plan.BodyId)
             .ToArray();
 
@@ -106,7 +106,7 @@ public sealed class ConflictResolver
         for (int i = 0; i < plan.Members.Count; i++)
         {
             BodyMember member = plan.Members[i];
-            CommitProposal proposal = CommitProposal.Move(plan.Intent.Priority, plan.Intent.SourceActionId, plan.Intent.SourceStateId, member.EntityId, member.From, member.To, plan.Intent.ServerTick);
+            CommitProposal proposal = CommitProposal.Move(plan.Priority, plan.SourceActionId, plan.SourceStateId, member.EntityId, member.From, member.To, plan.ServerTick);
             results.Add(new CommitProposalResult(proposal, accepted, reason));
         }
     }

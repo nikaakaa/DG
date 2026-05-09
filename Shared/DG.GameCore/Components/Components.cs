@@ -99,6 +99,18 @@ public struct PortConnectorComponent
     public DirectionMask LocalPorts { get; }
 }
 
+public struct MovementPermissionComponent
+{
+    public MovementPermissionComponent(bool canMove, bool canBePushed)
+    {
+        CanMove = canMove;
+        CanBePushed = canBePushed;
+    }
+
+    public bool CanMove { get; }
+    public bool CanBePushed { get; }
+}
+
 public struct AutoMoveComponent
 {
     public AutoMoveComponent(int intervalTicks)

@@ -27,6 +27,7 @@ public static class EntityBuilder
         }
 
         ApplyComponents(world, provider, entity, archetype, spawn);
+        world.ResolveComponentResults();
         return true;
     }
 

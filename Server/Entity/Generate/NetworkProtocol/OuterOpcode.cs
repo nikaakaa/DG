@@ -26,5 +26,9 @@ namespace Fantasy
         public const uint G2C_DebugRemoveEntityResponse = 402663191;
         public const uint C2G_DebugSetEntityTagRequest = 268445464;
         public const uint G2C_DebugSetEntityTagResponse = 402663192;
+        public const uint C2G_DebugApplyRuntimeEffectRequest = 268445465;
+        public const uint G2C_DebugApplyRuntimeEffectResponse = 402663193;
+        public const uint C2G_DebugRemoveRuntimeEffectRequest = 268445466;
+        public const uint G2C_DebugRemoveRuntimeEffectResponse = 402663194;
     }
 }
