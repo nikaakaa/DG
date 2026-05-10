@@ -41,11 +41,12 @@
 - playerId
 - autoMoveIntervalTicks
 - final/static port mask
-- 可选 runtime effect 或 tag 调试步骤
 
 保存时使用相对坐标：选区左下或显式 anchor 作为原点，模板记录每个实体相对原点的 offset。加载到目标格时再还原为绝对坐标。
 
 这个结构块格式可以成为未来正式建造系统的概念原型，但当前 change 只保证调试用途。正式系统需要另行定义合法性、资源、拥有权、版本迁移、保存位置和发布流程。
+
+第一版结构块只保存实体基础状态和最终 port mask，不保存 runtime effect 实例、剩余过期 tick、临时 tag 调试步骤或其他运行时生命周期状态。原因是 runtime effect 属于时间相关的调试操作，直接固化进结构块会让“结构复现”和“运行时状态复现”混在一起。后续如果需要复现 runtime effect，应作为结构块附带的可选调试脚本或 scenario step 单独扩展。
 
 ### Decision: 鼠标控制升级为选择集状态机
 
@@ -87,7 +88,11 @@ port 可视化应从 `EntitySnapshot.PortLocalPorts` 或客户端镜像中的最
 
 ### Decision: 模板资产属于调试目录
 
-默认保存路径应位于 Unity 项目的调试资产或 StreamingAssets 下的调试目录，例如 `Assets/StreamingAssets/DG/DebugLayouts` 或等价项目内路径。该目录只服务于开发调试和测试复现，不参与正式配置导出。
+默认保存路径使用 `Client/DG_Client/Assets/DebugLayouts`。该目录只服务于开发调试和测试复现，不参与正式配置导出。
+
+不默认使用 `StreamingAssets`，因为当前项目已经用 `StreamingAssets/GameConfig` 承载运行时读取的 Luban 配置。把调试结构块放进 `StreamingAssets` 容易让它看起来像正式运行时数据源。后续如果需要从运行时外部目录导入结构块，可以增加显式 import/export 路径，而不是改变默认保存目录。
+
+结构块文件扩展名使用 `.dgdebuglayout.json`。它仍然是普通 JSON，方便 diff、手改和测试读取；同时文件名能明确标识这是 DG 调试布局，不是 Luban JSON、正式地图数据或通用 sandbox scenario。
 
 ## Risks / Trade-offs
 
@@ -98,6 +103,4 @@ port 可视化应从 `EntitySnapshot.PortLocalPorts` 或客户端镜像中的最
 
 ## Open Questions
 
-- 第一版模板是否只保存实体基础状态，还是也保存 runtime effect 调试状态？
-- 默认保存目录使用 `StreamingAssets` 还是 `Assets/DebugLayouts` 更符合当前项目习惯？
-- 结构块文件扩展名是否沿用 `.json`，还是给调试蓝图单独约定 `.dgdebuglayout.json`？
+- 暂无。第一版已固定为基础结构块持久化；runtime effect 复现、外部导入目录和正式建造蓝图迁移留给后续 change。

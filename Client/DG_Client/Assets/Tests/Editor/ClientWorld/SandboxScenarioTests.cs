@@ -206,6 +206,82 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void StructureBlock_SaveThenLoadKeepsEntitiesEquivalent()
+        {
+            var snapshots = new[]
+            {
+                new EntitySnapshot(10, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 5, 6, Direction.Right, true, true, false, false, 1, false, true, DirectionMask.Left | DirectionMask.Right, false, true, true, 1),
+                new EntitySnapshot(11, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 6, 6, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1)
+            };
+            DebugStructureBlockDocument document = DebugStructureBlockStorage.FromSnapshots("port-block", snapshots);
+            string path = Path.Combine(Application.temporaryCachePath, "port-block.dgdebuglayout.json");
+
+            DebugStructureBlockStorage.Save(path, document);
+            bool loaded = DebugStructureBlockStorage.TryLoad(path, ClientGameConfigProviderFactory.Create(), out DebugStructureBlockDocument loadedDocument, out var errors);
+
+            Assert.IsTrue(loaded, string.Join("|", errors));
+            Assert.AreEqual("port-block", loadedDocument.Name);
+            Assert.AreEqual(2, loadedDocument.Entries.Count);
+            Assert.AreEqual(0, loadedDocument.Entries[0].OffsetX);
+            Assert.AreEqual(0, loadedDocument.Entries[0].OffsetY);
+            Assert.AreEqual((int)(DirectionMask.Left | DirectionMask.Right), loadedDocument.Entries[0].PortLocalPorts);
+            File.Delete(path);
+        }
+
+        [Test]
+        public void StructureBlock_LoadRejectsMissingLubanConfig()
+        {
+            var document = new DebugStructureBlockDocument
+            {
+                Name = "missing",
+                Entries =
+                {
+                    new DebugStructureBlockEntry { Alias = "missing", ConfigId = 999999, Direction = "None" }
+                }
+            };
+            string path = Path.Combine(Application.temporaryCachePath, "missing.dgdebuglayout.json");
+
+            DebugStructureBlockStorage.Save(path, document);
+            bool loaded = DebugStructureBlockStorage.TryLoad(path, ClientGameConfigProviderFactory.Create(), out _, out var errors);
+
+            Assert.IsFalse(loaded);
+            Assert.IsTrue(errors.Any(error => error.Contains("unknown configId")));
+            File.Delete(path);
+        }
+
+        [Test]
+        public void StructureBlock_ParseFailureKeepsExistingToolStateOutsideParser()
+        {
+            bool loaded = DebugStructureBlockStorage.TryParse("{ not-json", ClientGameConfigProviderFactory.Create(), out _, out var errors);
+
+            Assert.IsFalse(loaded);
+            Assert.IsTrue(errors.Count > 0);
+        }
+
+        [Test]
+        public void StructureBlock_CreateSpawnRequestsUsesTargetAnchor()
+        {
+            var document = new DebugStructureBlockDocument
+            {
+                Name = "copy",
+                Entries =
+                {
+                    new DebugStructureBlockEntry { Alias = "a", ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId, OffsetX = 0, OffsetY = 0, Direction = "Right", AutoMoveIntervalTicks = 1, PortLocalPorts = (int)(DirectionMask.Left | DirectionMask.Right) },
+                    new DebugStructureBlockEntry { Alias = "b", ConfigId = DefaultWorldConfig.PushableBlockerConfigId, OffsetX = 1, OffsetY = 0, Direction = "None", AutoMoveIntervalTicks = 1 }
+                }
+            };
+
+            var requests = DebugStructureBlockStorage.CreateSpawnRequests(document, 10, 20);
+
+            Assert.AreEqual(2, requests.Count);
+            Assert.AreEqual(10, requests[0].X);
+            Assert.AreEqual(20, requests[0].Y);
+            Assert.AreEqual(11, requests[1].X);
+            Assert.AreEqual(20, requests[1].Y);
+            Assert.AreEqual(DirectionMask.Left | DirectionMask.Right, requests[0].PortLocalPorts);
+        }
+
+        [Test]
         public void LocalRunner_InvalidScenarioDoesNotModifyWorld()
         {
             var runner = new LocalSandboxScenarioRunner(ClientGameConfigProviderFactory.Create());

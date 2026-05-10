@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using DG.GameCore;
 using DG.Map;
 using Fantasy;
@@ -13,6 +14,9 @@ namespace DG.EditorTests
         public void TearDown()
         {
             ClientMoveNetworkRuntime.Clear();
+            DeleteLayoutIfExists("palette_a");
+            DeleteLayoutIfExists("palette_b");
+            DeleteLayoutIfExists("palette_load");
             foreach (GameObject gameObject in Object.FindObjectsOfType<GameObject>())
             {
                 Object.DestroyImmediate(gameObject);
@@ -168,13 +172,15 @@ namespace DG.EditorTests
             GameObject gameObject = new GameObject("DebugEditor");
             var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
 
-            Assert.AreEqual(DebugWorldEditorSlot.Blocker, editor.CurrentSlot);
+            Assert.AreEqual(DebugWorldEditorSlot.Select, editor.CurrentSlot);
+            Assert.AreEqual(DebugWorldEditorPaletteKind.None, editor.PaletteKind);
             Assert.AreEqual(Direction.Right, editor.BuildDirection);
 
             editor.SelectSlot(DebugWorldEditorSlot.PortConnector);
             editor.RotateDirection();
 
             Assert.AreEqual(DebugWorldEditorSlot.PortConnector, editor.CurrentSlot);
+            Assert.AreEqual(DebugWorldEditorPaletteKind.BaseEntity, editor.PaletteKind);
             Assert.AreEqual(Direction.Down, editor.BuildDirection);
         }
 
@@ -185,14 +191,83 @@ namespace DG.EditorTests
             var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
 
             editor.SelectEntity(42);
-            editor.SelectSlot(DebugWorldEditorSlot.Select);
+            editor.SelectSlot(DebugWorldEditorSlot.Blocker);
 
-            Assert.AreEqual(DebugWorldEditorSlot.Select, editor.CurrentSlot);
+            Assert.AreEqual(DebugWorldEditorSlot.Blocker, editor.CurrentSlot);
             Assert.AreEqual(42, editor.SelectedEntityId);
 
             editor.SelectSlot(DebugWorldEditorSlot.Delete);
 
-            Assert.AreEqual(0, editor.SelectedEntityId);
+            Assert.AreEqual(42, editor.SelectedEntityId);
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_SelectModeKeepsSelection()
+        {
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+
+            editor.SelectEntity(42);
+            editor.SelectMode(DebugWorldEditorMode.Layout);
+
+            Assert.AreEqual(DebugWorldEditorMode.Layout, editor.Mode);
+            Assert.AreEqual(42, editor.SelectedEntityId);
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_DebugUiHitTestBlocksMapInput()
+        {
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+
+            editor.SelectMode(DebugWorldEditorMode.Layout);
+
+            Assert.IsTrue(editor.IsPointerOverDebugUi(new Vector3(32, Screen.height - 24, 0)));
+            Assert.IsTrue(editor.IsPointerOverDebugUi(new Vector3(32, Screen.height - 180, 0)));
+            Assert.IsFalse(editor.IsPointerOverDebugUi(new Vector3(540, Screen.height - 24, 0)));
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_ContextMenuHitTestBlocksMapInput()
+        {
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+            typeof(ClientWorldDebugEditor)
+                .GetField("contextMenuOpen", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, true);
+            typeof(ClientWorldDebugEditor)
+                .GetField("contextMenuRect", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, new Rect(100, 120, 260, 360));
+
+            Assert.IsTrue(editor.IsPointerOverDebugUi(new Vector3(120, Screen.height - 140, 0)));
+            Assert.IsFalse(editor.IsPointerOverDebugUi(new Vector3(560, Screen.height - 140, 0)));
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_BasePlacementKeepsGhostPalette()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            GameObject submitterObject = new GameObject("Submitter");
+            var submitter = submitterObject.AddComponent<ClientMoveNetworkSubmitter>();
+            typeof(ClientMoveNetworkSubmitter)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(submitter, runner);
+            typeof(ClientMoveNetworkSubmitter)
+                .GetField("serverAuthoritative", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(submitter, false);
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+            typeof(ClientWorldDebugEditor)
+                .GetField("networkSubmitter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, submitter);
+            editor.SelectSlot(DebugWorldEditorSlot.PortConnector);
+
+            typeof(ClientWorldDebugEditor)
+                .GetMethod("ExecuteCurrentTool", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Invoke(editor, null);
+
+            Assert.AreEqual(DebugWorldEditorPaletteKind.BaseEntity, editor.PaletteKind);
+            Assert.AreEqual(DebugWorldEditorSlot.PortConnector, editor.CurrentSlot);
         }
 
         [Test]
@@ -234,6 +309,299 @@ namespace DG.EditorTests
             Assert.AreEqual(5, editor.RuntimeExpireAfterTicks);
         }
 
+        [Test]
+        public void ClientWorldDebugEditor_SanitizesLayoutNames()
+        {
+            Assert.AreEqual("two_words", ClientWorldDebugEditor.SanitizeLayoutName(" two words "));
+            Assert.AreEqual(string.Empty, ClientWorldDebugEditor.SanitizeLayoutName("   "));
+            Assert.IsFalse(ClientWorldDebugEditor.SanitizeLayoutName("bad:name").Contains(":"));
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_SaveNamedLayoutsRefreshesPaletteList()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 4, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+            typeof(ClientWorldDebugEditor)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, runner);
+
+            editor.SelectEntity(10);
+            Assert.IsTrue(editor.AddSelectedEntityToSelection());
+            Assert.IsTrue(editor.SaveSelectionAs("palette_a"));
+            Assert.IsTrue(editor.SaveSelectionAs("palette_b"));
+
+            Assert.GreaterOrEqual(editor.SavedLayoutCount, 2);
+            Assert.IsTrue(File.Exists(DebugLayoutPaths.NamedFilePath("palette_a")));
+            Assert.IsTrue(File.Exists(DebugLayoutPaths.NamedFilePath("palette_b")));
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_LoadSavedLayoutSelectsSavedPalette()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 4, 5, Direction.Right, true, true, false, false, 1, false, true, DirectionMask.Left | DirectionMask.Right, false, true, true, 1));
+            var selection = new DebugLayoutSelectionSet();
+            DebugLayoutTooling.SelectRectangle(selection, runner.Context.ClientMapWorld, new Vector2Int(4, 5), new Vector2Int(4, 5), false);
+            string path = DebugLayoutPaths.NamedFilePath("palette_load");
+            Assert.IsTrue(DebugLayoutTooling.TrySaveSelection(selection, "palette_load", path, out string reason), reason);
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+
+            Assert.IsTrue(editor.LoadStructureBlock(path));
+
+            Assert.AreEqual(DebugWorldEditorPaletteKind.SavedStructure, editor.PaletteKind);
+            Assert.AreEqual(DebugLayoutToolState.StructureGhostPlacement, editor.ToolState);
+            Assert.AreEqual(path, editor.SelectedSavedLayoutPath);
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_RuntimeEffectTargetsPreferSelection()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 4, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(11, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 5, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+            typeof(ClientWorldDebugEditor)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, runner);
+
+            editor.SelectEntity(10);
+            Assert.AreEqual(1, editor.RuntimeEffectTargets().Count);
+            Assert.AreEqual(10, editor.RuntimeEffectTargets()[0]);
+
+            Assert.IsTrue(editor.AddSelectedEntityToSelection());
+            editor.SelectEntity(11);
+            Assert.IsTrue(editor.AddSelectedEntityToSelection());
+
+            IReadOnlyList<long> targets = editor.RuntimeEffectTargets();
+
+            Assert.AreEqual(2, targets.Count);
+            Assert.Contains(10, new List<long>(targets));
+            Assert.Contains(11, new List<long>(targets));
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_DeleteSelectionRemovesAllSelectedEntities()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 4, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(11, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 5, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            GameObject submitterObject = new GameObject("Submitter");
+            var submitter = submitterObject.AddComponent<ClientMoveNetworkSubmitter>();
+            typeof(ClientMoveNetworkSubmitter)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(submitter, runner);
+            typeof(ClientMoveNetworkSubmitter)
+                .GetField("serverAuthoritative", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(submitter, false);
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+            typeof(ClientWorldDebugEditor)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, runner);
+            typeof(ClientWorldDebugEditor)
+                .GetField("networkSubmitter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, submitter);
+
+            editor.SelectEntity(10);
+            Assert.IsTrue(editor.AddSelectedEntityToSelection());
+            editor.SelectEntity(11);
+            Assert.IsTrue(editor.AddSelectedEntityToSelection());
+
+            editor.DeleteSelectionOrEntity(0);
+
+            Assert.AreEqual(0, editor.SelectionCount);
+            Assert.IsFalse(runner.Context.ClientMapWorld.TryGetSnapshot(10, out _));
+            Assert.IsFalse(runner.Context.ClientMapWorld.TryGetSnapshot(11, out _));
+        }
+
+        [Test]
+        public void DebugLayoutSelection_ExportsStructureBlockWithAnchor()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 4, 5, Direction.Right, true, true, false, false, 1, false, true, DirectionMask.Left | DirectionMask.Right, false, true, true, 1));
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(11, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 5, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            var selection = new DebugLayoutSelectionSet();
+
+            Assert.AreEqual(2, DebugLayoutTooling.SelectRectangle(selection, runner.Context.ClientMapWorld, new Vector2Int(4, 5), new Vector2Int(5, 5), false));
+            DebugStructureBlockDocument document = selection.ToStructureBlock("two");
+
+            Assert.AreEqual(2, document.Entries.Count);
+            Assert.AreEqual(4, document.AnchorX);
+            Assert.AreEqual(5, document.AnchorY);
+            Assert.AreEqual(0, document.Entries[0].OffsetX);
+            Assert.AreEqual((int)(DirectionMask.Left | DirectionMask.Right), document.Entries[0].PortLocalPorts);
+            Assert.IsTrue(document.Entries[0].RuntimeBlocking);
+            Assert.IsTrue(document.Entries[0].RuntimePushable);
+            Assert.AreEqual((int)(DirectionMask.Left | DirectionMask.Right), document.Entries[0].RuntimePortLocalPorts);
+        }
+
+        [Test]
+        public void DebugStructureBlockStorage_RoundTripsRuntimeComponents()
+        {
+            var document = new DebugStructureBlockDocument
+            {
+                Name = "runtime",
+                Entries =
+                {
+                    new DebugStructureBlockEntry
+                    {
+                        Alias = "a",
+                        ConfigId = DefaultWorldConfig.BlockerConfigId,
+                        Direction = "Right",
+                        RuntimeBlocking = true,
+                        RuntimeAutoMove = true,
+                        RuntimePushable = true,
+                        RuntimePortLocalPorts = (int)(DirectionMask.Up | DirectionMask.Right),
+                        RuntimeImmobile = true,
+                        AutoMoveIntervalTicks = 3
+                    }
+                }
+            };
+
+            string json = DebugStructureBlockStorage.ToJson(document);
+            bool parsed = DebugStructureBlockStorage.TryParse(json, ClientGameConfigProviderFactory.Create(), out DebugStructureBlockDocument parsedDocument, out IReadOnlyList<string> errors);
+            IReadOnlyList<DebugStructureSpawnRequest> requests = DebugStructureBlockStorage.CreateSpawnRequests(parsedDocument, 7, 8);
+
+            Assert.IsTrue(parsed, string.Join("|", errors));
+            Assert.AreEqual(1, requests.Count);
+            Assert.IsTrue(requests[0].RuntimeBlocking);
+            Assert.IsTrue(requests[0].RuntimeAutoMove);
+            Assert.IsTrue(requests[0].RuntimePushable);
+            Assert.AreEqual(DirectionMask.Up | DirectionMask.Right, requests[0].RuntimePortLocalPorts);
+            Assert.IsTrue(requests[0].RuntimeImmobile);
+            Assert.AreEqual(3, requests[0].AutoMoveIntervalTicks);
+        }
+
+        [Test]
+        public void DebugLayoutSelection_CreateMoveRequestsDoesNotModifyWorld()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 4, 5, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            var selection = new DebugLayoutSelectionSet();
+            DebugLayoutTooling.SelectRectangle(selection, runner.Context.ClientMapWorld, new Vector2Int(4, 5), new Vector2Int(4, 5), false);
+
+            var requests = selection.CreateMoveRequests(new Vector2Int(9, 9), runner.Context.ClientMapWorld, out var skipped);
+
+            Assert.AreEqual(1, requests.Count);
+            Assert.AreEqual(0, skipped.Count);
+            Assert.AreEqual(new Vector2Int(9, 9), requests[0].TargetCoord);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(10, out Vector2Int original));
+            Assert.AreEqual(new Vector2Int(4, 5), original);
+        }
+
+        [Test]
+        public void DebugLayoutSelection_CopyPreservesRelativeLayoutDirectionAndPort()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 2, 2, Direction.Down, true, true, false, false, 1, false, true, DirectionMask.Left | DirectionMask.Right, false, true, true, 1));
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(11, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 3, 2, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            var selection = new DebugLayoutSelectionSet();
+            DebugLayoutTooling.SelectRectangle(selection, runner.Context.ClientMapWorld, new Vector2Int(2, 2), new Vector2Int(3, 2), false);
+
+            var requests = DebugLayoutTooling.CreateCopyRequests(selection, new Vector2Int(8, 8));
+
+            Assert.AreEqual(2, requests.Count);
+            Assert.AreEqual(new Vector2Int(8, 8), new Vector2Int(requests[0].X, requests[0].Y));
+            Assert.AreEqual(new Vector2Int(9, 8), new Vector2Int(requests[1].X, requests[1].Y));
+            Assert.AreEqual(Direction.Down, requests[0].Direction);
+            Assert.AreEqual(DirectionMask.Left | DirectionMask.Right, requests[0].PortLocalPorts);
+        }
+
+        [Test]
+        public void DebugLayoutSelection_SkipsDeletedEntity()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(new EntitySnapshot(10, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 2, 2, Direction.None, true, true, false, false, 1, false, true, DirectionMask.None, false, true, true, 1));
+            var selection = new DebugLayoutSelectionSet();
+            DebugLayoutTooling.SelectRectangle(selection, runner.Context.ClientMapWorld, new Vector2Int(2, 2), new Vector2Int(2, 2), false);
+            runner.Context.ClientMapWorld.RemoveEntity(10);
+
+            var requests = selection.CreateMoveRequests(new Vector2Int(8, 8), runner.Context.ClientMapWorld, out var skipped);
+
+            Assert.AreEqual(0, requests.Count);
+            Assert.AreEqual(1, skipped.Count);
+            Assert.IsTrue(skipped[0].Contains("entity missing"));
+        }
+
+        [Test]
+        public void PortDebugVisualization_UsesFinalPortMaskAndFindsConnection()
+        {
+            var first = new EntitySnapshot(10, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, Direction.Right, true, true, false, false, 1, false, true, DirectionMask.Right, false, true, true, 1);
+            var second = new EntitySnapshot(11, DefaultWorldConfig.BlockerConfigId, DefaultWorldConfig.BlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 1, 0, Direction.Right, true, true, false, false, 1, false, false, DirectionMask.Left, false, true, true, 1);
+
+            DirectionMask firstWorld = PortDebugVisualizationUtility.GetWorldPorts(first);
+            var connections = PortDebugVisualizationUtility.FindConnections(new[] { first, second });
+
+            Assert.AreEqual(DirectionMask.Right, firstWorld);
+            Assert.AreEqual(1, connections.Count);
+            Assert.AreEqual(10, connections[0].FromEntityId);
+            Assert.AreEqual(11, connections[0].ToEntityId);
+        }
+
+        [Test]
+        public void PortDebugVisualization_RuntimePortMaskChangesFinalView()
+        {
+            var before = new EntitySnapshot(10, DefaultWorldConfig.BlockerConfigId, DefaultWorldConfig.BlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, Direction.Right, true, true, false, false, 1, false, false, DirectionMask.None, false, true, true, 1);
+            var after = new EntitySnapshot(10, DefaultWorldConfig.BlockerConfigId, DefaultWorldConfig.BlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, Direction.Right, true, true, false, false, 1, false, false, DirectionMask.Up, false, true, true, 2);
+
+            Assert.IsFalse(PortDebugVisualizationUtility.HasPorts(before));
+            Assert.IsTrue(PortDebugVisualizationUtility.HasPorts(after));
+            Assert.AreEqual(DirectionMask.Up, PortDebugVisualizationUtility.GetWorldPorts(after));
+        }
+
+        [Test]
+        public void ClientWorldDebugEditor_RuntimePortVisualizationUsesOneMarkerPerDirection()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            var snapshot = new EntitySnapshot(10, DefaultWorldConfig.BlockerConfigId, DefaultWorldConfig.BlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, Direction.None, true, true, false, false, 1, false, false, DirectionMask.None, false, true, true, 1);
+            runner.Context.ClientMapWorld.ApplySnapshot(snapshot);
+            GameObject gameObject = new GameObject("DebugEditor");
+            var editor = gameObject.AddComponent<ClientWorldDebugEditor>();
+            typeof(ClientWorldDebugEditor)
+                .GetMethod("Awake", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Invoke(editor, null);
+            typeof(ClientWorldDebugEditor)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(editor, runner);
+            var runtimePortMasks = (Dictionary<long, DirectionMask>)typeof(ClientWorldDebugEditor)
+                .GetField("runtimePortMasks", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .GetValue(editor);
+            runtimePortMasks[10] = DirectionMask.Left | DirectionMask.Right;
+
+            typeof(ClientWorldDebugEditor)
+                .GetMethod("UpdateViews", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Invoke(editor, null);
+
+            Assert.AreEqual(2, editor.ActiveRuntimePortViewCount);
+        }
+
+        [Test]
+        public void PortDebugVisualization_StructureGhostReportsInternalAndBoundaryPorts()
+        {
+            var document = new DebugStructureBlockDocument
+            {
+                Name = "ports",
+                Entries =
+                {
+                    new DebugStructureBlockEntry { Alias = "a", ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId, OffsetX = 0, OffsetY = 0, Direction = "None", PortLocalPorts = (int)(DirectionMask.Right | DirectionMask.Up) },
+                    new DebugStructureBlockEntry { Alias = "b", ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId, OffsetX = 1, OffsetY = 0, Direction = "None", PortLocalPorts = (int)DirectionMask.Left }
+                }
+            };
+
+            var cells = PortDebugVisualizationUtility.BuildGhostCells(document, new Vector2Int(10, 20));
+
+            Assert.AreEqual(2, cells.Count);
+            Assert.AreEqual(new Vector2Int(10, 20), cells[0].Coord);
+            Assert.IsTrue(cells[0].HasInternalConnection);
+            Assert.IsTrue(cells[0].BoundaryPorts.Contains(Direction.Up));
+            Assert.IsFalse(cells[0].BoundaryPorts.Contains(Direction.Right));
+        }
+
         private static ClientWorldRunner CreateRunner()
         {
             GameObject gameObject = new GameObject("Runner");
@@ -241,6 +609,21 @@ namespace DG.EditorTests
             ClientWorldRunner runner = gameObject.AddComponent<ClientWorldRunner>();
             runner.Initialize(world.EnsureWorld());
             return runner;
+        }
+
+        private static void DeleteLayoutIfExists(string name)
+        {
+            string path = DebugLayoutPaths.NamedFilePath(name);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            string metaPath = path + ".meta";
+            if (File.Exists(metaPath))
+            {
+                File.Delete(metaPath);
+            }
         }
 
     }

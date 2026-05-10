@@ -127,7 +127,7 @@ Unity Demo SHALL 提供一个 Play Mode 可用的 Runtime 调试 UI，用于选�
 ## ADDED Requirements
 
 ### Requirement: 调试结构块持久化
-系统 SHALL 提供可验证的调试结构块持久化格式，用于保存、加载和反序列化开发调试结构。结构块 MUST 保留实体相对布局、方向和 port mask，并 MUST 通过当前实体配置 provider 校验 configId。结构块 SHALL 属于调试和测试复现资产，MUST NOT 成为正式运行时配置源。
+系统 SHALL 提供可验证的调试结构块持久化格式，用于保存、加载和反序列化开发调试结构。结构块 MUST 保留实体相对布局、方向和 port mask，并 MUST 通过当前实体配置 provider 校验 configId。第一版结构块 MUST NOT 保存 runtime effect 实例、剩余过期 tick 或临时调试 tag 状态。结构块 SHALL 属于调试和测试复现资产，MUST NOT 成为正式运行时配置源。
 
 #### Scenario: 保存后加载保持结构块
 - **WHEN** 一个包含多个实体的调试结构块被保存为 JSON
@@ -149,6 +149,18 @@ Unity Demo SHALL 提供一个 Play Mode 可用的 Runtime 调试 UI，用于选�
 - **WHEN** 开发者加载一个格式错误或 schema 不兼容的结构块 JSON
 - **THEN** 反序列化失败并返回可读 reason
 - **AND** 当前选择集、当前工具模式和 `ClientMapWorld` 保持不变
+
+#### Scenario: 默认保存路径和扩展名
+- **WHEN** 开发者保存调试结构块
+- **THEN** 工具默认保存到 `Assets/DebugLayouts`
+- **AND** 文件扩展名使用 `.dgdebuglayout.json`
+- **AND** 文件不会写入 `StreamingAssets/GameConfig`
+
+#### Scenario: runtime effect 不随结构块保存
+- **WHEN** 选择集中的 entity 带有 runtime effect 或临时调试 tag 状态
+- **AND** 开发者导出调试结构块
+- **THEN** 结构块只保存实体基础状态、相对坐标、方向和 port mask
+- **AND** runtime effect 实例、剩余过期 tick 和临时 tag 调试状态不会进入结构块
 
 ### Requirement: 调试结构块和 port 可视化验证
 系统 SHALL 为调试结构块、选择集导出、结构块实例化、批量移动、复制结构和 port 调试可视化提供 Unity TestFramework EditMode 覆盖，并 SHALL 提供手动端到端验证路径证明服务端权威同步仍然成立。

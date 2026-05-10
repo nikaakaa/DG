@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using DG.GameCore;
 using TMPro;
@@ -67,6 +68,9 @@ namespace DG.Map
         private bool draggingPanel;
         private Vector2 dragStartMouse;
         private Vector2 dragStartAnchored;
+        private readonly DebugLayoutSelectionSet selection = new();
+        private DebugStructureBlockDocument loadedStructureBlock;
+        private DebugLayoutToolState toolState;
 
         public DGDebugPanelMode Mode => mode;
         public DGDebugPanelTool CurrentTool => currentTool;
@@ -74,6 +78,8 @@ namespace DG.Map
         public string LastResult => lastResult;
         public bool Visible => visible;
         public long SelectedEntityId => selectedEntityId;
+        public int SelectionCount => selection.Count;
+        public DebugLayoutToolState ToolState => toolState;
 
         private void Awake()
         {
@@ -178,6 +184,251 @@ namespace DG.Map
             dragging = false;
             lastResult = "selected " + entityId;
             Rebuild();
+        }
+
+        public bool AddSelectedEntityToSelection()
+        {
+            if (selectedEntityId == 0 || runner == null || runner.Context == null)
+            {
+                lastResult = "select entity first";
+                Rebuild();
+                return false;
+            }
+
+            if (!runner.Context.ClientMapWorld.TryGetSnapshot(selectedEntityId, out EntitySnapshot snapshot))
+            {
+                lastResult = "selected entity missing";
+                Rebuild();
+                return false;
+            }
+
+            selection.Add(snapshot);
+            toolState = DebugLayoutToolState.SelectionPreview;
+            lastResult = "selection count: " + selection.Count;
+            Rebuild();
+            return true;
+        }
+
+        public void ClearSelection()
+        {
+            selection.Clear();
+            toolState = DebugLayoutToolState.SingleCellTool;
+            lastResult = "selection cleared";
+            Rebuild();
+        }
+
+        public bool SaveSelectionToDefault()
+        {
+            bool saved = DebugLayoutTooling.TrySaveSelection(selection, "debug-selection", DebugLayoutPaths.DefaultFilePath(), out string reason);
+            lastResult = saved ? "saved " + DebugLayoutPaths.DefaultFilePath() : "save failed: " + reason;
+            Rebuild();
+            return saved;
+        }
+
+        public bool LoadStructureBlockFromDefault()
+        {
+            bool loaded = DebugLayoutTooling.TryLoadStructureBlock(DebugLayoutPaths.DefaultFilePath(), ClientGameConfigProviderFactory.Create(), out loadedStructureBlock, out string reason);
+            if (loaded)
+            {
+                toolState = DebugLayoutToolState.StructureGhostPlacement;
+            }
+
+            lastResult = loaded ? "loaded structure: " + loadedStructureBlock.Name : "load failed: " + reason;
+            Rebuild();
+            return loaded;
+        }
+
+        public IReadOnlyList<DebugStructureSpawnRequest> PreviewLoadedStructure(Vector2Int anchor)
+        {
+            if (loadedStructureBlock == null)
+            {
+                return Array.Empty<DebugStructureSpawnRequest>();
+            }
+
+            return DebugStructureBlockStorage.CreateSpawnRequests(loadedStructureBlock, anchor.x, anchor.y);
+        }
+
+        public void CopySelectionTo(Vector2Int targetAnchor)
+        {
+            SubmitSpawnRequests(DebugLayoutTooling.CreateCopyRequests(selection, targetAnchor));
+        }
+
+        public void PlaceLoadedStructure(Vector2Int targetAnchor)
+        {
+            SubmitSpawnRequests(PreviewLoadedStructure(targetAnchor));
+        }
+
+        public void MoveSelectionTo(Vector2Int targetAnchor)
+        {
+            if (runner == null || runner.Context == null)
+            {
+                lastResult = "runner unavailable";
+                Rebuild();
+                return;
+            }
+
+            IReadOnlyList<DebugBatchMoveRequest> requests = selection.CreateMoveRequests(targetAnchor, runner.Context.ClientMapWorld, out IReadOnlyList<string> skipped);
+            if (requests.Count == 0)
+            {
+                lastResult = skipped.Count > 0 ? string.Join("|", skipped) : "selection is empty";
+                Rebuild();
+                return;
+            }
+
+            if (networkSubmitter == null)
+            {
+                networkSubmitter = FindObjectOfType<ClientMoveNetworkSubmitter>();
+            }
+
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                Rebuild();
+                return;
+            }
+
+            toolState = DebugLayoutToolState.SubmittingBatch;
+            int successCount = 0;
+            int failCount = skipped.Count;
+            string lastReason = skipped.Count > 0 ? skipped[skipped.Count - 1] : string.Empty;
+            foreach (DebugBatchMoveRequest request in requests)
+            {
+                networkSubmitter.DebugMove(request.EntityId, request.TargetCoord, (success, reason) =>
+                {
+                    if (success)
+                    {
+                        successCount++;
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = reason;
+                    }
+
+                    lastResult = "batch move ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                    Rebuild();
+                });
+            }
+        }
+
+        public void DeleteSelectionOrEntity(long fallbackEntityId)
+        {
+            if (networkSubmitter == null)
+            {
+                networkSubmitter = FindObjectOfType<ClientMoveNetworkSubmitter>();
+            }
+
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                Rebuild();
+                return;
+            }
+
+            IReadOnlyList<EntitySnapshot> snapshots = selection.Snapshots();
+            if (snapshots.Count > 0)
+            {
+                DeleteEntities(snapshots);
+                return;
+            }
+
+            if (fallbackEntityId == 0)
+            {
+                lastResult = "select entity first";
+                Rebuild();
+                return;
+            }
+
+            networkSubmitter.DebugRemove(fallbackEntityId, (success, reason) =>
+            {
+                if (success)
+                {
+                    selection.Remove(fallbackEntityId);
+                    if (selectedEntityId == fallbackEntityId)
+                    {
+                        selectedEntityId = 0;
+                    }
+                }
+
+                lastResult = success ? "removed " + fallbackEntityId : "remove failed: " + reason;
+                Rebuild();
+            });
+        }
+
+        private void DeleteEntities(IReadOnlyList<EntitySnapshot> snapshots)
+        {
+            int successCount = 0;
+            int failCount = 0;
+            string lastReason = string.Empty;
+            for (int i = 0; i < snapshots.Count; i++)
+            {
+                long entityId = snapshots[i].EntityId;
+                networkSubmitter.DebugRemove(entityId, (success, reason) =>
+                {
+                    if (success)
+                    {
+                        successCount++;
+                        selection.Remove(entityId);
+                        if (selectedEntityId == entityId)
+                        {
+                            selectedEntityId = 0;
+                        }
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = reason;
+                    }
+
+                    lastResult = "batch delete ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                    Rebuild();
+                });
+            }
+        }
+
+        private void SubmitSpawnRequests(IReadOnlyList<DebugStructureSpawnRequest> requests)
+        {
+            if (requests == null || requests.Count == 0)
+            {
+                lastResult = "structure is empty";
+                Rebuild();
+                return;
+            }
+
+            if (networkSubmitter == null)
+            {
+                networkSubmitter = FindObjectOfType<ClientMoveNetworkSubmitter>();
+            }
+
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                Rebuild();
+                return;
+            }
+
+            toolState = DebugLayoutToolState.SubmittingBatch;
+            int successCount = 0;
+            int failCount = 0;
+            string lastReason = string.Empty;
+            foreach (DebugStructureSpawnRequest request in requests)
+            {
+                networkSubmitter.DebugSpawn(0, request.ConfigId, new Vector2Int(request.X, request.Y), request.Direction, request.PlayerId, request.AutoMoveIntervalTicks, (success, reason, entityId) =>
+                {
+                    if (success)
+                    {
+                        successCount++;
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = reason;
+                    }
+
+                    lastResult = "batch spawn ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                    Rebuild();
+                });
+            }
         }
 
         public bool TryPickCell(Vector3 screenPosition, out Vector2Int coord)
@@ -350,6 +601,17 @@ namespace DG.Map
             {
                 SelectTool(DGDebugPanelTool.Delete);
             }
+            if (Input.GetKeyDown(KeyCode.Delete) || Input.GetKeyDown(KeyCode.Backspace))
+            {
+                if (selection.Count > 0 || selectedEntityId != 0)
+                {
+                    DeleteSelectionOrEntity(selectedEntityId);
+                }
+                else
+                {
+                    SelectTool(DGDebugPanelTool.Delete);
+                }
+            }
             if (Input.GetKeyDown(KeyCode.R))
             {
                 RotateDirection();
@@ -388,6 +650,10 @@ namespace DG.Map
                 }
 
                 SelectEntity(pickedEntityId);
+                if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
+                {
+                    AddSelectedEntityToSelection();
+                }
                 return;
             }
 
@@ -437,11 +703,7 @@ namespace DG.Map
             selectedEntityId = entityId;
             if (currentTool == DGDebugPanelTool.Delete)
             {
-                networkSubmitter.DebugRemove(entityId, (success, reason) =>
-                {
-                    lastResult = success ? "removed " + entityId : "remove failed: " + reason;
-                    Rebuild();
-                });
+                DeleteSelectionOrEntity(entityId);
                 return;
             }
 
@@ -502,6 +764,7 @@ namespace DG.Map
             AddHeader(mode == DGDebugPanelMode.EntityGenerate ? "Entity Generate" : "Entity Manage");
             AddText("Tool: " + currentTool + "   Direction: " + buildDirection);
             AddText("Hover: " + (hasHover ? hoveredCoord.ToString() : "-") + "   Selected: " + (selectedEntityId == 0 ? "-" : selectedEntityId.ToString()));
+            AddText("State: " + toolState + "   Selection: " + selection.Count);
             AddText("Result: " + lastResult);
 
             if (mode == DGDebugPanelMode.EntityGenerate)
@@ -558,6 +821,30 @@ namespace DG.Map
             {
                 AddButton("5 Select", () => SelectTool(DGDebugPanelTool.Select));
             }
+            AddHeader("Structure Block");
+            AddText("Path: Assets/DebugLayouts/" + DebugLayoutPaths.DefaultFileName);
+            AddButton("Add Selected To Structure", () => AddSelectedEntityToSelection());
+            AddButton("Clear Structure Selection", ClearSelection);
+            AddButton("Save Structure", () => SaveSelectionToDefault());
+            AddButton("Load Structure", () => LoadStructureBlockFromDefault());
+            if (hasHover)
+            {
+                AddButton("Copy Selection Here", () => CopySelectionTo(hoveredCoord));
+                AddButton("Place Loaded Here", () => PlaceLoadedStructure(hoveredCoord));
+                AddButton("Move Selection Here", () => MoveSelectionTo(hoveredCoord));
+            }
+
+            if (hasHover && loadedStructureBlock != null)
+            {
+                IReadOnlyList<DebugStructureGhostCell> cells = PortDebugVisualizationUtility.BuildGhostCells(loadedStructureBlock, hoveredCoord);
+                int boundaryPorts = 0;
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    boundaryPorts += PortDebugVisualizationUtility.Directions(cells[i].BoundaryPorts).Count;
+                }
+
+                AddText("Ghost cells:" + cells.Count + " boundary ports:" + boundaryPorts);
+            }
             AddHeader("World Snapshots");
 
             if (runner == null)
@@ -573,7 +860,9 @@ namespace DG.Map
 
             foreach (EntitySnapshot snapshot in runner.Context.ClientMapWorld.CreateSnapshot())
             {
-                AddText(snapshot.EntityId + " config:" + snapshot.ConfigId + " (" + snapshot.X + "," + snapshot.Y + ") dir:" + snapshot.Direction);
+                DirectionMask worldPorts = PortDebugVisualizationUtility.GetWorldPorts(snapshot);
+                string port = snapshot.PortLocalPorts == DirectionMask.None ? "-" : snapshot.PortLocalPorts + " world:" + worldPorts;
+                AddText(snapshot.EntityId + " config:" + snapshot.ConfigId + " (" + snapshot.X + "," + snapshot.Y + ") dir:" + snapshot.Direction + " port:" + port);
             }
         }
 

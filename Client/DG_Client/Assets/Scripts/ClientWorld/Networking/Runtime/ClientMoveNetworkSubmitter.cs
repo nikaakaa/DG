@@ -96,6 +96,12 @@ namespace DG.Map
 
         public void DebugRemove(long entityId, Action<bool, string> completed)
         {
+            if (!serverAuthoritative)
+            {
+                completed?.Invoke(TryRemoveLocalEntity(entityId, out string localReason), localReason);
+                return;
+            }
+
             if (!CanSubmitDebugRequest(out string reason))
             {
                 completed?.Invoke(false, reason);
@@ -517,6 +523,24 @@ namespace DG.Map
             }
 
             world.MarkDirty(entityId);
+            return true;
+        }
+
+        private bool TryRemoveLocalEntity(long entityId, out string reason)
+        {
+            reason = string.Empty;
+            if (runner == null || runner.Context == null)
+            {
+                reason = "runner unavailable";
+                return false;
+            }
+
+            if (!runner.Context.ClientMapWorld.RemoveEntity(entityId))
+            {
+                reason = "entity missing";
+                return false;
+            }
+
             return true;
         }
 

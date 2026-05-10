@@ -17,7 +17,9 @@ namespace DG.Map
         [SerializeField] private Color portConnectorColor = new Color(0.25f, 1f, 0.9f, 1f);
         [SerializeField] private Color portLineColor = new Color(0.02f, 0.14f, 0.14f, 1f);
         private readonly Dictionary<long, Transform> EntityViews = new();
+        private readonly Dictionary<string, LineRenderer> portConnectionLines = new();
         private Transform entityRoot;
+        private Transform portConnectionRoot;
 
         private void Awake()
         {
@@ -28,6 +30,8 @@ namespace DG.Map
 
             entityRoot = new GameObject("Entities").transform;
             entityRoot.SetParent(transform, false);
+            portConnectionRoot = new GameObject("PortConnections").transform;
+            portConnectionRoot.SetParent(transform, false);
             DrawGrid();
         }
 
@@ -49,6 +53,7 @@ namespace DG.Map
             }
 
             RemoveMissingViews(seen);
+            ConfigurePortConnections(snapshots);
         }
 
         private Transform GetOrCreateEntityView(long entityId)
@@ -90,14 +95,14 @@ namespace DG.Map
 
         private void ConfigurePortLine(LineRenderer lineRenderer, EntitySnapshot snapshot)
         {
-            bool showPort = snapshot.ConfigId == DefaultWorldConfig.PortConnectorBlockerConfigId;
+            bool showPort = PortDebugVisualizationUtility.HasPorts(snapshot);
             lineRenderer.enabled = showPort;
             if (!showPort)
             {
                 return;
             }
 
-            DirectionMask worldPorts = (DirectionMask.Left | DirectionMask.Right).RotateBy(snapshot.Direction);
+            DirectionMask worldPorts = PortDebugVisualizationUtility.GetWorldPorts(snapshot);
             lineRenderer.useWorldSpace = false;
             lineRenderer.loop = false;
             lineRenderer.widthMultiplier = 0.12f;
@@ -168,6 +173,50 @@ namespace DG.Map
 
                 EntityViews.Remove(entityId);
             }
+        }
+
+        private void ConfigurePortConnections(IReadOnlyList<EntitySnapshot> snapshots)
+        {
+            IReadOnlyList<PortDebugConnection> connections = PortDebugVisualizationUtility.FindConnections(snapshots);
+            var seen = new HashSet<string>();
+            foreach (PortDebugConnection connection in connections)
+            {
+                seen.Add(connection.Key);
+                LineRenderer line = GetOrCreatePortConnectionLine(connection.Key);
+                line.enabled = true;
+                line.useWorldSpace = false;
+                line.loop = false;
+                line.widthMultiplier = 0.06f;
+                line.positionCount = 2;
+                line.material = CreateMaterial(portLineColor);
+                line.startColor = portLineColor;
+                line.endColor = portLineColor;
+                line.sortingOrder = 13;
+                line.SetPosition(0, ToWorldPosition(connection.FromCoord, -0.04f));
+                line.SetPosition(1, ToWorldPosition(connection.ToCoord, -0.04f));
+            }
+
+            foreach (KeyValuePair<string, LineRenderer> pair in portConnectionLines)
+            {
+                if (!seen.Contains(pair.Key) && pair.Value != null)
+                {
+                    pair.Value.enabled = false;
+                }
+            }
+        }
+
+        private LineRenderer GetOrCreatePortConnectionLine(string key)
+        {
+            if (portConnectionLines.TryGetValue(key, out LineRenderer found) && found != null)
+            {
+                return found;
+            }
+
+            GameObject lineObject = new GameObject("PortConnection_" + key);
+            lineObject.transform.SetParent(portConnectionRoot, false);
+            LineRenderer line = lineObject.AddComponent<LineRenderer>();
+            portConnectionLines[key] = line;
+            return line;
         }
 
         private void DrawGrid()

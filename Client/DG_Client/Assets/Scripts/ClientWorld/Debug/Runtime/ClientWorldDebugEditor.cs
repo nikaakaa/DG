@@ -1,5 +1,6 @@
 using DG.GameCore;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 namespace DG.Map
@@ -11,8 +12,19 @@ namespace DG.Map
         Conveyor = 2,
         PortConnector = 3,
         Select = 4,
-        Drag = 5,
-        Delete = 6
+        Delete = 5
+    }
+
+    public enum DebugWorldEditorMode
+    {
+        Layout = 0
+    }
+
+    public enum DebugWorldEditorPaletteKind
+    {
+        None = 0,
+        BaseEntity = 1,
+        SavedStructure = 2
     }
 
     public sealed class ClientWorldDebugEditor : MonoBehaviour
@@ -23,24 +35,57 @@ namespace DG.Map
         [SerializeField] private float cellSize = 1f;
         [SerializeField] private int runtimeAutoMoveIntervalTicks = 1;
         [SerializeField] private int runtimeExpireAfterTicks;
+        [SerializeField] private string structureName = "debug-selection";
 
-        private DebugWorldEditorSlot currentSlot;
+        private DebugWorldEditorSlot currentSlot = DebugWorldEditorSlot.Select;
+        private DebugWorldEditorPaletteKind paletteKind;
+        private string selectedSavedLayoutPath = string.Empty;
         private Direction buildDirection = Direction.Right;
         private Vector2Int hoveredCoord;
         private bool hasHover;
         private long selectedEntityId;
-        private bool dragging;
         private string lastResult = "Debug editor ready";
         private Transform hoverView;
         private Transform ghostView;
+        private Transform structureGhostRoot;
         private readonly Dictionary<string, long> runtimeEffectIds = new();
+        private readonly Dictionary<long, DirectionMask> runtimePortMasks = new();
+        private readonly List<Transform> structureGhostViews = new();
+        private readonly List<Transform> runtimePortViews = new();
+        private readonly List<Transform> selectionBoxViews = new();
+        private readonly DebugLayoutSelectionSet selection = new();
+        private DebugStructureBlockDocument loadedStructureBlock;
+        private DebugLayoutToolState toolState;
+        private bool selectingRectangle;
+        private Vector2Int selectionStartCoord;
+        private bool draggingEntity;
+        private long draggingEntityId;
+        private Vector2Int dragStartCoord;
+        private DebugWorldEditorMode mode;
+        private Rect debugWindowRect = new Rect(16, 12, 500, 620);
+        private Vector2 layoutScroll;
+        private Vector2 savedTableScroll;
+        private Transform runtimePortRoot;
+        private Transform selectionBoxRoot;
+        private string[] savedLayoutFiles = System.Array.Empty<string>();
+        private bool contextMenuOpen;
+        private Rect contextMenuRect = new Rect(0, 0, 260, 360);
+        private Vector2 contextMenuScroll;
 
+        public DebugWorldEditorMode Mode => mode;
         public DebugWorldEditorSlot CurrentSlot => currentSlot;
+        public DebugWorldEditorPaletteKind PaletteKind => paletteKind;
+        public string SelectedSavedLayoutPath => selectedSavedLayoutPath;
+        public string StructureName => structureName;
+        public int SavedLayoutCount => savedLayoutFiles.Length;
         public Direction BuildDirection => buildDirection;
         public string LastResult => lastResult;
         public long SelectedEntityId => selectedEntityId;
         public int RuntimeAutoMoveIntervalTicks => runtimeAutoMoveIntervalTicks;
         public int RuntimeExpireAfterTicks => runtimeExpireAfterTicks;
+        public int SelectionCount => selection.Count;
+        public DebugLayoutToolState ToolState => toolState;
+        public int ActiveRuntimePortViewCount { get; private set; }
 
         private void Awake()
         {
@@ -61,12 +106,39 @@ namespace DG.Map
 
             hoverView = CreateSquareView("DebugHover", new Color(1f, 1f, 1f, 0.25f), 40, 1f);
             ghostView = CreateSquareView("DebugGhost", new Color(1f, 1f, 1f, 0.35f), 41, 0.7f);
+            structureGhostRoot = new GameObject("DebugStructureGhost").transform;
+            structureGhostRoot.SetParent(transform, false);
+            runtimePortRoot = new GameObject("RuntimePortDebug").transform;
+            runtimePortRoot.SetParent(transform, false);
+            selectionBoxRoot = new GameObject("DebugSelectionBox").transform;
+            selectionBoxRoot.SetParent(transform, false);
+            RefreshSavedLayoutFiles();
         }
 
         private void Update()
         {
             UpdateHover();
             UpdateKeyboard();
+            if (IsPointerOverDebugUi(Input.mousePosition))
+            {
+                selectingRectangle = false;
+                UpdateViews();
+                return;
+            }
+
+            if (Input.GetMouseButtonDown(1) && hasHover)
+            {
+                OpenContextMenu(Input.mousePosition);
+                UpdateViews();
+                return;
+            }
+
+            if (UpdatePointerDrag())
+            {
+                UpdateViews();
+                return;
+            }
+
             UpdateViews();
 
             if (!Input.GetMouseButtonDown(0) || !hasHover)
@@ -79,35 +151,42 @@ namespace DG.Map
 
         private void OnGUI()
         {
-            const int slotWidth = 108;
-            const int slotHeight = 42;
-            int totalWidth = slotWidth * 7;
-            int startX = (Screen.width - totalWidth) / 2;
-            int y = Screen.height - slotHeight - 18;
+            debugWindowRect = GUI.Window(4021, debugWindowRect, DrawDebugWindow, "DG Debug");
+            if (contextMenuOpen)
+            {
+                contextMenuRect = GUI.Window(4022, contextMenuRect, DrawContextMenuWindow, "Selection");
+            }
+        }
 
-            DrawSlot(startX, y, slotWidth, slotHeight, DebugWorldEditorSlot.Blocker, "1 Block");
-            DrawSlot(startX + slotWidth, y, slotWidth, slotHeight, DebugWorldEditorSlot.Ball, "2 Ball");
-            DrawSlot(startX + slotWidth * 2, y, slotWidth, slotHeight, DebugWorldEditorSlot.Conveyor, "3 Belt");
-            DrawSlot(startX + slotWidth * 3, y, slotWidth, slotHeight, DebugWorldEditorSlot.PortConnector, "4 Port");
-            DrawSlot(startX + slotWidth * 4, y, slotWidth, slotHeight, DebugWorldEditorSlot.Select, "5 Select");
-            DrawSlot(startX + slotWidth * 5, y, slotWidth, slotHeight, DebugWorldEditorSlot.Drag, "6 Drag");
-            DrawSlot(startX + slotWidth * 6, y, slotWidth, slotHeight, DebugWorldEditorSlot.Delete, "7 Delete");
-
-            GUI.Label(new Rect(18, Screen.height - 74, 560, 24), $"Coord: {(hasHover ? hoveredCoord.ToString() : "-")}  Direction: {buildDirection}  Selected: {selectedEntityId}");
-            GUI.Label(new Rect(18, Screen.height - 48, 820, 24), lastResult);
-            DrawRuntimeEffectPanel();
+        public void SelectMode(DebugWorldEditorMode nextMode)
+        {
+            mode = nextMode;
+            selectingRectangle = false;
         }
 
         public void SelectSlot(DebugWorldEditorSlot slot)
         {
             currentSlot = slot;
-            if (slot != DebugWorldEditorSlot.Drag)
+            if (IsBuildSlot(slot))
             {
-                dragging = false;
-                if (slot != DebugWorldEditorSlot.Select)
-                {
-                    selectedEntityId = 0;
-                }
+                paletteKind = DebugWorldEditorPaletteKind.BaseEntity;
+                selectedSavedLayoutPath = string.Empty;
+                loadedStructureBlock = null;
+                toolState = DebugLayoutToolState.SingleCellTool;
+            }
+
+            if (slot != DebugWorldEditorSlot.Delete && !IsBuildSlot(slot))
+            {
+                paletteKind = DebugWorldEditorPaletteKind.None;
+                selectedSavedLayoutPath = string.Empty;
+                draggingEntity = false;
+            }
+
+            if (slot == DebugWorldEditorSlot.Delete)
+            {
+                paletteKind = DebugWorldEditorPaletteKind.None;
+                selectedSavedLayoutPath = string.Empty;
+                loadedStructureBlock = null;
             }
         }
 
@@ -125,7 +204,251 @@ namespace DG.Map
         public void SelectEntity(long entityId)
         {
             selectedEntityId = entityId;
-            dragging = false;
+            draggingEntity = false;
+        }
+
+        public bool AddSelectedEntityToSelection()
+        {
+            if (selectedEntityId == 0 || runner == null || runner.Context == null)
+            {
+                lastResult = "select entity first";
+                return false;
+            }
+
+            if (!runner.Context.ClientMapWorld.TryGetSnapshot(selectedEntityId, out EntitySnapshot snapshot))
+            {
+                lastResult = "selected entity missing";
+                return false;
+            }
+
+            selection.Add(snapshot);
+            toolState = DebugLayoutToolState.SelectionPreview;
+            lastResult = "selection count: " + selection.Count;
+            return true;
+        }
+
+        public void ClearSelection()
+        {
+            selection.Clear();
+            toolState = DebugLayoutToolState.SingleCellTool;
+            lastResult = "selection cleared";
+        }
+
+        public void SetStructureName(string value)
+        {
+            structureName = value ?? string.Empty;
+        }
+
+        public IReadOnlyList<long> RuntimeEffectTargets()
+        {
+            if (selection.Count > 0)
+            {
+                var targets = new List<long>();
+                foreach (EntitySnapshot snapshot in selection.Snapshots())
+                {
+                    targets.Add(snapshot.EntityId);
+                }
+
+                return targets;
+            }
+
+            if (selectedEntityId != 0)
+            {
+                return new[] { selectedEntityId };
+            }
+
+            return System.Array.Empty<long>();
+        }
+
+        public bool SaveSelectionToDefault()
+        {
+            return SaveSelectionAs(structureName);
+        }
+
+        public bool SaveSelectionAs(string name)
+        {
+            string sanitizedName = SanitizeLayoutName(name);
+            if (string.IsNullOrEmpty(sanitizedName))
+            {
+                lastResult = "save failed: name is empty";
+                return false;
+            }
+
+            string path = DebugLayoutPaths.NamedFilePath(sanitizedName);
+            bool saved = DebugLayoutTooling.TrySaveSelection(selection, sanitizedName, path, out string reason);
+            lastResult = saved ? "saved " + path : "save failed: " + reason;
+            if (saved)
+            {
+                structureName = sanitizedName;
+                RefreshSavedLayoutFiles();
+            }
+
+            return saved;
+        }
+
+        public bool LoadStructureBlockFromDefault()
+        {
+            return LoadStructureBlock(DebugLayoutPaths.DefaultFilePath());
+        }
+
+        public bool LoadStructureBlock(string path)
+        {
+            bool loaded = DebugLayoutTooling.TryLoadStructureBlock(path, ClientGameConfigProviderFactory.Create(), out loadedStructureBlock, out string reason);
+            toolState = loaded ? DebugLayoutToolState.StructureGhostPlacement : toolState;
+            if (loaded)
+            {
+                currentSlot = DebugWorldEditorSlot.Select;
+                paletteKind = DebugWorldEditorPaletteKind.SavedStructure;
+                selectedSavedLayoutPath = path;
+                toolState = DebugLayoutToolState.StructureGhostPlacement;
+            }
+
+            lastResult = loaded ? "loaded structure: " + loadedStructureBlock.Name : "load failed: " + reason;
+            return loaded;
+        }
+
+        public IReadOnlyList<DebugStructureSpawnRequest> PreviewLoadedStructure(Vector2Int anchor)
+        {
+            if (loadedStructureBlock == null)
+            {
+                return new List<DebugStructureSpawnRequest>();
+            }
+
+            return DebugStructureBlockStorage.CreateSpawnRequests(loadedStructureBlock, anchor.x, anchor.y);
+        }
+
+        public void CopySelectionTo(Vector2Int targetAnchor)
+        {
+            SubmitSpawnRequests(DebugLayoutTooling.CreateCopyRequests(selection, targetAnchor));
+        }
+
+        public void PlaceLoadedStructure(Vector2Int targetAnchor)
+        {
+            SubmitSpawnRequests(PreviewLoadedStructure(targetAnchor));
+        }
+
+        public void MoveSelectionTo(Vector2Int targetAnchor)
+        {
+            if (runner == null || runner.Context == null)
+            {
+                lastResult = "runner unavailable";
+                return;
+            }
+
+            IReadOnlyList<DebugBatchMoveRequest> requests = selection.CreateMoveRequests(targetAnchor, runner.Context.ClientMapWorld, out IReadOnlyList<string> skipped);
+            if (requests.Count == 0)
+            {
+                lastResult = skipped.Count > 0 ? string.Join("|", skipped) : "selection is empty";
+                return;
+            }
+
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                return;
+            }
+
+            toolState = DebugLayoutToolState.SubmittingBatch;
+            int successCount = 0;
+            int failCount = skipped.Count;
+            string lastReason = skipped.Count > 0 ? skipped[skipped.Count - 1] : string.Empty;
+            foreach (DebugBatchMoveRequest request in requests)
+            {
+                networkSubmitter.DebugMove(request.EntityId, request.TargetCoord, (success, reason) =>
+                    {
+                        if (success)
+                        {
+                            successCount++;
+                        }
+                        else
+                        {
+                            failCount++;
+                            lastReason = reason;
+                        }
+
+                        lastResult = "batch move ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                    });
+            }
+        }
+
+        public void DeleteSelectionOrEntity(long fallbackEntityId)
+        {
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                return;
+            }
+
+            IReadOnlyList<EntitySnapshot> snapshots = selection.Snapshots();
+            if (snapshots.Count > 0)
+            {
+                DeleteEntities(snapshots);
+                return;
+            }
+
+            if (fallbackEntityId == 0)
+            {
+                lastResult = "select entity first";
+                return;
+            }
+
+            networkSubmitter.DebugRemove(fallbackEntityId, (success, reason) =>
+            {
+                if (success)
+                {
+                    selection.Remove(fallbackEntityId);
+                    if (selectedEntityId == fallbackEntityId)
+                    {
+                        selectedEntityId = 0;
+                    }
+                }
+
+                lastResult = success ? "removed " + fallbackEntityId : "remove failed: " + reason;
+            });
+        }
+
+        private void DeleteEntities(IReadOnlyList<EntitySnapshot> snapshots)
+        {
+            int successCount = 0;
+            int failCount = 0;
+            string lastReason = string.Empty;
+            for (int i = 0; i < snapshots.Count; i++)
+            {
+                long entityId = snapshots[i].EntityId;
+                networkSubmitter.DebugRemove(entityId, (success, reason) =>
+                {
+                    if (success)
+                    {
+                        successCount++;
+                        selection.Remove(entityId);
+                        if (selectedEntityId == entityId)
+                        {
+                            selectedEntityId = 0;
+                        }
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = reason;
+                    }
+
+                    lastResult = "batch delete ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                });
+            }
+        }
+
+        public void MoveEntity(long entityId, Vector2Int targetCoord)
+        {
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                return;
+            }
+
+            networkSubmitter.DebugMove(entityId, targetCoord, (success, reason) =>
+            {
+                lastResult = success ? $"moved {entityId} to {targetCoord}" : $"move failed: {reason}";
+            });
         }
 
         public void SetRuntimeAutoMoveIntervalTicks(int value)
@@ -159,38 +482,166 @@ namespace DG.Map
 
         private void UpdateKeyboard()
         {
-            if (Input.GetKeyDown(KeyCode.Alpha1))
+            if (Input.GetKeyDown(KeyCode.Tab))
             {
-                SelectSlot(DebugWorldEditorSlot.Blocker);
+                SelectMode(DebugWorldEditorMode.Layout);
             }
-            if (Input.GetKeyDown(KeyCode.Alpha2))
-            {
-                SelectSlot(DebugWorldEditorSlot.Ball);
-            }
-            if (Input.GetKeyDown(KeyCode.Alpha3))
-            {
-                SelectSlot(DebugWorldEditorSlot.Conveyor);
-            }
-            if (Input.GetKeyDown(KeyCode.Alpha4))
-            {
-                SelectSlot(DebugWorldEditorSlot.PortConnector);
-            }
-            if (Input.GetKeyDown(KeyCode.Alpha5))
+            if (Input.GetKeyDown(KeyCode.Q))
             {
                 SelectSlot(DebugWorldEditorSlot.Select);
             }
-            if (Input.GetKeyDown(KeyCode.Alpha6))
+            if (Input.GetKeyDown(KeyCode.F1))
             {
-                SelectSlot(DebugWorldEditorSlot.Drag);
+                SelectMode(DebugWorldEditorMode.Layout);
             }
-            if (Input.GetKeyDown(KeyCode.Alpha7))
+            if (Input.GetKeyDown(KeyCode.Alpha1))
             {
-                SelectSlot(DebugWorldEditorSlot.Delete);
+                if (mode == DebugWorldEditorMode.Layout)
+                {
+                    SelectSlot(DebugWorldEditorSlot.Blocker);
+                }
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha2))
+            {
+                if (mode == DebugWorldEditorMode.Layout)
+                {
+                    SelectSlot(DebugWorldEditorSlot.Ball);
+                }
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha3))
+            {
+                if (mode == DebugWorldEditorMode.Layout)
+                {
+                    SelectSlot(DebugWorldEditorSlot.Conveyor);
+                }
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha4) && mode == DebugWorldEditorMode.Layout)
+            {
+                SelectSlot(DebugWorldEditorSlot.PortConnector);
+            }
+            if (Input.GetKeyDown(KeyCode.Delete) || Input.GetKeyDown(KeyCode.Backspace))
+            {
+                if (selection.Count > 0 || selectedEntityId != 0)
+                {
+                    DeleteSelectionOrEntity(selectedEntityId);
+                }
+                else
+                {
+                    SelectSlot(DebugWorldEditorSlot.Delete);
+                }
+            }
+            if (Input.GetKeyDown(KeyCode.P))
+            {
+                ApplyRuntimeEffect(RuntimeEffectKind.TemporaryPort);
+            }
+            if (Input.GetKeyDown(KeyCode.O))
+            {
+                RemoveRuntimeEffect(RuntimeEffectKind.TemporaryPort);
+            }
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                contextMenuOpen = false;
+                SelectSlot(DebugWorldEditorSlot.Select);
+                if (toolState == DebugLayoutToolState.StructureGhostPlacement)
+                {
+                    loadedStructureBlock = null;
+                    selectedSavedLayoutPath = string.Empty;
+                    toolState = DebugLayoutToolState.SelectionPreview;
+                }
+            }
+            if (Input.GetKeyDown(KeyCode.S) && mode == DebugWorldEditorMode.Layout)
+            {
+                SaveSelectionToDefault();
+            }
+            if (Input.GetKeyDown(KeyCode.L) && mode == DebugWorldEditorMode.Layout)
+            {
+                LoadStructureBlockFromDefault();
+            }
+            if (Input.GetKeyDown(KeyCode.C) && mode == DebugWorldEditorMode.Layout && hasHover)
+            {
+                CopySelectionTo(hoveredCoord);
+            }
+            if (Input.GetKeyDown(KeyCode.V) && mode == DebugWorldEditorMode.Layout && hasHover)
+            {
+                if (paletteKind == DebugWorldEditorPaletteKind.SavedStructure)
+                {
+                    PlaceLoadedStructure(hoveredCoord);
+                }
+            }
+            if (Input.GetKeyDown(KeyCode.M) && mode == DebugWorldEditorMode.Layout && hasHover)
+            {
+                MoveSelectionTo(hoveredCoord);
             }
             if (Input.GetKeyDown(KeyCode.R))
             {
                 RotateDirection();
             }
+        }
+
+        private bool UpdatePointerDrag()
+        {
+            if (currentSlot == DebugWorldEditorSlot.Delete || paletteKind != DebugWorldEditorPaletteKind.None || runner == null || runner.Context == null || !hasHover)
+            {
+                selectingRectangle = false;
+                draggingEntity = false;
+                return false;
+            }
+
+            if (Input.GetMouseButtonDown(0))
+            {
+                dragStartCoord = hoveredCoord;
+                if (TryPickEntity(hoveredCoord, out long entityId))
+                {
+                    draggingEntity = true;
+                    draggingEntityId = entityId;
+                    SelectEntity(entityId);
+                    lastResult = "dragging " + entityId;
+                    return true;
+                }
+
+                selectingRectangle = true;
+                selectionStartCoord = hoveredCoord;
+                toolState = DebugLayoutToolState.Selecting;
+                return true;
+            }
+
+            if (!Input.GetMouseButtonUp(0))
+            {
+                return selectingRectangle || draggingEntity;
+            }
+
+            if (draggingEntity)
+            {
+                long entityId = draggingEntityId;
+                Vector2Int targetCoord = hoveredCoord;
+                draggingEntity = false;
+                draggingEntityId = 0;
+                if (targetCoord == dragStartCoord)
+                {
+                    lastResult = "selected " + entityId;
+                    return true;
+                }
+
+                MoveEntity(entityId, targetCoord);
+                return true;
+            }
+
+            if (!selectingRectangle)
+            {
+                return false;
+            }
+
+            selectingRectangle = false;
+            if (selectionStartCoord == hoveredCoord)
+            {
+                return true;
+            }
+
+            bool append = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            int added = DebugLayoutTooling.SelectRectangle(selection, runner.Context.ClientMapWorld, selectionStartCoord, hoveredCoord, append);
+            toolState = DebugLayoutToolState.SelectionPreview;
+            lastResult = "box selection added: " + added + " total:" + selection.Count;
+            return true;
         }
 
         private void UpdateViews()
@@ -203,7 +654,7 @@ namespace DG.Map
 
             if (ghostView != null)
             {
-                bool showGhost = hasHover && IsBuildSlot(currentSlot);
+                bool showGhost = mode == DebugWorldEditorMode.Layout && hasHover && IsBuildSlot(currentSlot) && (loadedStructureBlock == null || toolState != DebugLayoutToolState.StructureGhostPlacement);
                 ghostView.gameObject.SetActive(showGhost);
                 ghostView.position = ToWorldPosition(hoveredCoord, -0.45f);
                 SpriteRenderer renderer = ghostView.GetComponent<SpriteRenderer>();
@@ -212,30 +663,212 @@ namespace DG.Map
                     renderer.color = GetSlotColor(currentSlot, 0.35f);
                 }
             }
+
+            UpdateStructureGhostViews();
+            UpdateRuntimePortViews();
+            UpdateSelectionBoxViews();
+        }
+
+        private void UpdateStructureGhostViews()
+        {
+            bool showStructureGhost = hasHover && loadedStructureBlock != null && toolState == DebugLayoutToolState.StructureGhostPlacement;
+            IReadOnlyList<DebugStructureGhostCell> cells = showStructureGhost ? PortDebugVisualizationUtility.BuildGhostCells(loadedStructureBlock, hoveredCoord) : new List<DebugStructureGhostCell>();
+            EnsureStructureGhostCount(cells.Count);
+            for (int i = 0; i < structureGhostViews.Count; i++)
+            {
+                Transform view = structureGhostViews[i];
+                bool visible = i < cells.Count;
+                view.gameObject.SetActive(visible);
+                if (!visible)
+                {
+                    continue;
+                }
+
+                DebugStructureGhostCell cell = cells[i];
+                view.position = ToWorldPosition(cell.Coord, -0.5f);
+                SpriteRenderer renderer = view.GetComponent<SpriteRenderer>();
+                if (renderer != null)
+                {
+                    renderer.color = cell.HasInternalConnection ? new Color(0.25f, 1f, 0.9f, 0.38f) : new Color(1f, 1f, 1f, 0.28f);
+                }
+
+                LineRenderer line = view.GetComponent<LineRenderer>();
+                if (line != null)
+                {
+                    ConfigureGhostPortLine(line, cell.BoundaryPorts);
+                }
+            }
+        }
+
+        private void EnsureStructureGhostCount(int count)
+        {
+            while (structureGhostViews.Count < count)
+            {
+                Transform view = CreateSquareView("DebugStructureGhostCell", new Color(1f, 1f, 1f, 0.3f), 42, 0.65f);
+                view.SetParent(structureGhostRoot, true);
+                LineRenderer line = view.gameObject.AddComponent<LineRenderer>();
+                line.material = CreateMaterial(new Color(1f, 0.92f, 0.2f, 0.9f));
+                structureGhostViews.Add(view);
+            }
+        }
+
+        private void ConfigureGhostPortLine(LineRenderer line, DirectionMask boundaryPorts)
+        {
+            line.enabled = boundaryPorts != DirectionMask.None;
+            if (!line.enabled)
+            {
+                return;
+            }
+
+            line.useWorldSpace = false;
+            line.loop = false;
+            line.widthMultiplier = 0.08f;
+            line.positionCount = 2;
+            line.startColor = new Color(1f, 0.92f, 0.2f, 0.9f);
+            line.endColor = new Color(1f, 0.92f, 0.2f, 0.9f);
+            line.sortingOrder = 43;
+            if (boundaryPorts.Contains(Direction.Up) || boundaryPorts.Contains(Direction.Down))
+            {
+                line.SetPosition(0, new Vector3(0f, -0.45f, -0.04f));
+                line.SetPosition(1, new Vector3(0f, 0.45f, -0.04f));
+                return;
+            }
+
+            line.SetPosition(0, new Vector3(-0.45f, 0f, -0.04f));
+            line.SetPosition(1, new Vector3(0.45f, 0f, -0.04f));
+        }
+
+        private void UpdateRuntimePortViews()
+        {
+            if (runner == null || runner.Context == null || runtimePortRoot == null)
+            {
+                EnsureRuntimePortViewCount(0);
+                return;
+            }
+
+            IReadOnlyList<EntitySnapshot> snapshots = runner.Context.ClientMapWorld.CreateSnapshot();
+            var markers = new List<(Vector2Int Coord, Direction Direction)>();
+            for (int i = 0; i < snapshots.Count; i++)
+            {
+                EntitySnapshot snapshot = snapshots[i];
+                DirectionMask ports = snapshot.PortLocalPorts;
+                if (runtimePortMasks.TryGetValue(snapshot.EntityId, out DirectionMask runtimePorts))
+                {
+                    ports |= runtimePorts;
+                }
+
+                if (ports == DirectionMask.None)
+                {
+                    continue;
+                }
+
+                DirectionMask worldPorts = ports.RotateBy(snapshot.Direction);
+                foreach (Direction direction in PortDebugVisualizationUtility.Directions(worldPorts))
+                {
+                    markers.Add((new Vector2Int(snapshot.X, snapshot.Y), direction));
+                }
+            }
+
+            ActiveRuntimePortViewCount = markers.Count;
+            EnsureRuntimePortViewCount(markers.Count);
+            for (int i = 0; i < runtimePortViews.Count; i++)
+            {
+                Transform view = runtimePortViews[i];
+                bool visible = i < markers.Count;
+                view.gameObject.SetActive(visible);
+                if (!visible)
+                {
+                    continue;
+                }
+
+                view.position = ToWorldPosition(markers[i].Coord, -0.07f) + RuntimePortMarkerOffset(markers[i].Direction);
+            }
+        }
+
+        private void EnsureRuntimePortViewCount(int count)
+        {
+            while (runtimePortViews.Count < count)
+            {
+                Transform view = CreateSquareView("RuntimePortView", new Color(1f, 0.88f, 0.08f, 0.95f), 48, 0.18f);
+                view.SetParent(runtimePortRoot, true);
+                runtimePortViews.Add(view);
+            }
+
+            for (int i = count; i < runtimePortViews.Count; i++)
+            {
+                runtimePortViews[i].gameObject.SetActive(false);
+            }
+        }
+
+        private Vector3 RuntimePortMarkerOffset(Direction direction)
+        {
+            float offset = cellSize * 0.36f;
+            return direction switch
+            {
+                Direction.Left => new Vector3(-offset, 0f, 0f),
+                Direction.Right => new Vector3(offset, 0f, 0f),
+                Direction.Up => new Vector3(0f, offset, 0f),
+                Direction.Down => new Vector3(0f, -offset, 0f),
+                _ => Vector3.zero
+            };
+        }
+
+        private void UpdateSelectionBoxViews()
+        {
+            if (!selectingRectangle || !hasHover || selectionBoxRoot == null)
+            {
+                EnsureSelectionBoxCount(0);
+                return;
+            }
+
+            int minX = Mathf.Min(selectionStartCoord.x, hoveredCoord.x);
+            int maxX = Mathf.Max(selectionStartCoord.x, hoveredCoord.x);
+            int minY = Mathf.Min(selectionStartCoord.y, hoveredCoord.y);
+            int maxY = Mathf.Max(selectionStartCoord.y, hoveredCoord.y);
+            int count = (maxX - minX + 1) * (maxY - minY + 1);
+            EnsureSelectionBoxCount(count);
+            int index = 0;
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                {
+                    Transform view = selectionBoxViews[index++];
+                    view.gameObject.SetActive(true);
+                    view.position = ToWorldPosition(new Vector2Int(x, y), -0.55f);
+                }
+            }
+        }
+
+        private void EnsureSelectionBoxCount(int count)
+        {
+            while (selectionBoxViews.Count < count)
+            {
+                Transform view = CreateSquareView("DebugSelectionBoxCell", new Color(0.6f, 0.95f, 1f, 0.22f), 44, 0.9f);
+                view.SetParent(selectionBoxRoot, true);
+                selectionBoxViews.Add(view);
+            }
+
+            for (int i = count; i < selectionBoxViews.Count; i++)
+            {
+                selectionBoxViews[i].gameObject.SetActive(false);
+            }
         }
 
         private void ExecuteCurrentTool()
         {
-            if (currentSlot == DebugWorldEditorSlot.Select)
-            {
-                if (!TryPickEntity(hoveredCoord, out long pickedEntityId))
-                {
-                    lastResult = "no entity at cell";
-                    return;
-                }
-
-                SelectEntity(pickedEntityId);
-                lastResult = $"selected {pickedEntityId}";
-                return;
-            }
-
             if (networkSubmitter == null)
             {
                 lastResult = "debug submitter missing";
                 return;
             }
 
-            if (IsBuildSlot(currentSlot))
+            if (paletteKind == DebugWorldEditorPaletteKind.SavedStructure)
+            {
+                PlaceLoadedStructure(hoveredCoord);
+                return;
+            }
+
+            if (paletteKind == DebugWorldEditorPaletteKind.BaseEntity && IsBuildSlot(currentSlot))
             {
                 int configId = GetConfigId(currentSlot);
                 Direction direction = currentSlot == DebugWorldEditorSlot.Blocker ? Direction.None : buildDirection;
@@ -243,18 +876,6 @@ namespace DG.Map
                 {
                     lastResult = success ? $"spawned {entityId}" : $"spawn failed: {reason}";
                 });
-                return;
-            }
-
-            if (currentSlot == DebugWorldEditorSlot.Drag && dragging)
-            {
-                long movingEntityId = selectedEntityId;
-                Vector2Int targetCoord = hoveredCoord;
-                networkSubmitter.DebugMove(movingEntityId, targetCoord, (success, reason) =>
-                {
-                    lastResult = success ? $"moved {movingEntityId} to {targetCoord}" : $"move failed: {reason}";
-                });
-                dragging = false;
                 return;
             }
 
@@ -267,28 +888,160 @@ namespace DG.Map
             selectedEntityId = entityId;
             if (currentSlot == DebugWorldEditorSlot.Delete)
             {
-                networkSubmitter.DebugRemove(entityId, (success, reason) =>
-                {
-                    lastResult = success ? $"removed {entityId}" : $"remove failed: {reason}";
-                });
+                DeleteSelectionOrEntity(entityId);
                 return;
             }
 
-            if (currentSlot == DebugWorldEditorSlot.Drag && !dragging)
+            SelectEntity(entityId);
+            if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
             {
-                dragging = true;
-                selectedEntityId = entityId;
-                lastResult = $"selected {entityId}";
+                AddSelectedEntityToSelection();
+                return;
+            }
+
+            lastResult = $"selected {entityId}";
+        }
+
+        private void DrawStructureBlockPanel()
+        {
+            GUILayout.Label("State: " + toolState + "  Selection: " + selection.Count);
+            if (hasHover && loadedStructureBlock != null)
+            {
+                IReadOnlyList<DebugStructureGhostCell> cells = PortDebugVisualizationUtility.BuildGhostCells(loadedStructureBlock, hoveredCoord);
+                int internalConnections = 0;
+                int boundaryPorts = 0;
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    if (cells[i].HasInternalConnection)
+                    {
+                        internalConnections++;
+                    }
+
+                    boundaryPorts += PortDebugVisualizationUtility.Directions(cells[i].BoundaryPorts).Count;
+                }
+
+                GUILayout.Label("Ghost cells:" + cells.Count + " internal:" + internalConnections + " boundary:" + boundaryPorts);
+            }
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Clear"))
+            {
+                ClearSelection();
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        private void SubmitSpawnRequests(IReadOnlyList<DebugStructureSpawnRequest> requests)
+        {
+            if (requests == null || requests.Count == 0)
+            {
+                lastResult = "structure is empty";
+                return;
+            }
+
+            if (networkSubmitter == null)
+            {
+                lastResult = "debug submitter missing";
+                return;
+            }
+
+            toolState = DebugLayoutToolState.SubmittingBatch;
+            int successCount = 0;
+            int failCount = 0;
+            string lastReason = string.Empty;
+            int requestCount = requests.Count;
+            foreach (DebugStructureSpawnRequest request in requests)
+            {
+                networkSubmitter.DebugSpawn(0, request.ConfigId, new Vector2Int(request.X, request.Y), request.Direction, request.PlayerId, request.AutoMoveIntervalTicks, (success, reason, entityId) =>
+                {
+                    if (success)
+                    {
+                        successCount++;
+                        ApplyStructureRuntimeEffects(entityId, request);
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = reason;
+                    }
+
+                    lastResult = "batch spawn ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                    if (successCount + failCount >= requestCount && paletteKind == DebugWorldEditorPaletteKind.SavedStructure && loadedStructureBlock != null)
+                    {
+                        toolState = DebugLayoutToolState.StructureGhostPlacement;
+                    }
+                });
             }
         }
 
-        private void DrawRuntimeEffectPanel()
+        private void ApplyStructureRuntimeEffects(long entityId, DebugStructureSpawnRequest request)
         {
-            const int width = 300;
-            Rect panel = new Rect(Screen.width - width - 16, 16, width, 500);
-            GUI.Box(panel, "Runtime Effects");
-            GUILayout.BeginArea(new Rect(panel.x + 12, panel.y + 28, panel.width - 24, panel.height - 40));
-            GUILayout.Label("Selected: " + (selectedEntityId == 0 ? "-" : selectedEntityId.ToString()));
+            if (entityId == 0 || !request.HasRuntimeEffects || networkSubmitter == null)
+            {
+                return;
+            }
+
+            if (request.RuntimeBlocking)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryBlocking, 1, DirectionMask.None, 0);
+            }
+
+            if (request.RuntimeAutoMove)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryAutoMove, request.AutoMoveIntervalTicks, DirectionMask.None, 0);
+            }
+
+            if (request.RuntimePushable)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPushable, 1, DirectionMask.None, 0);
+            }
+
+            if (request.RuntimePortLocalPorts != DirectionMask.None)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPort, 1, request.RuntimePortLocalPorts, 0);
+            }
+
+            if (request.RuntimeImmobile)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryImmobile, 1, DirectionMask.None, 0);
+            }
+        }
+
+        private void DrawRuntimeEffectButtons(string label, RuntimeEffectKind kind)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(78));
+            if (GUILayout.Button("Add", GUILayout.Width(72)))
+            {
+                ApplyRuntimeEffect(kind);
+            }
+            if (GUILayout.Button("Remove", GUILayout.Width(86)))
+            {
+                RemoveRuntimeEffect(kind);
+            }
+            GUILayout.EndHorizontal();
+        }
+
+        private void OpenContextMenu(Vector3 screenPosition)
+        {
+            Vector2 guiPosition = new Vector2(screenPosition.x, Screen.height - screenPosition.y);
+            contextMenuRect.x = Mathf.Clamp(guiPosition.x, 0f, Mathf.Max(0f, Screen.width - contextMenuRect.width));
+            contextMenuRect.y = Mathf.Clamp(guiPosition.y, 0f, Mathf.Max(0f, Screen.height - contextMenuRect.height));
+            if (TryPickEntity(hoveredCoord, out long entityId))
+            {
+                SelectEntity(entityId);
+            }
+
+            contextMenuOpen = RuntimeEffectTargets().Count > 0 || entityId != 0;
+            if (!contextMenuOpen)
+            {
+                lastResult = "no entity at cell";
+            }
+        }
+
+        private void DrawContextMenuWindow(int windowId)
+        {
+            contextMenuScroll = GUILayout.BeginScrollView(contextMenuScroll);
+            GUILayout.Label("Targets: " + RuntimeEffectTargets().Count);
             GUILayout.Label("Final: " + DescribeSelectedEntity());
 
             GUILayout.BeginHorizontal();
@@ -318,29 +1071,176 @@ namespace DG.Map
             GUILayout.EndHorizontal();
 
             GUILayout.Label("Port direction: " + buildDirection);
+            if (GUILayout.Button("Rotate Port Direction"))
+            {
+                RotateDirection();
+            }
+
             DrawRuntimeEffectButtons("Blocking", RuntimeEffectKind.TemporaryBlocking);
             DrawRuntimeEffectButtons("AutoMove", RuntimeEffectKind.TemporaryAutoMove);
             DrawRuntimeEffectButtons("Pushable", RuntimeEffectKind.TemporaryPushable);
             DrawRuntimeEffectButtons("Port", RuntimeEffectKind.TemporaryPort);
             DrawRuntimeEffectButtons("Immobile", RuntimeEffectKind.TemporaryImmobile);
-            GUILayout.Space(8);
-            GUILayout.Label("Last: " + lastResult);
-            GUILayout.EndArea();
-        }
 
-        private void DrawRuntimeEffectButtons(string label, RuntimeEffectKind kind)
-        {
+            GUILayout.Space(8);
             GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(78));
-            if (GUILayout.Button("Add", GUILayout.Width(72)))
+            if (GUILayout.Button("Add To Selection"))
             {
-                ApplyRuntimeEffect(kind);
+                AddSelectedEntityToSelection();
             }
-            if (GUILayout.Button("Remove", GUILayout.Width(86)))
+            if (GUILayout.Button("Clear Selection"))
             {
-                RemoveRuntimeEffect(kind);
+                ClearSelection();
             }
             GUILayout.EndHorizontal();
+            if (GUILayout.Button("Close"))
+            {
+                contextMenuOpen = false;
+            }
+
+            GUILayout.EndScrollView();
+            GUI.DragWindow(new Rect(0, 0, contextMenuRect.width, 22));
+        }
+
+        private void DrawDebugWindow(int windowId)
+        {
+            GUILayout.BeginVertical();
+            GUILayout.Label($"Coord: {(hasHover ? hoveredCoord.ToString() : "-")}  Direction: {buildDirection}  Selected: {selectedEntityId}");
+            GUILayout.Label(lastResult);
+            GUILayout.Space(6);
+
+            layoutScroll = GUILayout.BeginScrollView(layoutScroll);
+            DrawLayoutPage();
+            GUILayout.EndScrollView();
+
+            GUILayout.EndVertical();
+            GUI.DragWindow(new Rect(0, 0, debugWindowRect.width, 22));
+        }
+
+        private void DrawLayoutPage()
+        {
+            GUILayout.Label("Base");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Normal", GUILayout.Height(28)))
+            {
+                SelectSlot(DebugWorldEditorSlot.Select);
+            }
+            if (GUILayout.Button("Delete", GUILayout.Height(28)))
+            {
+                SelectSlot(DebugWorldEditorSlot.Delete);
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(6);
+            GUILayout.BeginHorizontal();
+            DrawBuildButton(DebugWorldEditorSlot.Blocker, "1 Blocker");
+            DrawBuildButton(DebugWorldEditorSlot.Ball, "2 Ball");
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            DrawBuildButton(DebugWorldEditorSlot.Conveyor, "3 Conveyor");
+            DrawBuildButton(DebugWorldEditorSlot.PortConnector, "4 Port Connector");
+            GUILayout.EndHorizontal();
+            GUILayout.Space(8);
+            GUILayout.Label("Palette: " + paletteKind + "  Tool: " + currentSlot);
+            GUILayout.Label("Left: select/drag/box. Right: selection menu.");
+            GUILayout.Label("Q normal. S save. C copy. M move. V place loaded. R rotate. Esc cancel.");
+            GUILayout.Space(8);
+            GUILayout.Label("Selection count: " + selection.Count);
+            DrawStructureBlockPanel();
+            GUILayout.Space(8);
+            GUILayout.Label("Save Selection");
+            GUILayout.BeginHorizontal();
+            structureName = GUILayout.TextField(structureName);
+            if (GUILayout.Button("Save", GUILayout.Width(72)))
+            {
+                SaveSelectionToDefault();
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.Space(8);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Saved");
+            if (GUILayout.Button("Refresh", GUILayout.Width(78)))
+            {
+                RefreshSavedLayoutFiles();
+            }
+            GUILayout.EndHorizontal();
+            if (savedLayoutFiles.Length == 0)
+            {
+                GUILayout.Label("No saved layout files.");
+            }
+
+            savedTableScroll = GUILayout.BeginScrollView(savedTableScroll, GUILayout.Height(150));
+            for (int i = 0; i < savedLayoutFiles.Length; i++)
+            {
+                string file = savedLayoutFiles[i];
+                DrawSavedLayoutButton(file);
+            }
+            GUILayout.EndScrollView();
+        }
+
+        private void DrawSavedLayoutButton(string file)
+        {
+            Color oldColor = GUI.color;
+            GUI.color = selectedSavedLayoutPath == file && paletteKind == DebugWorldEditorPaletteKind.SavedStructure ? new Color(0.8f, 1f, 0.5f, 1f) : Color.white;
+            string label = Path.GetFileNameWithoutExtension(file);
+            if (GUILayout.Button(label, GUILayout.Height(28)))
+            {
+                LoadStructureBlock(file);
+                SelectMode(DebugWorldEditorMode.Layout);
+            }
+
+            GUI.color = oldColor;
+        }
+
+        private void DrawBuildButton(DebugWorldEditorSlot slot, string label)
+        {
+            Color oldColor = GUI.color;
+            GUI.color = currentSlot == slot && paletteKind == DebugWorldEditorPaletteKind.BaseEntity ? new Color(0.8f, 1f, 0.5f, 1f) : Color.white;
+            if (GUILayout.Button(label, GUILayout.Height(30)))
+            {
+                SelectSlot(slot);
+            }
+
+            GUI.color = oldColor;
+        }
+
+        private void RefreshSavedLayoutFiles()
+        {
+            string directory = DebugLayoutPaths.DefaultDirectory();
+            savedLayoutFiles = Directory.Exists(directory)
+                ? Directory.GetFiles(directory, "*.dgdebuglayout.json")
+                : System.Array.Empty<string>();
+            System.Array.Sort(savedLayoutFiles, System.StringComparer.OrdinalIgnoreCase);
+        }
+
+        public static string SanitizeLayoutName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = value.Trim();
+            var chars = trimmed.ToCharArray();
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (char.IsWhiteSpace(chars[i]))
+                {
+                    chars[i] = '_';
+                    continue;
+                }
+
+                for (int j = 0; j < invalidChars.Length; j++)
+                {
+                    if (chars[i] == invalidChars[j])
+                    {
+                        chars[i] = '_';
+                        break;
+                    }
+                }
+            }
+
+            return new string(chars);
         }
 
         private void ApplyRuntimeEffect(RuntimeEffectKind kind)
@@ -351,19 +1251,46 @@ namespace DG.Map
                 return;
             }
 
-            long entityId = selectedEntityId;
+            IReadOnlyList<long> targets = RuntimeEffectTargets();
             DirectionMask portMask = kind == RuntimeEffectKind.TemporaryPort ? DirectionToMask(buildDirection) : DirectionMask.None;
-            long expireTick = GetRuntimeExpireTick(entityId);
-            networkSubmitter.DebugApplyRuntimeEffect(entityId, kind, runtimeAutoMoveIntervalTicks, portMask, expireTick, (success, callbackReason, effectId) =>
+            int successCount = 0;
+            int failCount = 0;
+            string lastReason = string.Empty;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                long entityId = targets[i];
+                long expireTick = GetRuntimeExpireTick(entityId);
+                ApplyRuntimeEffectToEntity(entityId, kind, runtimeAutoMoveIntervalTicks, portMask, expireTick, (success, callbackReason) =>
+                {
+                    if (success)
+                    {
+                        successCount++;
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = callbackReason;
+                    }
+
+                    lastResult = "effect add " + kind + " ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                });
+            }
+        }
+
+        private void ApplyRuntimeEffectToEntity(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, System.Action<bool, string> completed = null)
+        {
+            networkSubmitter.DebugApplyRuntimeEffect(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, (success, callbackReason, effectId) =>
             {
                 if (success)
                 {
                     runtimeEffectIds[RuntimeEffectKey(entityId, kind)] = effectId;
-                    lastResult = "effect add " + kind + " id:" + effectId;
-                    return;
+                    if (kind == RuntimeEffectKind.TemporaryPort)
+                    {
+                        runtimePortMasks[entityId] = portMask;
+                    }
                 }
 
-                lastResult = "effect add failed: " + callbackReason;
+                completed?.Invoke(success, callbackReason);
             });
         }
 
@@ -375,26 +1302,41 @@ namespace DG.Map
                 return;
             }
 
-            long entityId = selectedEntityId;
-            runtimeEffectIds.TryGetValue(RuntimeEffectKey(entityId, kind), out long effectId);
-            networkSubmitter.DebugRemoveRuntimeEffect(entityId, kind, effectId, (success, callbackReason, removedEffectId) =>
+            IReadOnlyList<long> targets = RuntimeEffectTargets();
+            int successCount = 0;
+            int failCount = 0;
+            string lastReason = string.Empty;
+            for (int i = 0; i < targets.Count; i++)
             {
-                if (success)
+                long entityId = targets[i];
+                runtimeEffectIds.TryGetValue(RuntimeEffectKey(entityId, kind), out long effectId);
+                networkSubmitter.DebugRemoveRuntimeEffect(entityId, kind, effectId, (success, callbackReason, removedEffectId) =>
                 {
-                    runtimeEffectIds.Remove(RuntimeEffectKey(entityId, kind));
-                    lastResult = "effect remove " + kind + " id:" + removedEffectId;
-                    return;
-                }
+                    if (success)
+                    {
+                        successCount++;
+                        runtimeEffectIds.Remove(RuntimeEffectKey(entityId, kind));
+                        if (kind == RuntimeEffectKind.TemporaryPort)
+                        {
+                            runtimePortMasks.Remove(entityId);
+                        }
+                    }
+                    else
+                    {
+                        failCount++;
+                        lastReason = callbackReason;
+                    }
 
-                lastResult = "effect remove failed: " + callbackReason;
-            });
+                    lastResult = "effect remove " + kind + " ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
+                });
+            }
         }
 
         private bool CanEditRuntimeEffect(out string reason)
         {
-            if (selectedEntityId == 0)
+            if (RuntimeEffectTargets().Count == 0)
             {
-                reason = "select entity first";
+                reason = "select entity or box selection first";
                 return false;
             }
 
@@ -486,16 +1428,10 @@ namespace DG.Map
             return false;
         }
 
-        private void DrawSlot(int x, int y, int width, int height, DebugWorldEditorSlot slot, string label)
+        public bool IsPointerOverDebugUi(Vector3 screenPosition)
         {
-            Color oldColor = GUI.color;
-            GUI.color = currentSlot == slot ? new Color(0.8f, 1f, 0.5f, 1f) : Color.white;
-            if (GUI.Button(new Rect(x + 4, y, width - 8, height), label))
-            {
-                SelectSlot(slot);
-            }
-
-            GUI.color = oldColor;
+            Vector2 guiPosition = new Vector2(screenPosition.x, Screen.height - screenPosition.y);
+            return debugWindowRect.Contains(guiPosition) || (contextMenuOpen && contextMenuRect.Contains(guiPosition));
         }
 
         private static bool IsBuildSlot(DebugWorldEditorSlot slot)
@@ -526,10 +1462,36 @@ namespace DG.Map
                 DebugWorldEditorSlot.PortConnector => new Color(0.5f, 0.65f, 1f, alpha),
                 DebugWorldEditorSlot.Delete => new Color(1f, 0.2f, 0.2f, alpha),
                 DebugWorldEditorSlot.Select => new Color(0.95f, 1f, 0.45f, alpha),
-                DebugWorldEditorSlot.Drag => new Color(0.6f, 0.8f, 1f, alpha),
                 _ => new Color(1f, 0.35f, 0.2f, alpha)
             };
             return color;
+        }
+
+        private static Color GetConfigColor(int configId, float alpha)
+        {
+            if (configId == DefaultWorldConfig.BallConfigId)
+            {
+                return new Color(1f, 0.88f, 0.18f, alpha);
+            }
+
+            if (configId == DefaultWorldConfig.ConveyorConfigId)
+            {
+                return new Color(0.35f, 1f, 0.45f, alpha);
+            }
+
+            if (configId == DefaultWorldConfig.PortConnectorBlockerConfigId)
+            {
+                return new Color(0.25f, 1f, 0.9f, alpha);
+            }
+
+            return new Color(1f, 0.35f, 0.2f, alpha);
+        }
+
+        private static Material CreateMaterial(Color color)
+        {
+            Material material = new Material(Shader.Find("Sprites/Default"));
+            material.color = color;
+            return material;
         }
 
         private Vector3 ToWorldPosition(Vector2Int coord, float z)
