@@ -1,0 +1,12 @@
+[
+  {
+    "config_id": 2001,
+    "output_spec_id": "mechanism_push",
+    "output_cost_ticks": 1
+  },
+  {
+    "config_id": 2002,
+    "output_spec_id": "configured_wind_push",
+    "output_cost_ticks": 2
+  }
+]

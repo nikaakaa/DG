@@ -141,7 +141,7 @@ namespace DG.EditorTests
             {
                 MoveRequest(1, "connected_body_move", WorldActionPriority.Mechanism, 60, Direction.Right),
                 MoveRequest(2, "connected_body_move", WorldActionPriority.Mechanism, 61, Direction.Left)
-            }, new PendingRuleStateStore(), 1);
+            }, 1);
 
             Assert.AreEqual(0, result.AcceptedActions.Count);
             Assert.AreEqual(2, result.RejectedActions.Count);

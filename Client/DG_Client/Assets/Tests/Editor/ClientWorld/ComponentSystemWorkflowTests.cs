@@ -123,35 +123,40 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void FallbackDemoConfig_MatchesLubanDemoConfig()
+        public void LubanDemoConfig_ContainsCurrentFormalConfig()
         {
             IGameConfigProvider luban = ClientGameConfigProviderFactory.Create();
-            IGameConfigProvider fallback = FallbackGameConfigProvider.Instance;
 
-            foreach (EntityArchetype fallbackArchetype in fallback.GetEntityArchetypes())
+            int[] requiredConfigs =
             {
-                Assert.IsTrue(luban.TryGetArchetype(fallbackArchetype.ConfigId, out EntityArchetype lubanArchetype), fallbackArchetype.ConfigId.ToString());
-                Assert.AreEqual(lubanArchetype.ArchetypeId, fallbackArchetype.ArchetypeId);
-                Assert.AreEqual(lubanArchetype.EntityTarget, fallbackArchetype.EntityTarget);
-                CollectionAssert.AreEqual(lubanArchetype.Components.OrderBy(kind => (int)kind).ToArray(), fallbackArchetype.Components.OrderBy(kind => (int)kind).ToArray());
-                CollectionAssert.AreEqual(lubanArchetype.Tags.OrderBy(tag => tag).ToArray(), fallbackArchetype.Tags.OrderBy(tag => tag).ToArray());
-                Assert.AreEqual(lubanArchetype.DefaultAutoMoveIntervalTicks, fallbackArchetype.DefaultAutoMoveIntervalTicks);
+                DefaultWorldConfig.PlayerConfigId,
+                DefaultWorldConfig.BallConfigId,
+                DefaultWorldConfig.BlockerConfigId,
+                DefaultWorldConfig.PushableBlockerConfigId,
+                DefaultWorldConfig.PortConnectorBlockerConfigId,
+                DefaultWorldConfig.ConveyorConfigId,
+                DefaultWorldConfig.WindFieldConfigId
+            };
+
+            foreach (int configId in requiredConfigs)
+            {
+                Assert.IsTrue(luban.TryGetArchetype(configId, out _), configId.ToString());
             }
 
-            CollectionAssert.AreEqual(
-                NormalizeSpawns(luban.GetWorldSpawns(DefaultWorldConfig.DemoWorldId)),
-                NormalizeSpawns(fallback.GetWorldSpawns(DefaultWorldConfig.DemoWorldId)));
+            Assert.IsTrue(NormalizeSpawns(luban.GetWorldSpawns(DefaultWorldConfig.DemoWorldId)).Length > 0);
 
             Assert.IsTrue(luban.TryGetPlayerSpawnRule(DefaultWorldConfig.DefaultPlayerSpawnRuleId, out PlayerSpawnRule lubanRule));
-            Assert.IsTrue(fallback.TryGetPlayerSpawnRule(DefaultWorldConfig.DefaultPlayerSpawnRuleId, out PlayerSpawnRule fallbackRule));
-            Assert.AreEqual(lubanRule.PlayerConfigId, fallbackRule.PlayerConfigId);
-            Assert.AreEqual(lubanRule.StartCoord, fallbackRule.StartCoord);
-            Assert.AreEqual(lubanRule.StepCoord, fallbackRule.StepCoord);
-            Assert.AreEqual(lubanRule.MaxAttempts, fallbackRule.MaxAttempts);
+            Assert.AreEqual(DefaultWorldConfig.PlayerConfigId, lubanRule.PlayerConfigId);
+            Assert.AreEqual(new GridCoord(0, 0), lubanRule.StartCoord);
+            Assert.AreEqual(new GridCoord(0, 1), lubanRule.StepCoord);
+            Assert.Greater(lubanRule.MaxAttempts, 0);
 
             Assert.IsTrue(luban.TryGetPortConnector(DefaultWorldConfig.PortConnectorBlockerConfigId, out PortConnectorConfig lubanPort));
-            Assert.IsTrue(fallback.TryGetPortConnector(DefaultWorldConfig.PortConnectorBlockerConfigId, out PortConnectorConfig fallbackPort));
-            Assert.AreEqual(lubanPort.LocalPorts, fallbackPort.LocalPorts);
+            Assert.AreEqual(DirectionMask.Left | DirectionMask.Right, lubanPort.LocalPorts);
+            Assert.IsTrue(luban.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig conveyorOutput));
+            Assert.AreEqual(new ActionSpecId("mechanism_push"), conveyorOutput.OutputSpecId);
+            Assert.IsTrue(luban.TryGetPushOnEnter(DefaultWorldConfig.WindFieldConfigId, out PushOnEnterConfig windOutput));
+            Assert.AreEqual(new ActionSpecId("configured_wind_push"), windOutput.OutputSpecId);
         }
 
         private static IReadOnlyDictionary<string, int> ReadComponentKindSchema()
@@ -211,11 +216,17 @@ namespace DG.EditorTests
                 return false;
             }
 
-            public bool TryGetPortConnector(int configId, out PortConnectorConfig config)
-            {
-                config = new PortConnectorConfig(configId, DirectionMask.All);
-                return true;
-            }
+        public bool TryGetPortConnector(int configId, out PortConnectorConfig config)
+        {
+            config = new PortConnectorConfig(configId, DirectionMask.All);
+            return true;
+        }
+
+        public bool TryGetPushOnEnter(int configId, out PushOnEnterConfig config)
+        {
+            config = new PushOnEnterConfig(configId, "mechanism_push", 1);
+            return true;
         }
     }
+}
 }

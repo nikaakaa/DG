@@ -4,18 +4,18 @@
 TBD - created by archiving change refactor-data-driven-runtime-actions. Update Purpose after archive.
 ## Requirements
 ### Requirement: 配置层和运行时行为分离
-系统 SHALL 将行为静态配置、运行时行为输入和运行时行为单元分离。`ActionSpec` SHALL 描述行为原语、来源默认值、条件、claim、冲突、打断、合并、计划、提交策略、handoff 策略、subject 策略和默认 cost 来源；正式 `ActionSpec` 数据 SHALL come from Luban Excel configuration through a provider/mapper; `ActionRequest` SHALL 只携带一次运行时输入的 `SpecId`、发起者、目标、方向、tick、client tick、source state 和 runtime params；action unit state SHALL 保存 ready tick、lifecycle、parent / derived 关系、retry 和 pending 结果。运行时行为输入 MUST NOT 复制 `ActionSpec` 的静态策略，也 MUST NOT 承担 pending 生命周期状态。
+系统 SHALL 将行为静态配置、运行时行为输入和运行时行为单元分离。`ActionSpec` SHALL 描述行为原语、来源默认值、条件、claim、冲突、打断、合并、计划、提交策略、handoff policy、handoff subject policy 和默认 cost 来源；`ActionRequest` SHALL 只携带一次运行时输入的 `SpecId`、发起者、目标、方向、tick、client tick、source state 和 runtime params；action unit state SHALL 保存 ready tick、lifecycle、parent / derived 关系、pending 结果和 push contact batch 归属。运行时行为输入 MUST NOT 复制 `ActionSpec` 的静态策略，也 MUST NOT 承担 pending 生命周期状态或 push contact batch 状态。
 
 #### Scenario: 运行时请求引用配置
 - **WHEN** player move, auto move, mechanism push, debug move, debug spawn, or debug remove is created
 - **THEN** the runtime input references an `ActionSpec`
 - **AND** the runtime input carries only request-specific source, target, direction, tick, client tick, source state, and runtime params
-- **AND** action unit state carries ready tick, lifecycle, parent / derived ids, retry count, and pending status
-- **AND** runtime input does not copy `ActionSpec` claim, conflict, interrupt, merge, plan, commit, subject, handoff, or default cost policy
+- **AND** action unit state carries ready tick, lifecycle, parent / derived ids, pending status, and push contact batch id when applicable
+- **AND** runtime input does not copy `ActionSpec` claim, conflict, interrupt, merge, plan, commit, handoff, or default cost policy
 
 #### Scenario: 修改普通行为策略
-- **WHEN** a move-like behavior changes required component, blocked component, priority, merge policy, interrupt policy, blocked policy, handoff policy, subject policy, or default cost
-- **THEN** the change is made in the Luban action policy Excel source or its generated registry data
+- **WHEN** a move-like behavior changes required component, blocked component, priority, merge policy, interrupt policy, blocked policy, or default cost
+- **THEN** the change is made in the `ActionSpec` source or registry
 - **AND** core execution does not add a new branch for the behavior name
 
 ### Requirement: 行为原语和行为来源分离
@@ -89,7 +89,7 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **AND** 规则层不通过 ability 或 effect 名称判断
 
 ### Requirement: 执行层只消费统一结果
-系统 SHALL keep execution focused on ready action units, accepted claims, plans, commit proposals, commit results, dirty state, pending state transitions, and owner action results. Execution MUST NOT branch on ordinary business behavior names such as player move, auto move, mechanism push, wind push, trap pull, or ice slide.
+系统 SHALL keep execution focused on ready action units, accepted claims, plans, commit proposals, commit results, dirty state, pending state transitions, push contact batch transitions, and owner action results. Execution MUST NOT branch on ordinary business behavior names such as player move, auto move, mechanism push, wind push, trap pull, or ice slide.
 
 #### Scenario: 执行统一 Move
 - **WHEN** player move, auto move, mechanism push, or configured wind push reaches its ready tick
@@ -101,10 +101,21 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **THEN** they also enter through their corresponding `ActionSpec`
 - **AND** debug-specific permission and target policy are expressed as action data or explicit debug source policy
 
-#### Scenario: Pending retry uses unified execution
-- **WHEN** a waiting parent action unit becomes ready to retry
+#### Scenario: Pending continuation uses unified execution
+- **WHEN** a waiting parent action unit becomes ready to continue
 - **THEN** execution treats it like another ready action unit
 - **AND** it is not advanced through a push-front special branch
+
+#### Scenario: push contact batch uses unified execution
+- **WHEN** one blocked action unit creates a push contact batch with multiple child units
+- **THEN** execution schedules those child units through the same ready action unit path
+- **AND** execution does not add a behavior-name branch to move all child subjects directly
+
+#### Scenario: push-specific handoff interpretation stays out of execution
+- **WHEN** a blocked move discovers multiple external push contacts
+- **THEN** contact-to-handoff-subject interpretation happens in the action policy / arbitration layer
+- **AND** execution only observes derived action units, pending transitions, commit results, and owner action results
+- **AND** execution does not infer child unit count from raw contact count
 
 ### Requirement: 普通新增行为不修改核心代码
 系统 SHALL allow a new ordinary behavior built from existing primitives and policies to be added by Luban action policy data and tests. It MUST NOT require new branches in core execution, arbitration, planning, pending state, or commit orchestration.
@@ -174,4 +185,149 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **WHEN** existing convenience methods create player move, auto move, mechanism push, debug move, debug spawn, or debug remove
 - **THEN** they fill an explicit `ActionSpecId`
 - **AND** the resulting request follows the same policy path as any configured action
+
+### Requirement: Push Contact Batch State Separation
+系统 SHALL store push contact batch state separately from `ActionRequest` and `ActionSpec`. Push contact batch state MUST be runtime lifecycle data that relates action units created by the same blocked step. Static action policy data MAY select blocked and handoff behavior, but it MUST NOT store per-instance child unit ids, batch completion, or owner result state.
+
+#### Scenario: batch state 不进入 ActionSpec
+- **WHEN** a blocked action creates a push contact batch
+- **THEN** the batch id, child unit ids, batch status, and completion result are stored in pending state
+- **AND** the referenced `ActionSpec` remains static policy data
+
+#### Scenario: runtime request 不复制 batch state
+- **WHEN** a child action unit is converted into an `ActionRequest`
+- **THEN** the request carries only source state, derived id, owner id, spec id, target, direction, tick, and runtime params needed for arbitration
+- **AND** the push contact batch lifecycle remains in pending state
+
+#### Scenario: batch state does not imply propagation length policy
+- **WHEN** a push contact batch creates or observes multiple derived action units
+- **THEN** pending state records batch lifecycle and child unit ids
+- **AND** it does not introduce a propagation-length failure policy
+- **AND** raw contact count and subject member count do not become behavior limits
+
+### Requirement: Core Extension Boundary For Multi-Contact Push
+系统 SHALL treat multi-contact push propagation as a focused implementation-layer extension to the push pipeline, not as a complete transaction system or ordinary behavior config tweak. Adding multi-contact push support MUST include focused tests for existing single-child handoff compatibility, contact set discovery, multi-child push batch creation, batch success/failure aggregation, and data-driven behavior-name independence.
+
+#### Scenario: 新增 multi-contact push 能力
+- **WHEN** the system adds support for one parent action unit deriving multiple child action units in one blocked step
+- **THEN** the change is implemented as focused push contact collection and pending batch support
+- **AND** ordinary action names do not select batch behavior through string matching
+
+#### Scenario: 普通行为继续数据驱动
+- **WHEN** a new ordinary move-like behavior uses existing multi-contact push, blocked policy, and handoff policy support
+- **THEN** it can be added through action policy data and tests
+- **AND** no new core branch is required unless it introduces a new primitive or reusable policy type
+
+### Requirement: 等价 Deferred Output 入队合并
+系统 SHALL merge equivalent deferred outputs before they become queued runtime actions. Two deferred outputs are equivalent when they have the same ready tick, action spec id, direction, and resolved subject key. Equivalence MUST NOT depend on parent causality id, created tick, raw contact count, or the debug/logging dedupe string. Merged outputs MUST preserve an equivalent contribution count for diagnostics and future strength policy, but this change SHALL NOT interpret that count as force, strength, priority, or movement distance.
+
+#### Scenario: 同 tick 同 subject 同方向合并
+- **WHEN** multiple parent actions in the same tick produce deferred push outputs with the same ready tick
+- **AND** those outputs have the same action spec id, direction, and resolved subject key
+- **THEN** the runtime action queue contains at most one ready action for that equivalent deferred output
+- **AND** different parent causality ids do not create duplicate queued actions
+- **AND** the queued output records the number of equivalent contributions merged into it
+
+#### Scenario: 不同方向不合并
+- **WHEN** two deferred push outputs target the same resolved subject and ready tick
+- **AND** one output direction is `Up` while the other output direction is `Down`
+- **THEN** both deferred outputs remain observable as distinct queued actions
+- **AND** no cancellation, interruption, or direction conflict decision is applied by deferred dedupe
+
+#### Scenario: 不同 subject 不合并
+- **WHEN** two deferred push outputs have the same ready tick, action spec id, and direction
+- **AND** they resolve to different subject keys
+- **THEN** both outputs remain queued independently
+- **AND** multi-contact fanout to distinct downstream subjects is preserved
+
+#### Scenario: 贡献数不改变当前强度
+- **WHEN** equivalent deferred outputs are merged
+- **THEN** their contribution count is retained for diagnostics and future policy
+- **AND** the current runtime does not convert the contribution count into stronger push, longer movement, higher priority, or extra queued actions
+
+### Requirement: Deferred Output 诊断摘要
+系统 SHALL provide bounded diagnostics for deferred output enqueue. Diagnostics MUST show enough information to identify deferred growth without logging every repeated action in an explosive fanout scenario.
+
+#### Scenario: 重复 deferred 输出摘要
+- **WHEN** one tick produces multiple equivalent deferred outputs
+- **THEN** diagnostics report raw deferred count, enqueued count, merged count, contribution count, and representative equivalent keys
+- **AND** diagnostics avoid expanding every duplicate action and touched entity in the log
+
+#### Scenario: 小规模 deferred 仍可追踪
+- **WHEN** one tick produces a small number of deferred outputs
+- **THEN** diagnostics still include spec id, entity id, subject key, direction, ready tick, cost, and causality sample
+- **AND** the user can trace a single push chain across ticks
+
+### Requirement: 进入推动输出配置化
+系统 SHALL express `PushOnEnterComponent` output behavior through Luban Excel configuration data. The component application layer MUST NOT hard-code ordinary action spec ids such as `"mechanism_push"` to decide what behavior a PushOnEnter entity emits, and tests for configured behavior MUST use Luban-generated data rather than fallback defaults.
+
+#### Scenario: PushOnEnter 从配置创建输出
+- **WHEN** Luban Excel data declares an entity archetype with `PushOnEnter`
+- **AND** it declares output action spec id and output cost ticks
+- **THEN** entity construction creates `PushOnEnterComponent` from those configured values
+- **AND** `ComponentApplicationRegistry` does not choose the output spec id by hard-coded string
+
+#### Scenario: 不同行为复用 PushOnEnter 组件
+- **WHEN** conveyor, wind field, or another tile-like entity uses `PushOnEnterComponent`
+- **AND** each config row declares a different output action spec or cost
+- **THEN** each entity emits the configured output action
+- **AND** core rules do not add entity-name or action-name branches to distinguish them
+
+#### Scenario: fallback 不作为统一数据源
+- **WHEN** tests or runtime need PushOnEnter output data
+- **THEN** they load Luban-generated config data
+- **AND** they do not rely on fallback provider defaults to choose output spec or cost
+
+### Requirement: 普通 action pipeline 不依赖 Pending
+系统 SHALL allow ordinary ready actions and structured deferred outputs to execute through the action pipeline without a `PendingRuleStateStore`. Pending state MUST NOT be required for push continuation, PushOnEnter output, or deferred output re-entry.
+
+#### Scenario: Server runner executes without pending push chain
+- **WHEN** a server tick drains ready player, mechanism, auto, debug, or deferred actions
+- **THEN** the main rule execution path processes them without creating pending child units for push continuation
+- **AND** downstream push continuation is represented by deferred output
+- **AND** source action results do not wait for downstream deferred result success
+
+#### Scenario: Future waiting action is explicit
+- **WHEN** a future behavior needs parent action result to wait for child action results
+- **THEN** that behavior requires an explicit waiting-action proposal and policy
+- **AND** it MUST NOT reuse legacy push pending chain as an implicit default path
+
+### Requirement: 同 tick Push Vector Composition
+系统 SHALL compose same-tick push contributions targeting the same resolved subject into a deterministic net push vector before those contributions become independent movement attempts. All push contributions SHALL enter the same default composition pool unless a future explicit composition-group policy is added. Composition MUST preserve contribution metadata and MUST NOT use repeated queued action count as the source of strength.
+
+#### Scenario: 相反方向抵消
+- **WHEN** the same resolved subject receives an `Up` push contribution and a `Down` push contribution for the same ready tick
+- **THEN** the system computes a net vector whose vertical component is cancelled
+- **AND** cancelled contributions do not both continue as independent push actions
+- **AND** diagnostics preserve the contributing causality samples
+
+#### Scenario: 同方向累加为贡献元信息
+- **WHEN** the same resolved subject receives multiple same-direction push contributions for the same ready tick
+- **THEN** the system keeps one composed push intent for that direction
+- **AND** the composed intent records contribution count and per-direction contribution metadata
+- **AND** the current behavior does not convert contribution count into extra movement distance
+
+#### Scenario: 不同 push spec 默认合成
+- **WHEN** different action specs produce push contributions for the same resolved subject and ready tick
+- **THEN** those contributions enter the same default push composition pool
+- **AND** the system does not require action spec grouping before composing ordinary push contributions
+
+#### Scenario: 不同 subject 不合成
+- **WHEN** two push contributions have the same ready tick and direction
+- **AND** they target different resolved subjects
+- **THEN** they remain separate composed intents
+- **AND** one subject's contribution metadata does not affect the other subject
+
+### Requirement: Push Energy Metadata Reservation
+系统 SHALL reserve metadata fields for future push energy or strength policies without fully interpreting those fields in the first implementation. Same-direction contribution count SHALL be retained as future strength input, but it MUST NOT affect movement distance, priority, cost, or collision bypass until a future explicit strength policy is added.
+
+#### Scenario: energy 不改变当前移动
+- **WHEN** a composed push intent contains energy placeholder data
+- **THEN** the push still resolves through the current one-step movement semantics
+- **AND** same-direction contribution count and energy value do not produce multi-cell movement, higher priority, or collision bypass
+
+#### Scenario: future policy has retained inputs
+- **WHEN** future work introduces energy decay, strength, mass, or multi-step push
+- **THEN** it can read total contribution, per-direction contribution, net vector, and causality samples from the composed push metadata
+- **AND** it does not need to restore duplicate queued actions to recover contribution facts
 

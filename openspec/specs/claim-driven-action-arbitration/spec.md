@@ -87,27 +87,45 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 - **AND** action result and pending action unit state reflect that the parent is waiting
 
 ### Requirement: Pending Push Uses Unified Action Flow
-系统 SHALL express pending push continuation as parent / derived action units in the same claim-driven arbiter. Pending push MUST NOT use execution-layer special branches for port front, chain expansion, final move acceptance, or same-tick whole-chain solving when those can be represented through reusable arbitration policies and action unit retry.
+系统 SHALL express pending push continuation as parent / derived action units in the same claim-driven arbiter. Pending push MUST NOT use execution-layer special branches for port front, chain expansion, final move acceptance, or same-tick whole-chain solving when those can be represented through reusable arbitration policies, action unit handoff, and push contact batches. A blocked action MAY create a push contact batch containing multiple derived child action units when its own move claims contact multiple distinct downstream pushable subjects in the same blocked step. Contacts MUST be resolved to handoff subjects before child unit creation, and multiple contacts resolving to the same downstream subject MUST create only one child unit. Those child units MUST remain independent action units with their own claims, arbitration, plans, and commits; execution MUST NOT combine parent and downstream bodies into one action-unit commit.
 
-#### Scenario: Pending parent retries through claims
+#### Scenario: Pending parent continues through claims
 - **WHEN** a derived blocker action unit succeeds
-- **THEN** the waiting parent action unit becomes ready to retry on a later ready tick
-- **AND** the retried parent action unit enters the same claim-driven arbiter
+- **THEN** the waiting parent action unit may continue through the existing pending action flow
+- **AND** any later parent action unit enters the same claim-driven arbiter
 
-#### Scenario: Pending completion waits for parent result
+#### Scenario: Pending completion waits for owner result
 - **WHEN** a derived push action unit commits successfully
 - **THEN** the owner action is not marked successful solely because the derived action succeeded
-- **AND** the owner action succeeds only after the parent action unit retries and commits its own claims
+- **AND** the owner action result is reported only by the pending action boundary
 
 #### Scenario: Pending push keeps chain safety
-- **WHEN** an action unit retry or derivation would loop, exceed retry limits, exceed pending timeout, exceed chain depth, or duplicate an active child
-- **THEN** the pending action unit boundary fails the unit with stable reason
+- **WHEN** an action unit derivation would loop, exceed pending timeout, or duplicate an active child subject outside an allowed same push contact batch
+- **THEN** the pending action unit boundary fails the unit or batch with stable reason
 - **AND** existing covered push outcomes remain compatible
 
 #### Scenario: Body chain remains action-unit based
 - **WHEN** connected body A is blocked by connected body B and B is blocked by connected body C
-- **THEN** A, B, and C are represented as separate action units connected by handoff results
-- **AND** execution does not create one combined A-B-C commit transaction
+- **THEN** A, B, and C are represented as separate action units connected by handoff results or push contact batches
+- **AND** execution does not create one combined A-B-C action-unit commit transaction
+
+#### Scenario: Connected body front contacts create one push contact batch
+- **WHEN** a connected body action unit moves in a direction and its body move claims target cells containing two distinct external pushable subjects
+- **THEN** the blocked step creates one push contact batch owned by the parent action unit
+- **AND** the batch contains one derived child action unit per distinct external pushable subject
+- **AND** all child units share the parent owner action, parent unit id, direction, created tick, and batch id
+
+#### Scenario: Multiple contacts resolving to one downstream subject create one child
+- **WHEN** two body move claims contact two members of the same downstream connected body
+- **THEN** the contact set may contain both contact facts
+- **AND** handoff target resolution resolves both contacts to the same downstream subject key
+- **AND** the blocked step creates one derived child action unit for that downstream subject
+- **AND** the source body does not move as part of that handoff result
+
+#### Scenario: Push contact batch does not merge downstream body commits
+- **WHEN** a push contact batch contains child units for two downstream connected bodies
+- **THEN** each downstream body produces and commits only through its own accepted child action unit
+- **AND** the parent action unit does not include downstream body members in its own accepted claims or move plan
 
 ### Requirement: Ordinary Behavior Extension Does Not Modify Core Orchestration
 系统 SHALL allow new ordinary move-like behavior to reuse existing primitives, claim kinds, conflict policies, merge policies, interrupt policies, blocked policies, and commit policies without editing `StateDrivenRules`, `ActionArbiter`, `RulePlanner`, or commit orchestration.
@@ -166,7 +184,7 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 - **AND** only explicit `ActionSpec` policy differences can change subject selection
 
 ### Requirement: Connected Body Member Commit Boundary
-系统 SHALL limit multi-member movement commits to an accepted connected body subject. Multi-member commit MUST NOT be used to model ordinary push chains, parent retry, downstream blocker movement, or unrelated entity side effects.
+系统 SHALL limit multi-member movement commits to an accepted connected body subject. Multi-member commit MUST NOT be used to model ordinary push chains, parent continuation, downstream blocker movement, or unrelated entity side effects. A push contact batch MAY relate multiple action units for multi-contact push propagation and result aggregation, but it MUST NOT turn those units into one combined member commit.
 
 #### Scenario: connected body 全体成功移动
 - **WHEN** 一个 accepted connected body subject 包含多个 members
@@ -177,19 +195,24 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 
 #### Scenario: connected body 任一 member 阻塞
 - **WHEN** 一个 accepted connected body subject 的任一 member target 被 external blocking entity 阻塞
-- **THEN** arbitration or commit rejects the connected body action or derives a blocker action according to blocked policy
-- **AND** no member position changes are applied until the connected body action later retries and succeeds
+- **THEN** arbitration or commit rejects the connected body action or derives blocker action units according to blocked policy and push contact batch rules
+- **AND** no member position changes are applied until the connected body action later continues and succeeds
 
 #### Scenario: 普通 push chain 不使用 member commit
 - **WHEN** A pushes B and B may push C
-- **THEN** A、B、C are represented as separate action units connected by handoff results
-- **AND** commit MUST NOT treat A、B、C as members of one ordinary push transaction
+- **THEN** A、B、C are represented as separate action units connected by handoff results or push contact batches
+- **AND** commit MUST NOT treat A、B、C as members of one ordinary push action-unit transaction
 
 #### Scenario: body-to-body push chain 不扩展 member commit
 - **WHEN** connected body A-B pushes connected body C-D
 - **THEN** A-B 的 action unit 只提交 A-B 的 member changes
 - **AND** C-D 的 movement 必须由独立 derived action unit 提交
-- **AND** A-B waits and retries instead of committing C-D as its own side effect
+- **AND** A-B does not commit C-D as its own side effect
+
+#### Scenario: push contact batch 聚合结果不聚合 member
+- **WHEN** one parent action unit derives two child action units in the same push contact batch
+- **THEN** batch result aggregation MAY decide parent continuation, batch failure, or owner result timing
+- **AND** batch aggregation MUST NOT add any child subject member to the parent unit's commit member set
 
 ### Requirement: Action Subject Policy Verification
 系统 SHALL verify action subject policy behavior through Unity TestFramework EditMode tests and existing Shared/server validation. Unity Player build MUST NOT be required for automated validation, and end-to-end runtime sync MUST remain a manual Play Mode / two-client verification step.
@@ -223,4 +246,146 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 - **WHEN** a pushable blocker belongs to a port connected body
 - **THEN** derived subject selection follows the configured handoff subject policy
 - **AND** it does not require a hardcoded `"connected_body_move"` spec id
+
+### Requirement: Push Input Merge Boundary
+系统 SHALL allow multiple same-tick push inputs to the same resolved subject to merge or deduplicate before planning and commit. Merge or deduplication MUST be based on the resolved subject key, not raw contact count, and MUST preserve deterministic conflict handling for different subjects.
+
+#### Scenario: Same subject repeated input
+- **WHEN** two contacts or action units in the same transaction resolve to the same downstream subject key
+- **THEN** arbitration creates at most one consumable action unit or deferred output for that subject in the transaction
+- **AND** the repeated input is not reported as `push chain cycle`
+- **AND** raw contact count does not create duplicate child units
+
+#### Scenario: Different subjects still remain separate
+- **WHEN** two same-tick push inputs resolve to two distinct downstream subject keys
+- **THEN** the system may create distinct action units or deferred outputs according to explicit policy
+- **AND** those subjects are planned and committed independently
+
+### Requirement: Unsafe Subject Overlap
+系统 SHALL distinguish exact subject convergence from unsafe partial overlap. If a candidate subject has a different subject key but shares any entity with an already consumed or owned subject in the same transaction, the system MUST reject or fail the unsafe step with a stable safety reason.
+
+#### Scenario: Exact subject convergence
+- **WHEN** a candidate child subject has the same stable subject key as a subject already seen in the same pending state or transaction
+- **THEN** the candidate is treated as convergence
+- **AND** no duplicate child unit is created
+- **AND** no chain-cycle failure is emitted for that exact duplicate
+
+#### Scenario: Partial overlap remains unsafe
+- **WHEN** a candidate child subject has a different stable subject key
+- **AND** it shares at least one entity with a subject already consumed, owned, or added in the same transaction
+- **THEN** the system rejects or fails that step with a stable unsafe-overlap or chain-cycle reason
+- **AND** the shared entity is not committed by two action units
+
+### Requirement: No Same-Transaction Feedback Amplification
+系统 SHALL prevent closed-loop push feedback from being consumed repeatedly in the same transaction. Same-tick push strength or repeated push inputs MAY merge before the subject consumes, but feedback produced by that consumption MUST NOT recursively increase the same transaction's input.
+
+#### Scenario: Multiple external inputs merge once
+- **WHEN** several external sources push the same loop subject in one tick
+- **THEN** their input may be merged for one subject consumption
+- **AND** the loop subject consumes once for that tick
+
+#### Scenario: Loop feedback does not amplify in-place
+- **WHEN** a loop subject's consumed output routes back to the loop subject
+- **THEN** the returned feedback is not consumed again in the same transaction
+- **AND** it cannot create an unbounded same-tick push amplifier
+- **AND** any continued effect is delayed to a later tick through a structured deferred output
+
+### Requirement: Policy-Driven Deferred Output
+系统 SHALL represent continued push output with explicit deferred output policy data. Runtime arbitration MUST NOT infer deferred output behavior from action names, entity names, tag combinations, or hard-coded mechanism identifiers.
+
+#### Scenario: Deferred output fields drive behavior
+- **WHEN** a blocked action produces continued downstream output
+- **THEN** the output contains source subject, target subject, intent, direction or vector, ready tick, cost, dedupe key, and causality id
+- **AND** the next ready action is created from those fields
+- **AND** the rules layer does not branch on a special action name or mechanism name to choose this behavior
+
+#### Scenario: Equivalent policies behave equivalently
+- **WHEN** two action specs have different ids but the same deferred output policy fields
+- **THEN** they produce equivalent deferred output behavior for the same world state
+- **AND** differences in behavior require explicit policy data differences
+
+### Requirement: Move Claim Contact Set
+系统 SHALL discover external blockers for a move action unit by evaluating the action unit's produced body move claims. The contact set MUST include contact facts for blocking entities occupying claimed target coordinates, excluding entities already inside the current action subject/body. The contact set MUST NOT decide the downstream handoff subject or the number of child units. The blocked policy layer MUST consume this contact set instead of only the first blocker when deriving push handoff units.
+
+#### Scenario: 多 member 目标格收集多个 external contacts
+- **WHEN** a connected body action unit has two body move claims whose target coordinates are occupied by two distinct external entities
+- **THEN** the arbiter discovers both external entities in the contact set
+- **AND** contacts already belonging to the moving body are excluded
+- **AND** handoff child unit creation is decided later by resolved downstream subject
+
+#### Scenario: 单 blocker 兼容
+- **WHEN** a single-entity move action has one target coordinate occupied by one external pushable entity
+- **THEN** the contact set contains one contact
+- **AND** existing single-blocker push behavior remains representable
+
+#### Scenario: 同一 downstream subject 保留 contact 事实
+- **WHEN** two body move claims target two members of the same external connected body
+- **THEN** the contact set may preserve both contact facts
+- **AND** contact collection does not collapse them by connected body
+- **AND** later handoff target resolution deduplicates child units by the resolved subject key
+
+### Requirement: Push Contact Batch Completion
+系统 SHALL define how one blocked step with multiple push contacts reports success or failure independently from individual action unit claim arbitration. The first implementation MUST support fixed all-success semantics: all child units in the batch must succeed before the parent may continue as unblocked; any child unit failure fails the batch and prevents parent success for that blocked step.
+
+#### Scenario: batch 全部 child 成功
+- **WHEN** all child units in a push contact batch are accepted and committed
+- **THEN** the batch is marked succeeded
+- **AND** the parent unit may continue through the normal pending action flow
+
+#### Scenario: batch 任一 child 失败
+- **WHEN** any child unit in a push contact batch is rejected, interrupted, times out, or fails chain safety
+- **THEN** the batch is marked failed
+- **AND** the parent unit does not continue as if the blocked path was cleared
+- **AND** no successful child commit is reported as the owner action's final success by itself
+
+### Requirement: Pending Push Subject Safety
+系统 SHALL keep pending push safety focused on resolved action-unit subjects rather than raw contact count. Pending state MUST reject true cycles, duplicate active downstream subjects, and exceeded timeout. Pending state MUST NOT reject push propagation merely because it has derived many action units, and it MUST NOT treat multiple contacts or multiple members inside one resolved connected body subject as propagation depth.
+
+#### Scenario: sibling branches converge on one ready downstream subject
+- **WHEN** two sibling child requests inside one pending push state resolve to the same downstream subject
+- **THEN** pending state does not create a duplicate ready child unit for that subject
+- **AND** the duplicate subject is not reported as a push chain cycle
+
+#### Scenario: true ancestor subject revisit fails
+- **WHEN** a derived push would create a child whose resolved subject includes an ancestor subject already in the chain
+- **THEN** pending state rejects that child creation with a stable chain cycle reason
+- **AND** no extra child unit is created for the unsafe step
+
+#### Scenario: propagation length is not a failure condition
+- **WHEN** push propagation derives several action units without revisiting an ancestor subject
+- **THEN** pending state does not fail solely because of propagation length
+- **AND** each derived action unit remains atomic and continues through normal arbitration and commit
+
+### Requirement: Collision-Safe Composed Push Movement
+系统 SHALL resolve composed push movement through discrete grid movement checks. A composed push vector MUST NOT teleport, fly over, or otherwise bypass intermediate collision cells.
+
+#### Scenario: 单轴合成仍走 claim 和 commit
+- **WHEN** push vector composition produces a non-zero single-axis intent
+- **THEN** the resulting movement attempt enters the existing body claim, target claim, and commit validation pipeline
+- **AND** blockers, reserved targets, source changes, and occupied cells can still reject the movement
+
+#### Scenario: 向量终点不能跳过碰撞
+- **WHEN** a composed vector has magnitude greater than one or contains multiple axis components
+- **THEN** the system MUST NOT directly move the subject to the vector endpoint
+- **AND** every occupied grid cell that would be crossed by an enabled path policy must be checked as a discrete movement step
+
+#### Scenario: 双轴向量确定性拆分
+- **WHEN** push vector composition produces a non-zero two-axis vector
+- **THEN** the system decomposes it into deterministic single-cell steps using the configured path order
+- **AND** the first implementation uses X then Y as the default path order
+- **AND** each step is checked through discrete movement validation
+- **AND** future eight-direction movement still requires explicit collision or corner-crossing rules before diagonal shortcuts are allowed
+
+### Requirement: Push Composition Does Not Replace Existing Arbitration
+系统 SHALL keep existing body intent arbitration, target claim arbitration, and commit validation as the final movement safety layers after push vector composition.
+
+#### Scenario: body intent 仍然裁决
+- **WHEN** a composed push intent targets a connected body
+- **THEN** the body still projects its member claims through the existing claim pipeline
+- **AND** all member movement remains all-or-nothing according to the existing body commit boundary
+
+#### Scenario: target claim 仍然裁决
+- **WHEN** a composed push intent and another accepted move attempt target the same cell
+- **THEN** target claim arbitration still chooses or rejects candidates according to existing priority and claim rules
+- **AND** push vector composition does not reserve target cells by itself
 

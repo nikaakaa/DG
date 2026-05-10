@@ -5,8 +5,6 @@ namespace DG.Map
 {
     public sealed class WorldBootstrap : MonoBehaviour
     {
-        [SerializeField] private bool useFallbackConfig;
-
         public ClientMapWorld ClientMapWorld { get; private set; }
 
         private void Awake()
@@ -21,9 +19,7 @@ namespace DG.Map
                 return ClientMapWorld;
             }
 
-            ClientMapWorld = useFallbackConfig
-                ? new ClientMapWorld(FallbackGameConfigProvider.Instance)
-                : new ClientMapWorld(ClientGameConfigProviderFactory.Create());
+            ClientMapWorld = new ClientMapWorld(ClientGameConfigProviderFactory.Create());
             return ClientMapWorld;
         }
     }

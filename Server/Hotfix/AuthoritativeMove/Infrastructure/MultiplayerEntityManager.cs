@@ -11,7 +11,7 @@ public sealed class MultiplayerEntityManager<TSession> where TSession : class
     private readonly Dictionary<long, TSession> EntitySessions = new();
     private long nextEntityId = 1;
 
-    public MultiplayerEntityManager(GameWorld world) : this(world, FallbackGameConfigProvider.Instance)
+    public MultiplayerEntityManager(GameWorld world) : this(world, LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()))
     {
     }
 

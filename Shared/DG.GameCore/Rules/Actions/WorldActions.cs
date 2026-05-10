@@ -43,6 +43,10 @@ public sealed class WorldAction
     public int AutoMoveIntervalTicks { get; private set; }
     public long CausalityId { get; private set; }
     public string DedupeKey { get; private set; } = string.Empty;
+    public string DeferredEquivalenceKey { get; private set; } = string.Empty;
+    public int DeferredContributionCount { get; private set; } = 1;
+    public IReadOnlyList<long> DeferredCausalitySamples => deferredCausalitySamples;
+    private readonly List<long> deferredCausalitySamples = new();
 
     public WorldAction WithSpawn(int configId, long playerId, int autoMoveIntervalTicks)
     {
@@ -60,11 +64,24 @@ public sealed class WorldAction
         return this;
     }
 
-    public WorldAction WithDeferredSource(long causalityId, string dedupeKey)
+    public WorldAction WithDeferredSource(long causalityId, string dedupeKey, string equivalenceKey)
     {
         CausalityId = causalityId;
         DedupeKey = dedupeKey ?? string.Empty;
+        DeferredEquivalenceKey = equivalenceKey ?? string.Empty;
+        DeferredContributionCount = 1;
+        deferredCausalitySamples.Clear();
+        deferredCausalitySamples.Add(causalityId);
         return this;
+    }
+
+    public void MergeDeferredContribution(long causalityId)
+    {
+        DeferredContributionCount++;
+        if (deferredCausalitySamples.Count < 8 && !deferredCausalitySamples.Contains(causalityId))
+        {
+            deferredCausalitySamples.Add(causalityId);
+        }
     }
 }
 
@@ -162,15 +179,26 @@ public sealed class WorldActionQueue
         return action;
     }
 
-    public WorldAction EnqueueDeferred(DeferredAction deferred)
+    public DeferredEnqueueResult EnqueueDeferred(DeferredAction deferred)
     {
         var spec = registry.Get(deferred.SpecId);
         int resolvedCost = deferred.CostTicks > 0 ? deferred.CostTicks : spec.DefaultCostTicks;
         long readyTick = deferred.ReadyTick > deferred.CreatedTick ? deferred.ReadyTick : deferred.CreatedTick + Math.Max(1, resolvedCost);
+        string equivalenceKey = BuildDeferredEquivalenceKey(deferred, readyTick);
+        for (int i = 0; i < actions.Count; i++)
+        {
+            WorldAction existing = actions[i];
+            if (existing.DeferredEquivalenceKey == equivalenceKey)
+            {
+                existing.MergeDeferredContribution(deferred.CausalityId);
+                return new DeferredEnqueueResult(existing, false, equivalenceKey, existing.DeferredContributionCount);
+            }
+        }
+
         var action = new WorldAction(nextActionId++, spec.DefaultPriority, deferred.SpecId, deferred.EntityId, null, deferred.Direction, 0, deferred.CreatedTick, readyTick, resolvedCost)
-            .WithDeferredSource(deferred.CausalityId, deferred.DedupeKey);
+            .WithDeferredSource(deferred.CausalityId, deferred.DedupeKey, equivalenceKey);
         actions.Add(action);
-        return action;
+        return new DeferredEnqueueResult(action, true, equivalenceKey, action.DeferredContributionCount);
     }
 
     public IReadOnlyList<WorldAction> Drain()
@@ -210,6 +238,29 @@ public sealed class WorldActionQueue
             .ThenBy(action => action.EntityId)
             .ToArray();
     }
+
+    private static string BuildDeferredEquivalenceKey(DeferredAction deferred, long readyTick)
+    {
+        IReadOnlyList<long> subjects = deferred.SubjectEntityIds.Count == 0 ? new[] { deferred.EntityId } : deferred.SubjectEntityIds;
+        return readyTick + "|" + deferred.SpecId + "|" + deferred.Direction + "|" + string.Join(",", subjects.OrderBy(entityId => entityId));
+    }
+}
+
+public readonly struct DeferredEnqueueResult
+{
+    public DeferredEnqueueResult(WorldAction action, bool enqueued, string equivalenceKey, int contributionCount)
+    {
+        Action = action;
+        Enqueued = enqueued;
+        EquivalenceKey = equivalenceKey ?? string.Empty;
+        ContributionCount = Math.Max(1, contributionCount);
+    }
+
+    public WorldAction Action { get; }
+    public bool Enqueued { get; }
+    public bool Merged => !Enqueued;
+    public string EquivalenceKey { get; }
+    public int ContributionCount { get; }
 }
 
 public static class ExplicitOutputPolicies

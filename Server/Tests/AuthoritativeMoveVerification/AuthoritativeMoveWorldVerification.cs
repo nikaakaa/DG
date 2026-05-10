@@ -61,6 +61,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyDeferredQueueDedupe(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyStateDrivenActionDeterminism(out reason))
         {
             return false;
@@ -327,12 +332,7 @@ public static class AuthoritativeMoveWorldVerification
         {
         }
 
-        if (!VerifyFallbackMatchesLuban(DefaultWorldConfig.PlayerConfigId, out reason) ||
-            !VerifyFallbackMatchesLuban(DefaultWorldConfig.BallConfigId, out reason) ||
-            !VerifyFallbackMatchesLuban(DefaultWorldConfig.BlockerConfigId, out reason) ||
-            !VerifyFallbackMatchesLuban(DefaultWorldConfig.PushableBlockerConfigId, out reason) ||
-            !VerifyFallbackMatchesLuban(DefaultWorldConfig.PortConnectorBlockerConfigId, out reason) ||
-            !VerifyFallbackMatchesLuban(DefaultWorldConfig.ConveyorConfigId, out reason))
+        if (!VerifyFormalConfigExists(out reason))
         {
             return false;
         }
@@ -341,23 +341,42 @@ public static class AuthoritativeMoveWorldVerification
         return true;
     }
 
-    private static bool VerifyFallbackMatchesLuban(int configId, out string reason)
+    private static bool VerifyFormalConfigExists(out string reason)
     {
         IGameConfigProvider luban = CreateLubanProvider();
-        IGameConfigProvider fallback = FallbackGameConfigProvider.Instance;
-        if (!luban.TryGetArchetype(configId, out EntityArchetype lubanArchetype) ||
-            !fallback.TryGetArchetype(configId, out EntityArchetype fallbackArchetype))
+        int[] requiredConfigs =
         {
-            reason = "component workflow archetype missing: " + configId;
+            DefaultWorldConfig.PlayerConfigId,
+            DefaultWorldConfig.BallConfigId,
+            DefaultWorldConfig.BlockerConfigId,
+            DefaultWorldConfig.PushableBlockerConfigId,
+            DefaultWorldConfig.PortConnectorBlockerConfigId,
+            DefaultWorldConfig.ConveyorConfigId,
+            DefaultWorldConfig.WindFieldConfigId
+        };
+
+        for (int i = 0; i < requiredConfigs.Length; i++)
+        {
+            if (!luban.TryGetArchetype(requiredConfigs[i], out _))
+            {
+                reason = "formal archetype missing: " + requiredConfigs[i];
+                return false;
+            }
+        }
+
+        if (!luban.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig conveyorOutput) ||
+            !conveyorOutput.OutputSpecId.Equals(new ActionSpecId("mechanism_push")) ||
+            conveyorOutput.OutputCostTicks != 1)
+        {
+            reason = "formal conveyor push on enter config invalid";
             return false;
         }
 
-        if (!lubanArchetype.Components.OrderBy(kind => (int)kind).SequenceEqual(fallbackArchetype.Components.OrderBy(kind => (int)kind)) ||
-            !lubanArchetype.Tags.OrderBy(tag => tag).SequenceEqual(fallbackArchetype.Tags.OrderBy(tag => tag)) ||
-            lubanArchetype.ArchetypeId != fallbackArchetype.ArchetypeId ||
-            lubanArchetype.EntityTarget != fallbackArchetype.EntityTarget)
+        if (!luban.TryGetPushOnEnter(DefaultWorldConfig.WindFieldConfigId, out PushOnEnterConfig windOutput) ||
+            !windOutput.OutputSpecId.Equals(new ActionSpecId("configured_wind_push")) ||
+            windOutput.OutputCostTicks != 2)
         {
-            reason = "fallback archetype drifted from luban archetype: " + configId;
+            reason = "formal wind field push on enter config invalid";
             return false;
         }
 
@@ -401,6 +420,12 @@ public static class AuthoritativeMoveWorldVerification
             config = new PortConnectorConfig(configId, DirectionMask.All);
             return true;
         }
+
+        public bool TryGetPushOnEnter(int configId, out PushOnEnterConfig config)
+        {
+            config = new PushOnEnterConfig(configId, "mechanism_push", 1);
+            return true;
+        }
     }
 
     private static bool VerifyPushOnEnter(out string reason)
@@ -432,7 +457,7 @@ public static class AuthoritativeMoveWorldVerification
         world.NextTick();
         var queue = new WorldActionQueue();
         queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
         if (result.ActionResults.Count != 1 ||
             !result.ActionResults.Values.First().Success ||
             !world.TryGetEntity(1, out GameEntity player) ||
@@ -451,7 +476,7 @@ public static class AuthoritativeMoveWorldVerification
         blockedWorld.NextTick();
         var blockedQueue = new WorldActionQueue();
         blockedQueue.EnqueueConfiguredMove("mechanism_push", 2, Direction.Right, blockedWorld.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), new PendingRuleStateStore(), blockedWorld.ServerTick);
+        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), blockedWorld.ServerTick);
         if (blockedResult.ActionResults.Count != 1 ||
             blockedResult.ActionResults.Values.First().Success ||
             !blockedWorld.TryGetEntity(2, out GameEntity blockedPlayer) ||
@@ -998,6 +1023,28 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        var loopWorld = new GameWorld();
+        loopWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(970, new GridCoord(0, 0)));
+        loopWorld.FlushDelta();
+        loopWorld.NextTick();
+        var loopSystem = new StateDrivenRuleExecutionSystem();
+        StateDrivenRuleExecutionResult loopResult = loopSystem.Tick(loopWorld, new[]
+        {
+            new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 970, null, Direction.Up, 0, loopWorld.ServerTick - 1, loopWorld.ServerTick, 1),
+            new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 970, null, Direction.Down, 0, loopWorld.ServerTick - 1, loopWorld.ServerTick, 1)
+        }, loopWorld.ServerTick);
+        if (!loopWorld.TryGetEntity(970, out GameEntity loopBox) ||
+            !loopWorld.TryGetComponent(loopBox, out PositionComponent loopBoxPosition) ||
+            loopBoxPosition.Coord != new GridCoord(0, 0) ||
+            loopResult.DeferredActions.Count != 0 ||
+            loopResult.ProposalResults.Count != 0 ||
+            loopResult.ActionResults.Count != 2 ||
+            loopResult.ActionResults.Values.Any(result => result.Success || result.Reason != "push-vector-cancelled"))
+        {
+            reason = "same tick opposite push vector was not cancelled deterministically";
+            return false;
+        }
+
         reason = string.Empty;
         return true;
     }
@@ -1113,6 +1160,34 @@ public static class AuthoritativeMoveWorldVerification
         return true;
     }
 
+    private static bool VerifyDeferredQueueDedupe(out string reason)
+    {
+        var queue = new WorldActionQueue();
+        DeferredEnqueueResult first = queue.EnqueueDeferred(new DeferredAction("player_push", 800000148, new[] { 800000148L }, Direction.Up, 10, 11, 1, 2001, "2001"));
+        DeferredEnqueueResult second = queue.EnqueueDeferred(new DeferredAction("player_push", 800000148, new[] { 800000148L }, Direction.Up, 9, 11, 1, 2002, "2002"));
+        DeferredEnqueueResult opposite = queue.EnqueueDeferred(new DeferredAction("player_push", 800000148, new[] { 800000148L }, Direction.Down, 10, 11, 1, 2003, "2003"));
+        DeferredEnqueueResult otherSubject = queue.EnqueueDeferred(new DeferredAction("player_push", 800000149, new[] { 800000149L }, Direction.Up, 10, 11, 1, 2004, "2004"));
+        IReadOnlyList<WorldAction> ready = queue.DrainReady(11);
+
+        if (!first.Enqueued ||
+            second.Enqueued ||
+            !opposite.Enqueued ||
+            !otherSubject.Enqueued ||
+            second.ContributionCount != 2 ||
+            ready.Count != 3 ||
+            ready.Count(action => action.EntityId == 800000148 && action.Direction == Direction.Up) != 1 ||
+            ready.Count(action => action.EntityId == 800000148 && action.Direction == Direction.Down) != 1 ||
+            ready.Count(action => action.EntityId == 800000149 && action.Direction == Direction.Up) != 1 ||
+            ready.Single(action => action.EntityId == 800000148 && action.Direction == Direction.Up).DeferredContributionCount != 2)
+        {
+            reason = "deferred queue dedupe did not preserve equivalent contribution boundary";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
     private static bool VerifyConnectedBodyActionSubject(out string reason)
     {
         var world = new GameWorld();
@@ -1122,7 +1197,7 @@ public static class AuthoritativeMoveWorldVerification
         world.NextTick();
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueueConfiguredMove("connected_body_move", 1325, Direction.Right, world.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
         WorldDelta delta = world.FlushDelta();
         if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
             !moveResult.Success ||
@@ -1142,7 +1217,7 @@ public static class AuthoritativeMoveWorldVerification
         blockedWorld.NextTick();
         var blockedQueue = new WorldActionQueue();
         WorldAction blockedAction = blockedQueue.EnqueueConfiguredMove("connected_body_move", 1327, Direction.Right, blockedWorld.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), new PendingRuleStateStore(), blockedWorld.ServerTick);
+        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), blockedWorld.ServerTick);
         if (!blockedResult.ActionResults.TryGetValue(blockedAction.ActionId, out MoveResult blockedMoveResult) ||
             blockedMoveResult.Success ||
             blockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
@@ -1175,7 +1250,7 @@ public static class AuthoritativeMoveWorldVerification
         var queue = new WorldActionQueue();
         var pending = new PendingRuleStateStore();
         WorldAction action = queue.EnqueuePlayerMove(1332, new GridCoord(1, 0), 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
         if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
             !moveResult.Success ||
             pending.ActiveCount != 0 ||
@@ -1754,7 +1829,7 @@ public static class AuthoritativeMoveWorldVerification
     {
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueuePlayerMove(entityId, target, clientTick);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
         return result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult)
             ? moveResult
             : new MoveResult(false, entityId, default, Direction.None, MoveErrorCode.UnknownEntity, "action not resolved", false, default, clientTick);
@@ -1764,7 +1839,7 @@ public static class AuthoritativeMoveWorldVerification
     {
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueueAutoMove(entityId, world.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
         return result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult)
             ? moveResult
             : new MoveResult(false, entityId, default, Direction.None, MoveErrorCode.UnknownEntity, "action not resolved", false, default, clientTick);

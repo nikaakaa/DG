@@ -78,6 +78,24 @@ public sealed class LubanGameConfigProvider : IGameConfigProvider
         return true;
     }
 
+    public bool TryGetPushOnEnter(int configId, out PushOnEnterConfig config)
+    {
+        cfg.gamecore.PushOnEnterConfig row = tables.TbPushOnEnterConfig.GetOrDefault(configId);
+        if (row == null)
+        {
+            config = default;
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(row.OutputSpecId) || tables.TbActionSpec.GetOrDefault(row.OutputSpecId) == null)
+        {
+            throw new InvalidOperationException("PushOnEnter output action spec missing: " + configId + " -> " + row.OutputSpecId);
+        }
+
+        config = new PushOnEnterConfig(row.ConfigId, row.OutputSpecId, row.OutputCostTicks);
+        return true;
+    }
+
     private static EntityArchetype ConvertArchetype(cfg.gamecore.EntityArchetype row)
     {
         return new EntityArchetype(

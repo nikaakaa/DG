@@ -75,7 +75,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("configured_wind_push", 100, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.IsTrue(world.TryGetEntity(100, out GameEntity entity));
@@ -111,14 +111,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(110, new GridCoord(1, 0), 1);
-            var pending = new PendingRuleStateStore();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.IsTrue(result.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, result.DeferredActions.Count);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 110, new GridCoord(0, 0));
             AssertPosition(world, 111, new GridCoord(1, 0));
             AssertPosition(world, 112, new GridCoord(2, 0));
@@ -160,7 +159,7 @@ namespace DG.EditorTests
             {
                 MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 300, Direction.Right),
                 MoveRequest(2, "mechanism_push", WorldActionPriority.Mechanism, 300, Direction.Right)
-            }, new PendingRuleStateStore(), 1);
+            }, 1);
 
             Assert.AreEqual(1, result.AcceptedActions.Count);
             Assert.AreEqual(1, result.RejectedActions.Count);
@@ -176,11 +175,97 @@ namespace DG.EditorTests
             {
                 MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 310, Direction.Right),
                 MoveRequest(2, "mechanism_push", WorldActionPriority.Mechanism, 310, Direction.Left)
-            }, new PendingRuleStateStore(), 1);
+            }, 1);
 
             Assert.AreEqual(0, result.AcceptedActions.Count);
             Assert.AreEqual(2, result.RejectedActions.Count);
             Assert.IsTrue(result.RejectedActions.All(action => action.Reason == "conflicting body intents"));
+        }
+
+        [Test]
+        public void PushVectorArbiter_CancelsOppositeDirectionsForSameSubject()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(312, 312, new GridCoord(0, 0))));
+            var arbiter = new PushVectorArbiter(ActionSpecRegistry.Default);
+
+            PushVectorCompositionResult result = arbiter.Compose(world, new[]
+            {
+                MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 312, Direction.Up),
+                MoveRequest(2, "mechanism_push", WorldActionPriority.Mechanism, 312, Direction.Down)
+            });
+
+            Assert.AreEqual(0, result.Requests.Count);
+            Assert.AreEqual(2, result.CancelledRequests.Count);
+            Assert.AreEqual(1, result.Metadata.Count);
+            Assert.IsTrue(result.Metadata[0].NetVector.IsZero);
+            Assert.AreEqual(1, result.Metadata[0].PerDirectionContributionCount[Direction.Up]);
+            Assert.AreEqual(1, result.Metadata[0].PerDirectionContributionCount[Direction.Down]);
+            Assert.AreEqual(0, result.Metadata[0].Energy);
+            Assert.IsTrue(result.Reasons.Contains("push-vector-cancelled"));
+        }
+
+        [Test]
+        public void PushVectorArbiter_ComposesSameDirectionWithoutIncreasingDistance()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(313, 313, new GridCoord(0, 0))));
+            var arbiter = new PushVectorArbiter(ActionSpecRegistry.Default);
+
+            PushVectorCompositionResult result = arbiter.Compose(world, new[]
+            {
+                DeferredMoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 313, Direction.Up, 2, new[] { 101L, 102L })
+            });
+
+            Assert.AreEqual(1, result.Requests.Count);
+            Assert.AreEqual(Direction.Up, result.Requests[0].Target.Direction);
+            Assert.AreEqual(1, result.Metadata.Count);
+            Assert.AreEqual(2, result.Metadata[0].TotalContributionCount);
+            Assert.AreEqual(2, result.Metadata[0].PerDirectionContributionCount[Direction.Up]);
+            Assert.AreEqual(2, result.Metadata[0].NetVector.Y);
+            Assert.AreEqual(1, result.Metadata[0].Path.Count);
+            Assert.AreEqual(2, result.Metadata[0].CausalitySamples.Count);
+            Assert.AreEqual(0, result.Metadata[0].Energy);
+        }
+
+        [Test]
+        public void PushVectorArbiter_DoesNotComposeDifferentSubjects()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(314, 314, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(315, 315, new GridCoord(2, 0))));
+            var arbiter = new PushVectorArbiter(ActionSpecRegistry.Default);
+
+            PushVectorCompositionResult result = arbiter.Compose(world, new[]
+            {
+                MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 314, Direction.Up),
+                MoveRequest(2, "mechanism_push", WorldActionPriority.Mechanism, 315, Direction.Down)
+            });
+
+            Assert.AreEqual(2, result.Requests.Count);
+            Assert.AreEqual(2, result.Metadata.Count);
+            Assert.IsTrue(result.Metadata.All(item => !item.NetVector.IsZero));
+        }
+
+        [Test]
+        public void PushVectorArbiter_SplitsDualAxisByXThenY()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(316, 316, new GridCoord(0, 0))));
+            var arbiter = new PushVectorArbiter(ActionSpecRegistry.Default);
+
+            PushVectorCompositionResult result = arbiter.Compose(world, new[]
+            {
+                MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 316, Direction.Right),
+                MoveRequest(2, "mechanism_push", WorldActionPriority.Mechanism, 316, Direction.Up)
+            });
+
+            Assert.AreEqual(1, result.Requests.Count);
+            Assert.AreEqual(Direction.Right, result.Requests[0].Target.Direction);
+            Assert.AreEqual(2, result.Metadata[0].Path.Count);
+            Assert.AreEqual(Direction.Right, result.Metadata[0].Path[0]);
+            Assert.AreEqual(Direction.Up, result.Metadata[0].Path[1]);
+            Assert.IsTrue(result.Reasons.Contains("push-vector-path-pending"));
         }
 
         [Test]
@@ -193,7 +278,7 @@ namespace DG.EditorTests
             {
                 MoveRequest(1, "player_push", WorldActionPriority.Player, 320, Direction.Right, 1),
                 MoveRequest(2, "mechanism_push", WorldActionPriority.Mechanism, 321, Direction.Left)
-            }, new PendingRuleStateStore(), 1);
+            }, 1);
 
             Assert.AreEqual(1, result.AcceptedActions.Count);
             Assert.AreEqual(1, result.RejectedActions.Count);
@@ -219,7 +304,7 @@ namespace DG.EditorTests
                 0,
                 0);
 
-            ActionArbitrationResult result = new ActionArbiter().ArbitrateMoves(world, new[] { request }, new PendingRuleStateStore(), 1);
+            ActionArbitrationResult result = new ActionArbiter().ArbitrateMoves(world, new[] { request }, 1);
 
             Assert.AreEqual(0, result.AcceptedActions.Count);
             Assert.AreEqual(1, result.RejectedActions.Count);
@@ -243,7 +328,7 @@ namespace DG.EditorTests
             Assert.AreEqual(ActionSourceKind.Handoff, request.Source.Kind);
             Assert.AreEqual(20, request.DerivedFromUnitId);
 
-            ActionArbitrationResult result = new ActionArbiter().ArbitrateMoves(world, new[] { request }, pending, 1);
+            ActionArbitrationResult result = new ActionArbiter().ArbitrateMoves(world, new[] { request }, 1);
 
             Assert.AreEqual(0, result.AcceptedActions.Count);
             Assert.AreEqual(0, result.RejectedActions.Count);
@@ -263,14 +348,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(360, new GridCoord(1, 0), 1);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
@@ -296,18 +380,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(370, new GridCoord(1, 0), 2);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -333,7 +416,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 410, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 410, new GridCoord(1, 0));
@@ -351,7 +434,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("configured_wind_push", 420, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 420, new GridCoord(0, 0));
@@ -369,11 +452,11 @@ namespace DG.EditorTests
             ActionArbitrationResult first = new ActionArbiter().ArbitrateMoves(world, new[]
             {
                 MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 430, Direction.Right)
-            }, new PendingRuleStateStore(), world.ServerTick);
+            }, world.ServerTick);
             ActionArbitrationResult second = new ActionArbiter().ArbitrateMoves(world, new[]
             {
                 MoveRequest(2, "configured_wind_push", WorldActionPriority.Mechanism, 430, Direction.Right)
-            }, new PendingRuleStateStore(), world.ServerTick);
+            }, world.ServerTick);
 
             Assert.AreEqual(1, first.AcceptedActions.Count);
             Assert.AreEqual(1, second.AcceptedActions.Count);
@@ -399,14 +482,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(440, new GridCoord(1, 0), 5);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -432,12 +514,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(4410, new GridCoord(1, 0), 6);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -463,15 +544,14 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(445, new GridCoord(1, 0), 6);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            Assert.AreEqual(0, pending.ActiveCount);
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            Assert.AreEqual(0, first.ActivePendingCount);
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -549,13 +629,12 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 530, Direction.Right, world.ServerTick - 1, 1);
-            var pending = new PendingRuleStateStore();
 
-            StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(2, first.DeferredActions.Count);
             Assert.IsTrue(first.DeferredActions.All(output => output.CausalityId == action.ActionId));
             Assert.IsTrue(first.DeferredActions.All(output => output.Direction == Direction.Right));
@@ -586,23 +665,22 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 570, Direction.Right, world.ServerTick - 1, 1);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(2, contacts.Count);
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
             world.NextTick();
             for (int i = 0; i < first.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(first.DeferredActions[i]);
             }
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 570, new GridCoord(0, 0));
@@ -638,21 +716,20 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 580, Direction.Up, world.ServerTick - 1, 1);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(2, contacts.Count);
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
             world.NextTick();
             for (int i = 0; i < first.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(first.DeferredActions[i]);
             }
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             AssertPosition(world, 580, new GridCoord(0, 0));
             AssertPosition(world, 581, new GridCoord(1, 0));
@@ -679,16 +756,15 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(610, new GridCoord(1, 0), 33);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(1, -1), first.ActionResults[action.ActionId].FinalCoord);
@@ -725,15 +801,14 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(630, new GridCoord(1, 0), 34);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
             var reasons = new List<string>();
 
             for (int i = 0; i < 8; i++)
             {
                 StateDrivenRuleExecutionResult result = i == 0
-                    ? TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick))
-                    : TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+                    ? TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick))
+                    : TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
                 reasons.AddRange(result.Reasons);
                 if (result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult))
                 {
@@ -741,7 +816,7 @@ namespace DG.EditorTests
                     return;
                 }
 
-                if (pending.ActiveCount == 0 && queue.Count == 0)
+                if (queue.Count == 0)
                 {
                     break;
                 }
@@ -766,14 +841,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 540, Direction.Right, world.ServerTick - 1, 1);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(0, first.ActivePendingCount);
@@ -800,12 +874,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 550, Direction.Right, world.ServerTick - 1, 1);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(second.ActionResults.Values.Any(result => !result.Success));
@@ -831,12 +904,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 560, Direction.Right, world.ServerTick - 1, 1);
-            var pending = new PendingRuleStateStore();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 560, new GridCoord(0, 0));
             AssertPosition(world, 561, new GridCoord(0, 1));
             AssertPosition(world, 562, new GridCoord(1, 0));
@@ -855,12 +927,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(450, new GridCoord(1, 0), 6);
-            var pending = new PendingRuleStateStore();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 450, new GridCoord(0, 0));
             AssertPosition(world, 451, new GridCoord(1, 0));
             AssertPosition(world, 452, new GridCoord(2, 0));
@@ -896,12 +967,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(470, new GridCoord(1, 0), 7);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -925,12 +995,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(480, new GridCoord(1, 0), 8);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -953,12 +1022,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(430, new GridCoord(1, 0), 9);
-            var pending = new PendingRuleStateStore();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), pending, world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 430, new GridCoord(1, 0));
             AssertPosition(world, 431, new GridCoord(2, 0));
         }
@@ -973,12 +1041,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(380, new GridCoord(1, 0), 3);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -999,18 +1066,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(390, new GridCoord(1, 0), 4);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1039,18 +1105,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(490, new GridCoord(1, 0), 9);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1074,14 +1139,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(720, new GridCoord(1, 0), 41);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(1, first.DeferredActions.Count);
             AssertPosition(world, 720, new GridCoord(0, 0));
             AssertPosition(world, 721, new GridCoord(1, 0));
@@ -1096,12 +1160,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(730, new GridCoord(1, 0), 42);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
@@ -1132,7 +1195,7 @@ namespace DG.EditorTests
             {
                 new WorldAction(1, WorldActionPriority.Mechanism, "policy_a", 740, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1),
                 new WorldAction(2, WorldActionPriority.Mechanism, "policy_b", 741, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1)
-            }, new PendingRuleStateStore(), world.ServerTick);
+            }, world.ServerTick);
 
             Assert.AreEqual(2, first.DeferredActions.Count);
             Assert.IsTrue(first.DeferredActions.All(output => output.SpecId.Equals(new ActionSpecId("configured_wind_push"))));
@@ -1151,18 +1214,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(750, new GridCoord(0, 0), 43);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
             Assert.AreEqual(1, first.DeferredActions[0].CostTicks);
             Assert.AreEqual(first.DeferredActions[0].CreatedTick + 1, first.DeferredActions[0].ReadyTick);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
             Assert.IsFalse(second.Reasons.Contains("push chain cycle"));
         }
@@ -1177,19 +1239,134 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(760, new GridCoord(1, 0), 44);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
             AssertPosition(world, 760, new GridCoord(0, 0));
             AssertPosition(world, 761, new GridCoord(1, 0));
+        }
+
+        [Test]
+        public void StateDrivenPushVector_CancelsOppositeSameTickOutput()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(780, 780, new GridCoord(0, 0))));
+            world.NextTick();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult result = system.Tick(world, new[]
+            {
+                new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 780, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1),
+                new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 780, null, Direction.Down, 0, world.ServerTick - 1, world.ServerTick, 1)
+            }, world.ServerTick);
+
+            Assert.AreEqual(2, result.ActionResults.Count);
+            Assert.IsTrue(result.ActionResults.Values.All(item => !item.Success && item.Reason == "push-vector-cancelled"));
+            Assert.IsTrue(result.Reasons.Contains("push-vector-cancelled"));
+            AssertPosition(world, 780, new GridCoord(0, 0));
+        }
+
+        [Test]
+        public void StateDrivenPushVector_ComposedSingleAxisStillUsesCollisionValidation()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(781, 781, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(782, new GridCoord(0, 1))));
+            world.NextTick();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult result = system.Tick(world, new[]
+            {
+                new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 781, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1),
+                new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 781, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1)
+            }, world.ServerTick);
+
+            Assert.AreEqual(1, result.ActionResults.Count);
+            Assert.IsFalse(result.ActionResults[1].Success);
+            Assert.AreEqual("blocked cell", result.ActionResults[1].Reason);
+            AssertPosition(world, 781, new GridCoord(0, 0));
+            AssertPosition(world, 782, new GridCoord(0, 1));
+        }
+
+        [Test]
+        public void StateDrivenPushVector_DualAxisDoesNotJumpPastBlockedStep()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(783, 783, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(784, new GridCoord(1, 0))));
+            world.NextTick();
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult result = system.Tick(world, new[]
+            {
+                new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 783, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1),
+                new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 783, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1)
+            }, world.ServerTick);
+
+            Assert.IsTrue(result.ActionResults.ContainsKey(1));
+            Assert.IsFalse(result.ActionResults[1].Success);
+            AssertPosition(world, 783, new GridCoord(0, 0));
+            AssertPosition(world, 784, new GridCoord(1, 0));
+        }
+
+        [Test]
+        public void DeferredQueue_MergesEquivalentDeferredWithDifferentCausality()
+        {
+            var queue = new WorldActionQueue();
+            var firstDeferred = new DeferredAction("player_push", 800, new[] { 800L }, Direction.Up, 20, 21, 1, 1001, "1001:20:Up:800");
+            var secondDeferred = new DeferredAction("player_push", 800, new[] { 800L }, Direction.Up, 19, 21, 1, 1002, "1002:19:Up:800");
+
+            DeferredEnqueueResult first = queue.EnqueueDeferred(firstDeferred);
+            DeferredEnqueueResult second = queue.EnqueueDeferred(secondDeferred);
+            IReadOnlyList<WorldAction> ready = queue.DrainReady(21);
+
+            Assert.IsTrue(first.Enqueued);
+            Assert.IsFalse(second.Enqueued);
+            Assert.AreSame(first.Action, second.Action);
+            Assert.AreEqual(2, second.ContributionCount);
+            Assert.AreEqual(1, ready.Count);
+            Assert.AreEqual(2, ready[0].DeferredContributionCount);
+            CollectionAssert.Contains(ready[0].DeferredCausalitySamples.ToArray(), 1001);
+            CollectionAssert.Contains(ready[0].DeferredCausalitySamples.ToArray(), 1002);
+        }
+
+        [Test]
+        public void DeferredQueue_DoesNotMergeOppositeDirections()
+        {
+            var queue = new WorldActionQueue();
+
+            DeferredEnqueueResult up = queue.EnqueueDeferred(new DeferredAction("player_push", 810, new[] { 810L }, Direction.Up, 30, 31, 1, 1101, "up"));
+            DeferredEnqueueResult down = queue.EnqueueDeferred(new DeferredAction("player_push", 810, new[] { 810L }, Direction.Down, 30, 31, 1, 1102, "down"));
+            IReadOnlyList<WorldAction> ready = queue.DrainReady(31);
+
+            Assert.IsTrue(up.Enqueued);
+            Assert.IsTrue(down.Enqueued);
+            Assert.AreEqual(2, ready.Count);
+            Assert.IsTrue(ready.Any(action => action.Direction == Direction.Up));
+            Assert.IsTrue(ready.Any(action => action.Direction == Direction.Down));
+        }
+
+        [Test]
+        public void DeferredQueue_DoesNotMergeDifferentSubjects()
+        {
+            var queue = new WorldActionQueue();
+
+            DeferredEnqueueResult leftSubject = queue.EnqueueDeferred(new DeferredAction("player_push", 820, new[] { 820L }, Direction.Up, 40, 41, 1, 1201, "left"));
+            DeferredEnqueueResult rightSubject = queue.EnqueueDeferred(new DeferredAction("player_push", 821, new[] { 821L }, Direction.Up, 40, 41, 1, 1202, "right"));
+            IReadOnlyList<WorldAction> ready = queue.DrainReady(41);
+
+            Assert.IsTrue(leftSubject.Enqueued);
+            Assert.IsTrue(rightSubject.Enqueued);
+            Assert.AreEqual(2, ready.Count);
+            Assert.IsTrue(ready.Any(action => action.EntityId == 820));
+            Assert.IsTrue(ready.Any(action => action.EntityId == 821));
         }
 
         [Test]
@@ -1203,14 +1380,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(770, new GridCoord(0, 0), 45);
-            var pending = new PendingRuleStateStore();
             var system = new StateDrivenRuleExecutionSystem();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, pending, queue.DrainReady(world.ServerTick));
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsFalse(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(0, first.DeferredActions.Count);
-            Assert.AreEqual(0, pending.ActiveCount);
+            Assert.AreEqual(0, first.ActivePendingCount);
         }
 
         [Test]
@@ -1254,7 +1430,7 @@ namespace DG.EditorTests
             ActionArbitrationResult arbitration = new ActionArbiter().ArbitrateMoves(world, new[]
             {
                 MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 350, Direction.Right)
-            }, new PendingRuleStateStore(), 1);
+            }, 1);
 
             Assert.AreEqual(1, arbitration.AcceptedActions.Count);
             Assert.IsTrue(new RulePlanner().TryPlanMove(world, arbitration.AcceptedActions[0], out MovePlan plan, out PlanResult result));
@@ -1320,6 +1496,26 @@ namespace DG.EditorTests
                 0);
         }
 
+        private static ActionRequest DeferredMoveRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, long entityId, Direction direction, int contributionCount, IReadOnlyList<long> causalitySamples)
+        {
+            ActionSpec spec = ActionSpecRegistry.Default.Get(specId);
+            return new ActionRequest(
+                actionId,
+                specId,
+                priority,
+                new ActionSourceContext(spec.DefaultSource, entityId, 0, spec.SourceTag),
+                entityId,
+                new ActionTarget(0, null, direction),
+                default,
+                0,
+                0,
+                0,
+                0,
+                0,
+                contributionCount,
+                causalitySamples);
+        }
+
         private static void AssertSpec(ActionSpecRegistry registry, ActionSpecId id, ActionPrimitive primitive, ActionSourceKind source, ActionTargetRule targetRule)
         {
             Assert.IsTrue(registry.TryGet(id, out ActionSpec spec));
@@ -1335,9 +1531,9 @@ namespace DG.EditorTests
             Assert.AreEqual(expected, position.Coord);
         }
 
-        private static StateDrivenRuleExecutionResult TickAndEnqueueDeferred(StateDrivenRuleExecutionSystem system, GameWorld world, WorldActionQueue queue, PendingRuleStateStore pending, IReadOnlyList<WorldAction> actions)
+        private static StateDrivenRuleExecutionResult TickAndEnqueueDeferred(StateDrivenRuleExecutionSystem system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions)
         {
-            StateDrivenRuleExecutionResult result = system.Tick(world, actions, pending, world.ServerTick);
+            StateDrivenRuleExecutionResult result = system.Tick(world, actions, world.ServerTick);
             for (int i = 0; i < result.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(result.DeferredActions[i]);

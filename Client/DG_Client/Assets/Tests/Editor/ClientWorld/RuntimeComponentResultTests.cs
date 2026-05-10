@@ -102,7 +102,7 @@ namespace DG.EditorTests
             world.AddRuntimeEffect(RuntimeEffectSpec.Immobile(6));
             var action = new WorldAction(1, WorldActionPriority.Player, "player_move", 6, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, new[] { action }, new PendingRuleStateStore(), 1);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, new[] { action }, 1);
 
             Assert.IsFalse(result.ActionResults[1].Success);
             Assert.AreEqual(MoveErrorCode.Blocked, result.ActionResults[1].ErrorCode);

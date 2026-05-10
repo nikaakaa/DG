@@ -22,6 +22,23 @@ namespace DG.EditorTests
             Assert.IsTrue(archetype.Components.Contains(ComponentKind.PushOnEnter));
             Assert.IsFalse(archetype.Components.Contains(ComponentKind.Blocking));
             Assert.IsTrue(archetype.Tags.Contains("Tile.Conveyor"));
+
+            Assert.IsTrue(provider.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig config));
+            Assert.AreEqual(new ActionSpecId("mechanism_push"), config.OutputSpecId);
+            Assert.AreEqual(1, config.OutputCostTicks);
+        }
+
+        [Test]
+        public void LubanWindField_UsesConfiguredPushOnEnterOutput()
+        {
+            IGameConfigProvider provider = ClientGameConfigProviderFactory.Create();
+            Assert.IsTrue(provider.TryGetArchetype(DefaultWorldConfig.WindFieldConfigId, out EntityArchetype archetype));
+            Assert.AreEqual(DefaultWorldConfig.WindFieldArchetypeId, archetype.ArchetypeId);
+            Assert.IsTrue(archetype.Components.Contains(ComponentKind.PushOnEnter));
+            Assert.IsTrue(archetype.Tags.Contains("Tile.WindField"));
+            Assert.IsTrue(provider.TryGetPushOnEnter(DefaultWorldConfig.WindFieldConfigId, out PushOnEnterConfig config));
+            Assert.AreEqual(new ActionSpecId("configured_wind_push"), config.OutputSpecId);
+            Assert.AreEqual(2, config.OutputCostTicks);
         }
 
         [Test]
@@ -43,7 +60,7 @@ namespace DG.EditorTests
 
             var queue = new WorldActionQueue();
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(1, result.ActionResults.Count);
             Assert.IsTrue(result.ActionResults.Values.Single().Success);
@@ -63,7 +80,7 @@ namespace DG.EditorTests
 
             var queue = new WorldActionQueue();
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(1, result.ActionResults.Count);
             Assert.IsFalse(result.ActionResults.Values.Single().Success);
@@ -84,7 +101,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), new PendingRuleStateStore(), world.ServerTick);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(2, result.ActionResults.Count(item => item.Value.EntityId == 1));
             Assert.IsTrue(world.TryGetEntity(1, out GameEntity player));
@@ -96,16 +113,18 @@ namespace DG.EditorTests
         public void PushOnEnterOutput_UsesComponentSpecAndReadyCost()
         {
             var world = new GameWorld();
-            world.AddEntity(DefaultWorldConfig.ConveyorSpawn(100, new GridCoord(0, 0), Direction.Right));
+            world.AddEntity(DefaultWorldConfig.WindFieldSpawn(100, new GridCoord(0, 0), Direction.Right));
             world.AddEntity(DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
-            Assert.IsTrue(world.TryGetEntity(100, out GameEntity conveyor));
-            world.SetComponent(conveyor, new PushOnEnterComponent("configured_wind_push", 2));
+            Assert.IsTrue(world.TryGetEntity(100, out GameEntity trigger));
+            Assert.IsTrue(world.TryGetComponent(trigger, out PushOnEnterComponent output));
+            Assert.AreEqual(new ActionSpecId("configured_wind_push"), output.OutputSpecId);
+            Assert.AreEqual(2, output.OutputCostTicks);
             world.NextTick();
             var queue = new WorldActionQueue();
 
             int enqueued = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick);
-            StateDrivenRuleExecutionResult beforeReady = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 1), new PendingRuleStateStore(), world.ServerTick + 1);
-            StateDrivenRuleExecutionResult ready = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 2), new PendingRuleStateStore(), world.ServerTick + 2);
+            StateDrivenRuleExecutionResult beforeReady = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 1), world.ServerTick + 1);
+            StateDrivenRuleExecutionResult ready = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 2), world.ServerTick + 2);
 
             Assert.AreEqual(1, enqueued);
             Assert.AreEqual(0, beforeReady.ActionResults.Count);

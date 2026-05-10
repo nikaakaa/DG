@@ -17,7 +17,7 @@ public sealed class GameWorld
     private readonly RuntimeEffectStore runtimeEffects = new();
     private readonly ComponentStateResolver componentStateResolver = new();
 
-    public GameWorld() : this(FallbackGameConfigProvider.Instance)
+    public GameWorld() : this(LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()))
     {
     }
 

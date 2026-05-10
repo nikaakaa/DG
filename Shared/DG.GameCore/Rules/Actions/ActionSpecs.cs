@@ -274,7 +274,17 @@ public sealed class ActionSpec
 
 public readonly struct ActionRequest
 {
-    public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId = 0, long derivedFromUnitId = 0)
+    public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick)
+        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, 0, 0, 1, Array.Empty<long>())
+    {
+    }
+
+    public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId)
+        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, ownerActionId, derivedFromUnitId, 1, Array.Empty<long>())
+    {
+    }
+
+    public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId, int deferredContributionCount, IReadOnlyList<long> deferredCausalitySamples)
     {
         ActionId = actionId;
         OwnerActionId = ownerActionId == 0 ? actionId : ownerActionId;
@@ -288,6 +298,8 @@ public readonly struct ActionRequest
         CreatedTick = createdTick;
         ReadyTick = readyTick;
         ClientTick = clientTick;
+        DeferredContributionCount = Math.Max(1, deferredContributionCount);
+        DeferredCausalitySamples = deferredCausalitySamples == null ? Array.Empty<long>() : deferredCausalitySamples.ToArray();
     }
 
     public long ActionId { get; }
@@ -302,6 +314,8 @@ public readonly struct ActionRequest
     public long CreatedTick { get; }
     public long ReadyTick { get; }
     public long ClientTick { get; }
+    public int DeferredContributionCount { get; }
+    public IReadOnlyList<long> DeferredCausalitySamples { get; }
 }
 
 public readonly struct ActionClaim
@@ -517,7 +531,7 @@ public sealed class ActionRequestAdapter
         ActionSpec spec = registry.Get(action.SpecId);
         var source = new ActionSourceContext(spec.DefaultSource, action.EntityId, 0, spec.SourceTag);
         var target = new ActionTarget(0, action.TargetCoord, action.Direction);
-        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick);
+        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick, 0, 0, action.DeferredContributionCount, action.DeferredCausalitySamples);
     }
 
     public ActionRequest FromPendingActionState(PendingActionState state, long serverTick)
@@ -551,13 +565,13 @@ public sealed class ActionArbiter
         this.registry = registry;
     }
 
-    public ActionArbitrationResult ArbitrateMoves(GameWorld world, IReadOnlyList<ActionRequest> requests, PendingRuleStateStore pendingStates, long serverTick)
+    public ActionArbitrationResult ArbitrateMoves(GameWorld world, IReadOnlyList<ActionRequest> requests, long serverTick)
     {
         var result = new ActionArbitrationResult();
         var candidates = new List<AcceptedAction>();
         for (int i = 0; i < requests.Count; i++)
         {
-            ProcessMoveRequest(world, requests[i], pendingStates, result, candidates, serverTick);
+            ProcessMoveRequest(world, requests[i], result, candidates, serverTick);
         }
 
         ResolveBodyConflicts(world, candidates, result);
@@ -595,7 +609,7 @@ public sealed class ActionArbiter
         return true;
     }
 
-    private void ProcessMoveRequest(GameWorld world, ActionRequest request, PendingRuleStateStore pendingStates, ActionArbitrationResult result, List<AcceptedAction> candidates, long serverTick)
+    private void ProcessMoveRequest(GameWorld world, ActionRequest request, ActionArbitrationResult result, List<AcceptedAction> candidates, long serverTick)
     {
         ActionSpec spec = registry.Get(request.SpecId);
         if (!world.TryGetEntity(request.EntityId, out GameEntity entity))
@@ -655,7 +669,7 @@ public sealed class ActionArbiter
         IReadOnlyList<ExternalPushContact> contacts = bodyCapabilities.FindExternalPushContacts(world, claims, body);
         if (contacts.Count != 0)
         {
-            ResolveBlocked(world, request, spec, pendingStates, result, position.Coord, direction, contacts, serverTick);
+            ResolveBlocked(world, request, spec, result, position.Coord, direction, contacts, serverTick);
             return;
         }
 
@@ -749,12 +763,12 @@ public sealed class ActionArbiter
         }
     }
 
-    private void ResolveBlocked(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, ActionArbitrationResult result, GridCoord current, Direction direction, IReadOnlyList<ExternalPushContact> contacts, long serverTick)
+    private void ResolveBlocked(GameWorld world, ActionRequest request, ActionSpec spec, ActionArbitrationResult result, GridCoord current, Direction direction, IReadOnlyList<ExternalPushContact> contacts, long serverTick)
     {
         GameEntity blocking = FirstBlocking(world, contacts);
         if (spec.BlockedPolicy == ActionBlockedPolicy.StartPushIfPushable)
         {
-            ResolvePushableBlock(world, request, spec, pendingStates, result, current, direction, contacts, serverTick);
+            ResolvePushableBlock(world, request, spec, result, current, direction, contacts, serverTick);
             return;
         }
 
@@ -767,7 +781,7 @@ public sealed class ActionArbiter
         RejectBlocked(world, request, spec, result, current, direction, blocking);
     }
 
-    private void ResolvePushableBlock(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, ActionArbitrationResult result, GridCoord current, Direction direction, IReadOnlyList<ExternalPushContact> contacts, long serverTick)
+    private void ResolvePushableBlock(GameWorld world, ActionRequest request, ActionSpec spec, ActionArbitrationResult result, GridCoord current, Direction direction, IReadOnlyList<ExternalPushContact> contacts, long serverTick)
     {
         if (!TryResolvePushContacts(world, spec, contacts, out IReadOnlyList<DeferredAction> deferredActions, out GameEntity blocking, out bool playerControlled, request, direction, serverTick))
         {
@@ -1026,21 +1040,6 @@ public sealed class ActionArbiter
         }
 
         subjectEntityIds = body.Entities.Select(entity => entity.EntityId).ToArray();
-    }
-
-    private static PendingActionState FindActionState(PendingRuleStateStore pendingStates, long stateId)
-    {
-        IReadOnlyList<PendingActionState> states = pendingStates.ActionStates;
-        for (int i = 0; i < states.Count; i++)
-        {
-            PendingActionState state = states[i];
-            if (state.StateId == stateId && state.Status == PendingRuleStatus.Active)
-            {
-                return state;
-            }
-        }
-
-        return null!;
     }
 
     private static string BuildClaimKey(AcceptedAction action)

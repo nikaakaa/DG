@@ -20,12 +20,14 @@ public static class DefaultWorldConfig
     public const int PushableBlockerConfigId = 1003;
     public const int PortConnectorBlockerConfigId = 1004;
     public const int ConveyorConfigId = 2001;
+    public const int WindFieldConfigId = 2002;
     public const int PlayerArchetypeId = 1;
     public const int BallArchetypeId = 2;
     public const int BlockerArchetypeId = 3;
     public const int ConveyorArchetypeId = 4;
     public const int PushableBlockerArchetypeId = 5;
     public const int PortConnectorBlockerArchetypeId = 6;
+    public const int WindFieldArchetypeId = 7;
     public const int PlayerTarget = (int)EntityTarget.Player;
     public const int BallTarget = (int)EntityTarget.Monster;
     public const int BlockerTarget = (int)EntityTarget.Object;
@@ -65,6 +67,11 @@ public static class DefaultWorldConfig
     public static EntitySpawnSpec ConveyorSpawn(long entityId, GridCoord position, Direction direction)
     {
         return new EntitySpawnSpec(entityId, ConveyorConfigId, position, direction, 0, 1);
+    }
+
+    public static EntitySpawnSpec WindFieldSpawn(long entityId, GridCoord position, Direction direction)
+    {
+        return new EntitySpawnSpec(entityId, WindFieldConfigId, position, direction, 0, 1);
     }
 
     public static void AddFallbackDemoEntities(GameWorld world)

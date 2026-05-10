@@ -12,6 +12,7 @@ public sealed class StateDrivenRuleExecutionSystem
     private readonly ActionSpecRegistry actionSpecs;
     private readonly ActionRequestAdapter actionAdapter;
     private readonly ActionArbiter actionArbiter;
+    private readonly PushVectorArbiter pushVectorArbiter;
 
     public StateDrivenRuleExecutionSystem() : this(ActionSpecRegistry.Default)
     {
@@ -23,9 +24,20 @@ public sealed class StateDrivenRuleExecutionSystem
         rulePlanner = new RulePlanner(actionSpecs);
         actionAdapter = new ActionRequestAdapter(actionSpecs);
         actionArbiter = new ActionArbiter(actionSpecs);
+        pushVectorArbiter = new PushVectorArbiter(actionSpecs);
+    }
+
+    public StateDrivenRuleExecutionResult Tick(GameWorld world, IReadOnlyList<WorldAction> actions, long serverTick)
+    {
+        return TickCore(world, actions, null, serverTick);
     }
 
     public StateDrivenRuleExecutionResult Tick(GameWorld world, IReadOnlyList<WorldAction> actions, PendingRuleStateStore pendingStates, long serverTick)
+    {
+        return TickCore(world, actions, pendingStates, serverTick);
+    }
+
+    private StateDrivenRuleExecutionResult TickCore(GameWorld world, IReadOnlyList<WorldAction> actions, PendingRuleStateStore? pendingStates, long serverTick)
     {
         var proposals = new List<CommitProposal>();
         var moveRequests = new List<ActionRequest>();
@@ -39,20 +51,34 @@ public sealed class StateDrivenRuleExecutionSystem
             RouteRequest(world, request, pendingStates, proposals, moveRequests, actionResults, reasons, serverTick);
         }
 
-        AddPendingActionRequests(world, pendingStates, moveRequests, actionResults, reasons, serverTick);
-        ActionArbitrationResult arbitration = actionArbiter.ArbitrateMoves(world, moveRequests, pendingStates, serverTick);
+        if (pendingStates != null)
+        {
+            AddPendingActionRequests(world, pendingStates, moveRequests, actionResults, reasons, serverTick);
+        }
+
+        PushVectorCompositionResult pushComposition = pushVectorArbiter.Compose(world, moveRequests);
+        ApplyPushComposition(world, pushComposition, actionResults, reasons);
+        ActionArbitrationResult arbitration = actionArbiter.ArbitrateMoves(world, pushComposition.Requests, serverTick);
         MergeArbitrationResult(arbitration, proposals, actionResults, reasons, deferredActions);
-        ApplyCompletedPendingStates(world, pendingStates, actionResults, reasons);
-        ApplyRejectedArbitrationToPendingStates(world, pendingStates, arbitration.RejectedActions, actionResults, reasons, serverTick);
+        if (pendingStates != null)
+        {
+            ApplyCompletedPendingStates(world, pendingStates, actionResults, reasons);
+            ApplyRejectedArbitrationToPendingStates(world, pendingStates, arbitration.RejectedActions, actionResults, reasons, serverTick);
+        }
+
         ApplyDerivedArbitrationToReasons(arbitration.DerivedActions, reasons);
         IReadOnlyList<MovePlan> movePlans = CreateMovePlans(world, pendingStates, arbitration.AcceptedActions, actionResults, reasons, serverTick);
         var proposalResults = new List<CommitProposalResult>();
         proposalResults.AddRange(commitResolver.Resolve(world, proposals));
         proposalResults.AddRange(conflictResolver.Resolve(world, movePlans));
         ApplyProposalResultsToActions(actionResults, proposalResults, reasons);
-        ApplyProposalResultsToPendingStates(world, pendingStates, proposalResults, actionResults, reasons, serverTick);
-        pendingStates.CleanupInactive();
-        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, pendingStates.ActiveCount, reasons, deferredActions);
+        if (pendingStates != null)
+        {
+            ApplyProposalResultsToPendingStates(world, pendingStates, proposalResults, actionResults, reasons, serverTick);
+            pendingStates.CleanupInactive();
+        }
+
+        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, pendingStates?.ActiveCount ?? 0, reasons, deferredActions);
     }
 
     private static void ApplyCompletedPendingStates(GameWorld world, PendingRuleStateStore pendingStates, Dictionary<long, MoveResult> actionResults, List<string> reasons)
@@ -74,7 +100,21 @@ public sealed class StateDrivenRuleExecutionSystem
         }
     }
 
-    private void RouteRequest(GameWorld world, ActionRequest request, PendingRuleStateStore pendingStates, List<CommitProposal> proposals, List<ActionRequest> moveRequests, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
+    private static void ApplyPushComposition(GameWorld world, PushVectorCompositionResult composition, Dictionary<long, MoveResult> actionResults, List<string> reasons)
+    {
+        for (int i = 0; i < composition.CancelledRequests.Count; i++)
+        {
+            ActionRequest request = composition.CancelledRequests[i];
+            actionResults[request.ActionId] = new MoveResult(false, request.EntityId, CurrentCoord(world, request.EntityId), Direction.None, MoveErrorCode.Blocked, "push-vector-cancelled", false, default, request.ClientTick);
+        }
+
+        for (int i = 0; i < composition.Reasons.Count; i++)
+        {
+            reasons.Add(composition.Reasons[i]);
+        }
+    }
+
+    private void RouteRequest(GameWorld world, ActionRequest request, PendingRuleStateStore? pendingStates, List<CommitProposal> proposals, List<ActionRequest> moveRequests, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
     {
         ActionSpec spec = actionSpecs.Get(request.SpecId);
         if (spec.Primitive == ActionPrimitive.Move)
@@ -176,7 +216,7 @@ public sealed class StateDrivenRuleExecutionSystem
         }
     }
 
-    private IReadOnlyList<MovePlan> CreateMovePlans(GameWorld world, PendingRuleStateStore pendingStates, IReadOnlyList<AcceptedAction> acceptedActions, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
+    private IReadOnlyList<MovePlan> CreateMovePlans(GameWorld world, PendingRuleStateStore? pendingStates, IReadOnlyList<AcceptedAction> acceptedActions, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
     {
         var movePlans = new List<MovePlan>();
         for (int i = 0; i < acceptedActions.Count; i++)
@@ -184,7 +224,7 @@ public sealed class StateDrivenRuleExecutionSystem
             AcceptedAction action = acceptedActions[i];
             if (!rulePlanner.TryPlanMove(world, action, out MovePlan plan, out PlanResult result))
             {
-                if (action.Request.Source.SourceStateId != 0)
+                if (pendingStates != null && action.Request.Source.SourceStateId != 0)
                 {
                     FailPendingState(pendingStates, action.Request.Source.SourceStateId, action.Request.ActionId, result.Message, serverTick);
                     reasons.Add(result.Message);
@@ -357,7 +397,7 @@ public sealed class StateDrivenRuleExecutionSystem
 
 public sealed class ActionPrimitiveProcessor
 {
-    public void Process(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore pendingStates, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
+    public void Process(GameWorld world, ActionRequest request, ActionSpec spec, PendingRuleStateStore? pendingStates, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
     {
         if (spec.Primitive == ActionPrimitive.Spawn)
         {
@@ -384,7 +424,7 @@ public sealed class ActionPrimitiveProcessor
         actionResults[request.ActionId] = new MoveResult(true, request.EntityId, request.Target.TargetCoord.Value, request.Target.Direction, MoveErrorCode.None, string.Empty, false, default, request.ClientTick);
     }
 
-    private static void AddRemoveProposal(GameWorld world, ActionRequest request, PendingRuleStateStore pendingStates, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
+    private static void AddRemoveProposal(GameWorld world, ActionRequest request, PendingRuleStateStore? pendingStates, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
     {
         if (!world.TryGetEntity(request.EntityId, out GameEntity entity))
         {
@@ -393,7 +433,11 @@ public sealed class ActionPrimitiveProcessor
             return;
         }
 
-        CancelRelatedPendingActionStates(pendingStates, request.EntityId, serverTick);
+        if (pendingStates != null)
+        {
+            CancelRelatedPendingActionStates(pendingStates, request.EntityId, serverTick);
+        }
+
         GridCoord coord = world.TryGetComponent(entity, out PositionComponent position) ? position.Coord : default;
         proposals.Add(CommitProposal.Delete(request.Priority, request.ActionId, request.EntityId, serverTick));
         actionResults[request.ActionId] = new MoveResult(true, request.EntityId, coord, Direction.None, MoveErrorCode.None, string.Empty, false, default, request.ClientTick);

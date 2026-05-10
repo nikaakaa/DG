@@ -105,5 +105,11 @@ public sealed class FallbackGameConfigProvider : IGameConfigProvider
     {
         return portConnectors.TryGetValue(configId, out config);
     }
+
+    public bool TryGetPushOnEnter(int configId, out PushOnEnterConfig config)
+    {
+        config = default;
+        return false;
+    }
 }
 }

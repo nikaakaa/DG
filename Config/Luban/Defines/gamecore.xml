@@ -137,6 +137,12 @@
         <var name="ports" type="int"/>
     </bean>
 
+    <bean name="PushOnEnterConfig">
+        <var name="config_id" type="int"/>
+        <var name="output_spec_id" type="string"/>
+        <var name="output_cost_ticks" type="int"/>
+    </bean>
+
     <bean name="ActionSpec">
         <var name="spec_id" type="string"/>
         <var name="primitive" type="ActionPrimitive"/>
@@ -165,5 +171,6 @@
     <table name="TbWorldSpawn" mode="list" value="WorldSpawn" input="gamecore/world_spawn.xlsx"/>
     <table name="TbPlayerSpawnRule" index="rule_id" value="PlayerSpawnRule" input="gamecore/player_spawn_rule.xlsx"/>
     <table name="TbPortConnectorConfig" index="config_id" value="PortConnectorConfig" input="gamecore/port_connector_config.xlsx"/>
+    <table name="TbPushOnEnterConfig" index="config_id" value="PushOnEnterConfig" input="gamecore/push_on_enter_config.xlsx"/>
     <table name="TbActionSpec" index="spec_id" value="ActionSpec" input="gamecore/action_spec.xlsx"/>
 </module>

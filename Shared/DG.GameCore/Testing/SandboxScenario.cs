@@ -530,7 +530,6 @@ public sealed class LocalSandboxScenarioRunner
     private readonly IGameConfigProvider provider;
     private readonly GameWorld world;
     private readonly WorldActionQueue actionQueue = new();
-    private readonly PendingRuleStateStore pendingStates = new();
     private readonly StateDrivenRuleExecutionSystem ruleSystem = new();
     private readonly Dictionary<string, long> aliases = new(StringComparer.OrdinalIgnoreCase);
     private long nextEntityId = 700000000;
@@ -752,7 +751,7 @@ public sealed class LocalSandboxScenarioRunner
         EnqueueAutoMoveActions(serverTick);
         ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, actionQueue, serverTick);
         IReadOnlyList<WorldAction> actions = actionQueue.DrainReady(serverTick);
-        StateDrivenRuleExecutionResult result = ruleSystem.Tick(world, actions, pendingStates, serverTick);
+        StateDrivenRuleExecutionResult result = ruleSystem.Tick(world, actions, serverTick);
         foreach (DeferredAction deferredAction in result.DeferredActions)
         {
             actionQueue.EnqueueDeferred(deferredAction);

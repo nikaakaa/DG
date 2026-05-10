@@ -11,7 +11,7 @@ namespace DG.Map
         private readonly Dictionary<long, long> entityServerTicks = new();
         private long nextEntityId = 1;
 
-        public ClientMapWorld() : this(FallbackGameConfigProvider.Instance)
+        public ClientMapWorld() : this(ClientGameConfigProviderFactory.Create())
         {
         }
 

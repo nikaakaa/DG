@@ -7,11 +7,11 @@ namespace Fantasy;
 
 public sealed class AuthoritativeWorldTickRunner
 {
+    private const int LogSampleLimit = 8;
     private readonly GameWorld World;
     private readonly AuthoritativeInputQueue InputQueue;
     private readonly AuthoritativeWorldSyncSystem SyncSystem;
     private readonly WorldActionQueue ActionQueue;
-    private readonly PendingRuleStateStore PendingStates = new();
     private readonly StateDrivenRuleExecutionSystem RuleExecutionSystem;
     private readonly Dictionary<long, AuthoritativeMoveInput> pendingMoveInputs = new();
     private readonly int tickIntervalMs;
@@ -61,7 +61,7 @@ public sealed class AuthoritativeWorldTickRunner
         pendingMoveInputs.Clear();
     }
 
-    public int ActivePendingStateCount => PendingStates.ActiveCount;
+    public int ActivePendingStateCount => 0;
 
     public WorldDelta Tick(IReadOnlyList<Session> observers)
     {
@@ -78,9 +78,11 @@ public sealed class AuthoritativeWorldTickRunner
         EnqueueAutoMoveActions(serverTick);
         ExplicitOutputPolicies.EnqueuePushOnEnterActions(World, ActionQueue, serverTick);
         IReadOnlyList<WorldAction> actions = ActionQueue.DrainReady(serverTick);
-        StateDrivenRuleExecutionResult ruleResult = RuleExecutionSystem.Tick(World, actions, PendingStates, serverTick);
+        IReadOnlyDictionary<long, string> beforeSnapshot = CreateEntitySnapshot();
+        LogRuleTickInput(serverTick, inputs, actions, beforeSnapshot);
+        StateDrivenRuleExecutionResult ruleResult = RuleExecutionSystem.Tick(World, actions, serverTick);
+        LogRuleTickResult(serverTick, actions, ruleResult, beforeSnapshot, CreateEntitySnapshot());
         EnqueueDeferredActions(ruleResult.DeferredActions);
-        LogPushCycleDiagnostics(ruleResult, serverTick);
         foreach (KeyValuePair<long, AuthoritativeMoveInput> pair in pendingMoveInputs.ToArray())
         {
             if (ruleResult.ActionResults.TryGetValue(pair.Key, out MoveResult result))
@@ -110,49 +112,186 @@ public sealed class AuthoritativeWorldTickRunner
         return Tick(Array.Empty<Session>());
     }
 
-    private void LogPushCycleDiagnostics(StateDrivenRuleExecutionResult ruleResult, long serverTick)
+    private void EnqueueDeferredActions(IReadOnlyList<DeferredAction> deferredActions)
     {
-        if (!ruleResult.Reasons.Contains("push chain cycle"))
+        if (deferredActions.Count == 0)
         {
             return;
         }
 
-        PendingCycleDiagnostic diagnostic = PendingStates.LastCycleDiagnostic;
-        string cycle = diagnostic.ConflictEntityId == 0
-            ? "none"
-            : "state:" + diagnostic.StateId +
-              " conflict:" + diagnostic.ConflictEntityId +
-              " inChain:" + diagnostic.ConflictInChain +
-              " inAdding:" + diagnostic.ConflictInAdding +
-              " candidate:" + string.Join(",", diagnostic.CandidateSubjectEntityIds.OrderBy(entityId => entityId)) +
-              " chain:" + string.Join(",", diagnostic.ChainEntityIds.OrderBy(entityId => entityId));
-        string states = string.Join(" || ", PendingStates.ActionStates.Select(state =>
-            "state:" + state.StateId +
-            " status:" + state.Status +
-            " chain:" + string.Join(",", state.Chain.OrderBy(entityId => entityId)) +
-            " units:" + string.Join(";", state.Units.Select(unit =>
-                unit.ActionUnitId + ":" + unit.Status + ":" + string.Join(".", unit.SubjectEntityIds.OrderBy(entityId => entityId))))));
-        string snapshots = string.Join(" || ", World.CreateSnapshot()
-            .OrderBy(snapshot => snapshot.Y)
-            .ThenBy(snapshot => snapshot.X)
-            .ThenBy(snapshot => snapshot.EntityId)
-            .Select(snapshot =>
-                snapshot.EntityId +
-                " cfg:" + snapshot.ConfigId +
-                " pos:(" + snapshot.X + "," + snapshot.Y + ")" +
-                " dir:" + snapshot.Direction +
-                " ports:" + snapshot.PortLocalPorts +
-                " push:" + snapshot.Pushable +
-                " move:" + snapshot.CanMove +
-                " bePushed:" + snapshot.CanBePushed));
-        Log.Info("[AuthoritativeWorldTickRunner] push cycle diagnostics tick:{0} cycle:{1} states:{2} snapshots:{3}", serverTick, cycle, states, snapshots);
-    }
-
-    private void EnqueueDeferredActions(IReadOnlyList<DeferredAction> deferredActions)
-    {
+        var results = new List<DeferredEnqueueResult>(deferredActions.Count);
         for (int i = 0; i < deferredActions.Count; i++)
         {
-            ActionQueue.EnqueueDeferred(deferredActions[i]);
+            DeferredAction deferred = deferredActions[i];
+            results.Add(ActionQueue.EnqueueDeferred(deferred));
+        }
+
+        int enqueuedCount = results.Count(result => result.Enqueued);
+        int mergedCount = results.Count - enqueuedCount;
+        string sampleText = string.Join(" | ", results
+            .GroupBy(result => result.EquivalenceKey)
+            .OrderByDescending(group => group.Max(result => result.ContributionCount))
+            .ThenBy(group => group.Key)
+            .Take(LogSampleLimit)
+            .Select(group =>
+                "key:" + group.Key +
+                " action:" + group.First().Action.ActionId +
+                " enqueued:" + group.Any(result => result.Enqueued) +
+                " contribution:" + group.Max(result => result.ContributionCount) +
+                " samples:[" + string.Join(",", group.First().Action.DeferredCausalitySamples) + "]"));
+
+        TryLogInfo("[AuthoritativeWorldTickRunner] enqueue deferred summary raw:{0} enqueued:{1} merged:{2} samples:{3}", deferredActions.Count, enqueuedCount, mergedCount, sampleText.Length == 0 ? "none" : sampleText);
+    }
+
+    private void LogRuleTickInput(long serverTick, IReadOnlyList<AuthoritativeMoveInput> inputs, IReadOnlyList<WorldAction> actions, IReadOnlyDictionary<long, string> beforeSnapshot)
+    {
+        if (inputs.Count == 0 && actions.Count == 0)
+        {
+            return;
+        }
+
+        string inputText = inputs.Count == 0
+            ? "none"
+            : string.Join(" | ", inputs.Select(input =>
+                "entity:" + input.EntityId +
+                " target:(" + input.TargetCoord.X + "," + input.TargetCoord.Y + ")" +
+                " clientTick:" + input.ClientTick +
+                " before:" + SnapshotText(beforeSnapshot, input.EntityId)));
+        string actionText = actions.Count == 0
+            ? "none"
+            : string.Join(" | ", actions.Select(action =>
+                "action:" + action.ActionId +
+                " spec:" + action.SpecId +
+                " entity:" + action.EntityId +
+                " target:" + CoordText(action.TargetCoord) +
+                " dir:" + action.Direction +
+                " ready:" + action.ReadyTick +
+                " cost:" + action.CostTicks +
+                " causality:" + action.CausalityId +
+                " dedupe:" + action.DedupeKey +
+                " before:" + SnapshotText(beforeSnapshot, action.EntityId)));
+
+        TryLogInfo("[AuthoritativeWorldTickRunner] rule tick input tick:{0} pendingMoves:{1} actions:{2} activePending:{3} inputs:{4} actionList:{5}", serverTick, inputs.Count, actions.Count, ActivePendingStateCount, inputText, actionText);
+    }
+
+    private void LogRuleTickResult(long serverTick, IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result, IReadOnlyDictionary<long, string> beforeSnapshot, IReadOnlyDictionary<long, string> afterSnapshot)
+    {
+        if (actions.Count == 0 &&
+            result.ActionResults.Count == 0 &&
+            result.DeferredActions.Count == 0 &&
+            result.ProposalResults.Count == 0 &&
+            result.Reasons.Count == 0)
+        {
+            return;
+        }
+
+        string actionResultText = result.ActionResults.Count == 0
+            ? "none"
+            : string.Join(" | ", result.ActionResults.OrderBy(pair => pair.Key).Select(pair =>
+                "action:" + pair.Key +
+                " success:" + pair.Value.Success +
+                " final:(" + pair.Value.FinalCoord.X + "," + pair.Value.FinalCoord.Y + ")" +
+                " dir:" + pair.Value.FinalDirection +
+                " error:" + pair.Value.ErrorCode +
+                " reason:" + pair.Value.Reason));
+        string deferredText = result.DeferredActions.Count == 0
+            ? "none"
+            : string.Join(" | ", result.DeferredActions.Take(LogSampleLimit).Select(deferred =>
+                "spec:" + deferred.SpecId +
+                " entity:" + deferred.EntityId +
+                " subject:[" + string.Join(",", deferred.SubjectEntityIds.OrderBy(entityId => entityId)) + "]" +
+                " dir:" + deferred.Direction +
+                " created:" + deferred.CreatedTick +
+                " ready:" + deferred.ReadyTick +
+                " cost:" + deferred.CostTicks +
+                " causality:" + deferred.CausalityId +
+                " dedupe:" + deferred.DedupeKey +
+                " before:" + SnapshotText(beforeSnapshot, deferred.EntityId) +
+                " after:" + SnapshotText(afterSnapshot, deferred.EntityId))) +
+                (result.DeferredActions.Count > LogSampleLimit ? " | omitted:" + (result.DeferredActions.Count - LogSampleLimit) : string.Empty);
+        string proposalText = result.ProposalResults.Count == 0
+            ? "none"
+            : string.Join(" | ", result.ProposalResults.Select(item =>
+                "kind:" + item.Proposal.Kind +
+                " action:" + item.Proposal.SourceActionId +
+                " state:" + item.Proposal.SourceStateId +
+                " entity:" + item.Proposal.EntityId +
+                " from:(" + item.Proposal.From.X + "," + item.Proposal.From.Y + ")" +
+                " to:(" + item.Proposal.To.X + "," + item.Proposal.To.Y + ")" +
+                " dir:" + item.Proposal.Direction +
+                " accepted:" + item.Accepted +
+                " reason:" + item.Reason +
+                " before:" + SnapshotText(beforeSnapshot, item.Proposal.EntityId) +
+                " after:" + SnapshotText(afterSnapshot, item.Proposal.EntityId)));
+        string reasonText = result.Reasons.Count == 0 ? "none" : string.Join(" | ", result.Reasons);
+        string touchedText = BuildTouchedSnapshot(actions, result, beforeSnapshot, afterSnapshot);
+
+        TryLogInfo("[AuthoritativeWorldTickRunner] rule tick result tick:{0} actionResults:{1} deferred:{2} proposals:{3} activePending:{4} reasons:{5} touched:{6}", serverTick, actionResultText, deferredText, proposalText, result.ActivePendingCount, reasonText, touchedText);
+    }
+
+    private string BuildTouchedSnapshot(IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result, IReadOnlyDictionary<long, string> beforeSnapshot, IReadOnlyDictionary<long, string> afterSnapshot)
+    {
+        var ids = new HashSet<long>();
+        for (int i = 0; i < actions.Count; i++)
+        {
+            ids.Add(actions[i].EntityId);
+        }
+
+        foreach (DeferredAction deferred in result.DeferredActions)
+        {
+            ids.Add(deferred.EntityId);
+            for (int i = 0; i < deferred.SubjectEntityIds.Count; i++)
+            {
+                ids.Add(deferred.SubjectEntityIds[i]);
+            }
+        }
+
+        foreach (CommitProposalResult proposalResult in result.ProposalResults)
+        {
+            ids.Add(proposalResult.Proposal.EntityId);
+        }
+
+        if (ids.Count == 0)
+        {
+            return "none";
+        }
+
+        return string.Join(" | ", ids.OrderBy(id => id).Take(LogSampleLimit).Select(id => "entity:" + id + " before:" + SnapshotText(beforeSnapshot, id) + " after:" + SnapshotText(afterSnapshot, id))) +
+            (ids.Count > LogSampleLimit ? " | omitted:" + (ids.Count - LogSampleLimit) : string.Empty);
+    }
+
+    private IReadOnlyDictionary<long, string> CreateEntitySnapshot()
+    {
+        return World.CreateSnapshot().ToDictionary(
+            snapshot => snapshot.EntityId,
+            snapshot =>
+                "cfg:" + snapshot.ConfigId +
+                " pos:(" + snapshot.X + "," + snapshot.Y + ")" +
+                " dir:" + snapshot.Direction +
+                " push:" + snapshot.Pushable +
+                " move:" + snapshot.CanMove +
+                " bePushed:" + snapshot.CanBePushed +
+                " ports:" + snapshot.PortLocalPorts);
+    }
+
+    private static string SnapshotText(IReadOnlyDictionary<long, string> snapshot, long entityId)
+    {
+        return snapshot.TryGetValue(entityId, out string? value) && value != null ? value : "missing";
+    }
+
+    private static string CoordText(GridCoord? coord)
+    {
+        return coord.HasValue ? "(" + coord.Value.X + "," + coord.Value.Y + ")" : "none";
+    }
+
+    private static void TryLogInfo(string message, params object[] args)
+    {
+        try
+        {
+            Log.Info(message, args);
+        }
+        catch (NullReferenceException)
+        {
         }
     }
 

@@ -92,5 +92,20 @@
       "Tile.Conveyor"
     ],
     "default_auto_move_interval_ticks": 1
+  },
+  {
+    "config_id": 2002,
+    "archetype_id": 7,
+    "entity_target": 3,
+    "components": [
+      1,
+      2,
+      3,
+      8
+    ],
+    "tags": [
+      "Tile.WindField"
+    ],
+    "default_auto_move_interval_ticks": 1
   }
 ]
