@@ -105,12 +105,13 @@ namespace Fantasy
 			session.Send(message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static void G2C_WorldDeltaNotify(this Session session, long serverTick, List<G2C_WorldEntityState> entities, List<long> removedEntityIds)
+		public static void G2C_WorldDeltaNotify(this Session session, long serverTick, List<G2C_WorldEntityState> entities, List<long> removedEntityIds, List<G2C_WorldDeltaAnimationMetadata> animationMetadata)
 		{
 			using var message = Fantasy.G2C_WorldDeltaNotify.Create();
 			message.ServerTick = serverTick;
 			message.Entities = entities;
 			message.RemovedEntityIds = removedEntityIds;
+			message.AnimationMetadata = animationMetadata;
 			session.Send(message);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]

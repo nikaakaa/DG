@@ -157,6 +157,123 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void ApplyWorldDelta_CreatesAnimationForEveryServerMovedConnectedBodyMember()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 20 }, DefaultWorldConfig.PortConnectorBlockerSpawn(20, new GridCoord(0, 0), Direction.Right));
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 21 }, DefaultWorldConfig.PortConnectorBlockerSpawn(21, new GridCoord(1, 0), Direction.Right));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            var states = new List<G2C_WorldEntityState>
+            {
+                new G2C_WorldEntityState
+                {
+                    EntityId = 20,
+                    ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId,
+                    ArchetypeId = DefaultWorldConfig.PortConnectorBlockerArchetypeId,
+                    EntityTarget = DefaultWorldConfig.BlockerTarget,
+                    X = 1,
+                    Y = 0,
+                    Direction = (int)Direction.Right,
+                    HasCollider = true,
+                    Blocking = true,
+                    Pushable = true,
+                    PortLocalPorts = (int)DirectionMask.Right,
+                    CanMove = true,
+                    CanBePushed = true
+                },
+                new G2C_WorldEntityState
+                {
+                    EntityId = 21,
+                    ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId,
+                    ArchetypeId = DefaultWorldConfig.PortConnectorBlockerArchetypeId,
+                    EntityTarget = DefaultWorldConfig.BlockerTarget,
+                    X = 2,
+                    Y = 0,
+                    Direction = (int)Direction.Right,
+                    HasCollider = true,
+                    Blocking = true,
+                    Pushable = true,
+                    PortLocalPorts = (int)DirectionMask.Right,
+                    CanMove = true,
+                    CanBePushed = true
+                }
+            };
+
+            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(5, states, new List<long>(), new[]
+            {
+                new G2C_WorldDeltaAnimationMetadata
+                {
+                    EntityId = 20,
+                    ServerTick = 5,
+                    MotionKind = (int)WorldDeltaMotionKind.MechanismPush,
+                    StyleKey = "mechanism_push",
+                    Direction = (int)Direction.Right
+                },
+                new G2C_WorldDeltaAnimationMetadata
+                {
+                    EntityId = 21,
+                    ServerTick = 5,
+                    MotionKind = (int)WorldDeltaMotionKind.MechanismPush,
+                    StyleKey = "mechanism_push",
+                    Direction = (int)Direction.Right
+                }
+            });
+
+            Assert.IsTrue(applied);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(20, out Vector2Int firstCoord));
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(21, out Vector2Int secondCoord));
+            Assert.AreEqual(new Vector2Int(1, 0), firstCoord);
+            Assert.AreEqual(new Vector2Int(2, 0), secondCoord);
+            var movedIds = new List<long>();
+            while (runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent animationEvent))
+            {
+                Assert.AreEqual(ClientAnimationMotionKind.MechanismPush, animationEvent.MotionKind);
+                movedIds.Add(animationEvent.EntityId);
+            }
+
+            CollectionAssert.AreEquivalent(new[] { 20L, 21L }, movedIds);
+        }
+
+        [Test]
+        public void ApplyWorldDelta_DoesNotInferMissingConnectedBodyMembers()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 22 }, DefaultWorldConfig.PortConnectorBlockerSpawn(22, new GridCoord(0, 0), Direction.Right));
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 23 }, DefaultWorldConfig.PortConnectorBlockerSpawn(23, new GridCoord(1, 0), Direction.Right));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(6, new[]
+            {
+                new G2C_WorldEntityState
+                {
+                    EntityId = 22,
+                    ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId,
+                    ArchetypeId = DefaultWorldConfig.PortConnectorBlockerArchetypeId,
+                    EntityTarget = DefaultWorldConfig.BlockerTarget,
+                    X = 1,
+                    Y = 0,
+                    Direction = (int)Direction.Right,
+                    HasCollider = true,
+                    Blocking = true,
+                    Pushable = true,
+                    PortLocalPorts = (int)DirectionMask.Right,
+                    CanMove = true,
+                    CanBePushed = true
+                }
+            }, new List<long>());
+
+            Assert.IsTrue(applied);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(22, out Vector2Int firstCoord));
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(23, out Vector2Int secondCoord));
+            Assert.AreEqual(new Vector2Int(1, 0), firstCoord);
+            Assert.AreEqual(new Vector2Int(1, 0), secondCoord);
+            Assert.IsTrue(runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent animationEvent));
+            Assert.AreEqual(22, animationEvent.EntityId);
+            Assert.IsFalse(runner.Context.AnimationLayer.TryDequeue(out _));
+        }
+
+        [Test]
         public void DebugSubmitter_NoSessionCannotSubmit()
         {
             GameObject gameObject = new GameObject("Submitter");

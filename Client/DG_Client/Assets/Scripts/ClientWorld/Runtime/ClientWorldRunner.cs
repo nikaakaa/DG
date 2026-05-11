@@ -51,7 +51,7 @@ namespace DG.Map
                 throw new ArgumentNullException(nameof(clientMapWorld));
             }
 
-            Context = new ClientWorldContext(clientMapWorld);
+            Context = new ClientWorldContext(clientMapWorld, LoadAnimationStyles());
             DirtyFlushSystem = new DirtyFlushSystem();
             Systems.Clear();
             Systems.Add(DirtyFlushSystem);
@@ -138,6 +138,19 @@ namespace DG.Map
             for (int i = 0; i < Systems.Count; i++)
             {
                 Systems[i].Tick(Context, deltaTime);
+            }
+        }
+
+        private static ClientAnimationStyleProvider LoadAnimationStyles()
+        {
+            try
+            {
+                string dataDirectory = System.IO.Path.Combine(Application.streamingAssetsPath, "GameConfig");
+                return ClientAnimationStyleProvider.FromTables(DG.GameCore.LubanConfigLoader.LoadTables(dataDirectory));
+            }
+            catch (Exception)
+            {
+                return ClientAnimationStyleProvider.Fallback();
             }
         }
     }

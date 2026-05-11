@@ -56,6 +56,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyAuthoritativeTickSyncDiagnostics(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyStateDrivenPush(out reason))
         {
             return false;
@@ -905,6 +910,74 @@ public static class AuthoritativeMoveWorldVerification
         return true;
     }
 
+    private static bool VerifyAuthoritativeTickSyncDiagnostics(out string reason)
+    {
+        var autoWorld = new GameWorld();
+        autoWorld.AddEntity(DefaultWorldConfig.BallSpawn(5000, new GridCoord(0, 0), Direction.Right, 1));
+        autoWorld.FlushDelta();
+        var sync = new AuthoritativeWorldSyncSystem(autoWorld);
+        var autoRunner = new AuthoritativeWorldTickRunner(
+            autoWorld,
+            new AuthoritativeInputQueue(),
+            sync,
+            1);
+
+        WorldDelta first = autoRunner.Tick();
+        WorldDelta second = autoRunner.Tick();
+        if (first.ChangedEntities.Count != 1 ||
+            second.ChangedEntities.Count != 1 ||
+            first.ServerTick >= second.ServerTick ||
+            !first.ChangedEntities.Any(entity => entity.EntityId == 5000 && entity.X == 1 && entity.Y == 0) ||
+            !second.ChangedEntities.Any(entity => entity.EntityId == 5000 && entity.X == 2 && entity.Y == 0) ||
+            sync.LastDelta.ServerTick != second.ServerTick ||
+            !sync.LastDeltaSkippedNoObservers ||
+            sync.LastDeltaBroadcasted)
+        {
+            reason = "continuous tick diagnostics did not capture observerless auto move delta";
+            return false;
+        }
+
+        var pushWorld = new GameWorld();
+        pushWorld.AddEntity(DefaultWorldConfig.ConveyorSpawn(5010, new GridCoord(0, 0), Direction.Right));
+        pushWorld.AddEntity(DefaultWorldConfig.PlayerSpawn(5011, 5011, new GridCoord(0, 0)));
+        pushWorld.FlushDelta();
+        var pushSync = new AuthoritativeWorldSyncSystem(pushWorld);
+        var pushRunner = new AuthoritativeWorldTickRunner(
+            pushWorld,
+            new AuthoritativeInputQueue(),
+            pushSync,
+            1);
+        pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
+        WorldDelta pushDelta = pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
+        if (pushDelta.ChangedEntities.Count != 1 ||
+            !pushDelta.ChangedEntities.Any(entity => entity.EntityId == 5011 && entity.X == 1 && entity.Y == 0) ||
+            pushSync.LastDelta.ServerTick != pushDelta.ServerTick ||
+            !pushSync.LastDeltaSkippedNoObservers)
+        {
+            reason = "push-on-enter continuous tick diagnostics did not capture delta without player input";
+            return false;
+        }
+
+        var metadataOnlyWorld = new GameWorld();
+        metadataOnlyWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(5020, new GridCoord(0, 0), Direction.Right));
+        metadataOnlyWorld.FlushDelta();
+        metadataOnlyWorld.AddAnimationMetadata(new WorldDeltaAnimationMetadata(5020, metadataOnlyWorld.ServerTick, WorldDeltaMotionKind.MechanismPush, "mechanism_push", Direction.Up));
+        var metadataOnlySync = new AuthoritativeWorldSyncSystem(metadataOnlyWorld);
+        WorldDelta metadataOnlyDelta = metadataOnlySync.BroadcastDelta(Array.Empty<Fantasy.Network.Session>());
+        if (metadataOnlyDelta.ChangedEntities.Count != 0 ||
+            metadataOnlyDelta.AnimationMetadata.Count != 1 ||
+            metadataOnlyDelta.AnimationMetadata[0].EntityId != 5020 ||
+            metadataOnlyDelta.AnimationMetadata[0].Direction != Direction.Up ||
+            !metadataOnlySync.LastDeltaSkippedNoObservers)
+        {
+            reason = "metadata-only delta was not retained for observer broadcast path";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
     private static bool VerifyStateDrivenPush(out string reason)
     {
         var singleWorld = new GameWorld();
@@ -947,6 +1020,91 @@ public static class AuthoritativeMoveWorldVerification
             singleThirdDelta.ChangedEntities.Count != 0)
         {
             reason = "state handoff moved source after target moved";
+            return false;
+        }
+
+        var bodyPushWorld = new GameWorld();
+        bodyPushWorld.AddEntity(DefaultWorldConfig.PlayerSpawn(933, 933, new GridCoord(0, 0)));
+        bodyPushWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(934, new GridCoord(1, 0), Direction.Right));
+        bodyPushWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(935, new GridCoord(2, 0), Direction.Right));
+        bodyPushWorld.FlushDelta();
+        var bodyPushQueue = new AuthoritativeInputQueue();
+        var bodyPushRunner = new AuthoritativeWorldTickRunner(
+            bodyPushWorld,
+            bodyPushQueue,
+            new AuthoritativeWorldSyncSystem(bodyPushWorld),
+            1);
+
+        AuthoritativeMoveInput bodyPushInput = bodyPushQueue.EnqueueMove(933, new GridCoord(1, 0), 17);
+        WorldDelta bodyPushFirstDelta = bodyPushRunner.Tick();
+        MoveResult bodyPushResult = bodyPushInput.WaitAsync().GetResult();
+        WorldDelta bodyPushSecondDelta = bodyPushRunner.Tick();
+        if (bodyPushRunner.ActivePendingStateCount != 0 ||
+            !bodyPushResult.Success ||
+            bodyPushResult.FinalCoord != new GridCoord(0, 0) ||
+            bodyPushFirstDelta.ChangedEntities.Count != 0 ||
+            bodyPushSecondDelta.ChangedEntities.Count != 2 ||
+            !bodyPushSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 934 && snapshot.X == 2 && snapshot.Y == 0) ||
+            !bodyPushSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 935 && snapshot.X == 3 && snapshot.Y == 0) ||
+            bodyPushSecondDelta.AnimationMetadata.Count != 2 ||
+            !bodyPushSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 934 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush) ||
+            !bodyPushSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 935 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush))
+        {
+            reason = "state deferred push did not move connected body members with metadata changed=" +
+                string.Join(",", bodyPushSecondDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
+                " metadata=" +
+                string.Join(",", bodyPushSecondDelta.AnimationMetadata.Select(metadata => metadata.EntityId + ":" + metadata.MotionKind));
+            return false;
+        }
+
+        var intermediateWorld = new GameWorld();
+        intermediateWorld.AddEntity(DefaultWorldConfig.PlayerSpawn(936, 936, new GridCoord(0, 0)));
+        intermediateWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(937, new GridCoord(1, 0), Direction.Right));
+        intermediateWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(938, new GridCoord(2, 0), Direction.Right));
+        intermediateWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(939, new GridCoord(3, 0)));
+        intermediateWorld.FlushDelta();
+        var intermediateQueue = new AuthoritativeInputQueue();
+        var intermediateRunner = new AuthoritativeWorldTickRunner(
+            intermediateWorld,
+            intermediateQueue,
+            new AuthoritativeWorldSyncSystem(intermediateWorld),
+            1);
+
+        AuthoritativeMoveInput intermediateInput = intermediateQueue.EnqueueMove(936, new GridCoord(1, 0), 18);
+        WorldDelta intermediateFirstDelta = intermediateRunner.Tick();
+        MoveResult intermediateResult = intermediateInput.WaitAsync().GetResult();
+        WorldDelta intermediateSecondDelta = intermediateRunner.Tick();
+        WorldDelta intermediateThirdDelta = intermediateRunner.Tick();
+        WorldDelta intermediateFourthDelta = intermediateRunner.Tick();
+        if (intermediateRunner.ActivePendingStateCount != 0 ||
+            !intermediateResult.Success ||
+            intermediateResult.FinalCoord != new GridCoord(0, 0) ||
+            intermediateFirstDelta.ChangedEntities.Count != 0 ||
+            intermediateSecondDelta.ChangedEntities.Count != 0 ||
+            intermediateSecondDelta.AnimationMetadata.Count != 2 ||
+            !intermediateSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 937 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.Direction == Direction.Right) ||
+            !intermediateSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 938 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.Direction == Direction.Right) ||
+            intermediateThirdDelta.ChangedEntities.Count != 1 ||
+            !intermediateThirdDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 939 && snapshot.X == 4 && snapshot.Y == 0) ||
+            intermediateFourthDelta.ChangedEntities.Count != 0 ||
+            intermediateFourthDelta.AnimationMetadata.Count != 0 ||
+            !intermediateWorld.TryGetEntity(937, out GameEntity intermediateFirstMember) ||
+            !intermediateWorld.TryGetEntity(938, out GameEntity intermediateSecondMember) ||
+            !intermediateWorld.TryGetComponent(intermediateFirstMember, out PositionComponent intermediateFirstPosition) ||
+            !intermediateWorld.TryGetComponent(intermediateSecondMember, out PositionComponent intermediateSecondPosition) ||
+            intermediateFirstPosition.Coord != new GridCoord(1, 0) ||
+            intermediateSecondPosition.Coord != new GridCoord(2, 0))
+        {
+            reason = "intermediate connected body push should feedback without moving middle body secondChanged=" +
+                string.Join(",", intermediateSecondDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
+                " secondMetadata=" +
+                string.Join(",", intermediateSecondDelta.AnimationMetadata.Select(metadata => metadata.EntityId + ":" + metadata.MotionKind + ":" + metadata.Direction)) +
+                " thirdChanged=" +
+                string.Join(",", intermediateThirdDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
+                " fourthChanged=" +
+                string.Join(",", intermediateFourthDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
+                " fourthMetadata=" +
+                string.Join(",", intermediateFourthDelta.AnimationMetadata.Select(metadata => metadata.EntityId + ":" + metadata.MotionKind));
             return false;
         }
 
@@ -1311,17 +1469,45 @@ public static class AuthoritativeMoveWorldVerification
         }
 
         IReadOnlyList<CommitProposalResult> results = resolver.Resolve(world, new[] { plan });
+        WorldDelta resolverDelta = world.FlushDelta();
         if (results.Count != 2 ||
             results.Any(result => !result.Accepted) ||
+            !results.Any(result => result.Proposal.EntityId == 1310 && result.Proposal.From == new GridCoord(0, 0) && result.Proposal.To == new GridCoord(1, 0)) ||
+            !results.Any(result => result.Proposal.EntityId == 1311 && result.Proposal.From == new GridCoord(1, 0) && result.Proposal.To == new GridCoord(2, 0)) ||
             !world.TryGetEntity(1310, out GameEntity first) ||
             !world.TryGetEntity(1311, out GameEntity second) ||
             !world.TryGetComponent(first, out PositionComponent firstPosition) ||
             !world.TryGetComponent(second, out PositionComponent secondPosition) ||
             firstPosition.Coord != new GridCoord(1, 0) ||
             secondPosition.Coord != new GridCoord(2, 0) ||
-            world.FlushDelta().ChangedEntities.Count != 2)
+            resolverDelta.ChangedEntities.Count != 2 ||
+            !resolverDelta.ChangedEntities.Any(entity => entity.EntityId == 1310 && entity.X == 1 && entity.Y == 0) ||
+            !resolverDelta.ChangedEntities.Any(entity => entity.EntityId == 1311 && entity.X == 2 && entity.Y == 0))
         {
             reason = "behavior conflict resolver did not atomically commit group move";
+            return false;
+        }
+
+        var tickWorld = new GameWorld();
+        tickWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1312, new GridCoord(0, 0), Direction.Right));
+        tickWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(1313, new GridCoord(1, 0), Direction.Right));
+        tickWorld.FlushDelta();
+        var inputQueue = new AuthoritativeInputQueue();
+        inputQueue.ActionQueue.EnqueueConfiguredMove("mechanism_push", 1312, Direction.Right, tickWorld.ServerTick, 1);
+        var runner = new AuthoritativeWorldTickRunner(
+            tickWorld,
+            inputQueue,
+            new AuthoritativeWorldSyncSystem(tickWorld),
+            1);
+        WorldDelta tickDelta = runner.Tick();
+        if (tickDelta.ChangedEntities.Count != 2 ||
+            !tickDelta.ChangedEntities.Any(entity => entity.EntityId == 1312 && entity.X == 1 && entity.Y == 0) ||
+            !tickDelta.ChangedEntities.Any(entity => entity.EntityId == 1313 && entity.X == 2 && entity.Y == 0) ||
+            tickDelta.AnimationMetadata.Count != 2 ||
+            !tickDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 1312 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush) ||
+            !tickDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 1313 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush))
+        {
+            reason = "authoritative tick did not sync group move delta and metadata for every member";
             return false;
         }
 

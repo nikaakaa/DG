@@ -72,6 +72,7 @@ public sealed class StateDrivenRuleExecutionSystem
         proposalResults.AddRange(commitResolver.Resolve(world, proposals));
         proposalResults.AddRange(conflictResolver.Resolve(world, movePlans));
         ApplyProposalResultsToActions(actionResults, proposalResults, reasons);
+        ApplyComposedPushResults(actionResults, pushComposition);
         if (pendingStates != null)
         {
             ApplyProposalResultsToPendingStates(world, pendingStates, proposalResults, actionResults, reasons, serverTick);
@@ -323,6 +324,33 @@ public sealed class StateDrivenRuleExecutionSystem
             if (!string.IsNullOrEmpty(result.Reason))
             {
                 reasons.Add(result.Reason);
+            }
+        }
+    }
+
+    private static void ApplyComposedPushResults(Dictionary<long, MoveResult> actionResults, PushVectorCompositionResult composition)
+    {
+        foreach (KeyValuePair<long, IReadOnlyList<ActionRequest>> pair in composition.MergedRequestsByRepresentative)
+        {
+            if (!actionResults.TryGetValue(pair.Key, out MoveResult representativeResult))
+            {
+                continue;
+            }
+
+            IReadOnlyList<ActionRequest> mergedRequests = pair.Value;
+            for (int i = 0; i < mergedRequests.Count; i++)
+            {
+                ActionRequest request = mergedRequests[i];
+                actionResults[request.ActionId] = new MoveResult(
+                    representativeResult.Success,
+                    request.EntityId,
+                    representativeResult.FinalCoord,
+                    representativeResult.FinalDirection,
+                    representativeResult.ErrorCode,
+                    representativeResult.Reason,
+                    representativeResult.Bounced,
+                    representativeResult.Collision,
+                    request.ClientTick);
             }
         }
     }

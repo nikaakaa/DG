@@ -1,0 +1,65 @@
+[
+  {
+    "style_id": "player_move",
+    "motion_kind": "player_move",
+    "duration_seconds": 0.12,
+    "easing": 2,
+    "flash_color": "#19CCFF",
+    "scale_feedback": 1.05,
+    "instant": false
+  },
+  {
+    "style_id": "mechanism_push",
+    "motion_kind": "mechanism_push",
+    "duration_seconds": 0.18,
+    "easing": 3,
+    "flash_color": "#FFB21A",
+    "scale_feedback": 1.18,
+    "instant": false
+  },
+  {
+    "style_id": "auto_move",
+    "motion_kind": "auto_move",
+    "duration_seconds": 0.16,
+    "easing": 1,
+    "flash_color": "#FFE04A",
+    "scale_feedback": 1.1,
+    "instant": false
+  },
+  {
+    "style_id": "debug_drag",
+    "motion_kind": "debug_drag",
+    "duration_seconds": 0.06,
+    "easing": 1,
+    "flash_color": "#FFFFFF",
+    "scale_feedback": 1,
+    "instant": true
+  },
+  {
+    "style_id": "spawn",
+    "motion_kind": "spawn",
+    "duration_seconds": 0.1,
+    "easing": 2,
+    "flash_color": "#66FF99",
+    "scale_feedback": 1.25,
+    "instant": true
+  },
+  {
+    "style_id": "remove",
+    "motion_kind": "remove",
+    "duration_seconds": 0.08,
+    "easing": 2,
+    "flash_color": "#FF5555",
+    "scale_feedback": 0.4,
+    "instant": true
+  },
+  {
+    "style_id": "unknown",
+    "motion_kind": "unknown",
+    "duration_seconds": 0.1,
+    "easing": 1,
+    "flash_color": "#C7D0D8",
+    "scale_feedback": 1.03,
+    "instant": false
+  }
+]

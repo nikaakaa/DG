@@ -69,17 +69,24 @@ public sealed class PushVectorMetadata
 public sealed class PushVectorCompositionResult
 {
     public PushVectorCompositionResult(IReadOnlyList<ActionRequest> requests, IReadOnlyList<ActionRequest> cancelledRequests, IReadOnlyList<PushVectorMetadata> metadata, IReadOnlyList<string> reasons)
+        : this(requests, cancelledRequests, metadata, reasons, new Dictionary<long, IReadOnlyList<ActionRequest>>())
+    {
+    }
+
+    public PushVectorCompositionResult(IReadOnlyList<ActionRequest> requests, IReadOnlyList<ActionRequest> cancelledRequests, IReadOnlyList<PushVectorMetadata> metadata, IReadOnlyList<string> reasons, IReadOnlyDictionary<long, IReadOnlyList<ActionRequest>> mergedRequestsByRepresentative)
     {
         Requests = requests;
         CancelledRequests = cancelledRequests;
         Metadata = metadata;
         Reasons = reasons;
+        MergedRequestsByRepresentative = mergedRequestsByRepresentative;
     }
 
     public IReadOnlyList<ActionRequest> Requests { get; }
     public IReadOnlyList<ActionRequest> CancelledRequests { get; }
     public IReadOnlyList<PushVectorMetadata> Metadata { get; }
     public IReadOnlyList<string> Reasons { get; }
+    public IReadOnlyDictionary<long, IReadOnlyList<ActionRequest>> MergedRequestsByRepresentative { get; }
 }
 
 public sealed class PushVectorArbiter
@@ -123,6 +130,7 @@ public sealed class PushVectorArbiter
         var cancelled = new List<ActionRequest>();
         var metadata = new List<PushVectorMetadata>();
         var reasons = new List<string>();
+        var merged = new Dictionary<long, IReadOnlyList<ActionRequest>>();
 
         foreach (List<PushVectorContribution> group in groups.Values.OrderBy(item => item[0].ReadyTick).ThenBy(item => item[0].SubjectKey))
         {
@@ -139,7 +147,18 @@ public sealed class PushVectorArbiter
                 continue;
             }
 
-            ActionRequest representative = byActionId[group.OrderBy(item => item.ActionId).First().ActionId];
+            long representativeActionId = group.OrderBy(item => item.ActionId).First().ActionId;
+            ActionRequest representative = byActionId[representativeActionId];
+            ActionRequest[] mergedRequests = group
+                .Where(item => item.ActionId != representativeActionId)
+                .OrderBy(item => item.ActionId)
+                .Select(item => byActionId[item.ActionId])
+                .ToArray();
+            if (mergedRequests.Length > 0)
+            {
+                merged[representativeActionId] = mergedRequests;
+            }
+
             IReadOnlyList<Direction> path = groupMetadata.Path;
             output.Add(CloneWithDirection(representative, path[0]));
             if (path.Count > 1)
@@ -152,7 +171,8 @@ public sealed class PushVectorArbiter
             output.OrderBy(request => request.Priority).ThenBy(request => request.ReadyTick).ThenBy(request => request.ActionId).ThenBy(request => request.EntityId).ToArray(),
             cancelled.OrderBy(request => request.ActionId).ToArray(),
             metadata.ToArray(),
-            reasons.ToArray());
+            reasons.ToArray(),
+            merged);
     }
 
     private static bool IsPushContribution(ActionSpec spec, ActionRequest request)
@@ -262,7 +282,7 @@ public sealed class PushVectorArbiter
     private static ActionRequest CloneWithDirection(ActionRequest request, Direction direction)
     {
         var target = new ActionTarget(request.Target.TargetEntityId, null, direction);
-        return new ActionRequest(request.ActionId, request.SpecId, request.Priority, request.Source, request.EntityId, target, request.RuntimeParams, request.CreatedTick, request.ReadyTick, request.ClientTick, request.OwnerActionId, request.DerivedFromUnitId, request.DeferredContributionCount, request.DeferredCausalitySamples);
+        return new ActionRequest(request.ActionId, request.SpecId, request.Priority, request.Source, request.EntityId, target, request.RuntimeParams, request.CreatedTick, request.ReadyTick, request.ClientTick, request.OwnerActionId, request.DerivedFromUnitId, request.DeferredContributionCount, request.DeferredCausalitySamples, request.SubjectEntityIds);
     }
 }
 }

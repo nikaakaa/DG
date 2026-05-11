@@ -87,6 +87,14 @@ message G2C_WorldEntityState
 	bool CanBePushed = 17;
 	int32 AutoMoveIntervalTicks = 18;
 }
+message G2C_WorldDeltaAnimationMetadata
+{
+	int64 EntityId = 1;
+	int64 ServerTick = 2;
+	int32 MotionKind = 3;
+	string StyleKey = 4;
+	int32 Direction = 5;
+}
 message G2C_WorldSnapshotNotify // IMessage
 {
 	int64 ServerTick = 1;
@@ -97,6 +105,7 @@ message G2C_WorldDeltaNotify // IMessage
 	int64 ServerTick = 1;
 	repeated G2C_WorldEntityState Entities = 2;
 	repeated int64 RemovedEntityIds = 3;
+	repeated G2C_WorldDeltaAnimationMetadata AnimationMetadata = 4;
 }
 message C2G_DebugSpawnEntityRequest // IRequest,G2C_DebugSpawnEntityResponse
 {

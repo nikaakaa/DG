@@ -359,6 +359,36 @@ namespace Fantasy
 
     [Serializable]
     [ProtoContract]
+    public partial class G2C_WorldDeltaAnimationMetadata : AMessage
+    {
+        public static G2C_WorldDeltaAnimationMetadata Create()
+        {
+            return MessageObjectPool<G2C_WorldDeltaAnimationMetadata>.Rent();
+        }
+
+        public void Dispose()
+        {
+            EntityId = default;
+            ServerTick = default;
+            MotionKind = default;
+            StyleKey = default;
+            Direction = default;
+            MessageObjectPool<G2C_WorldDeltaAnimationMetadata>.Return(this);
+        }
+        [ProtoMember(1)]
+        public long EntityId { get; set; }
+        [ProtoMember(2)]
+        public long ServerTick { get; set; }
+        [ProtoMember(3)]
+        public int MotionKind { get; set; }
+        [ProtoMember(4)]
+        public string StyleKey { get; set; }
+        [ProtoMember(5)]
+        public int Direction { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
     public partial class G2C_WorldSnapshotNotify : AMessage, IMessage
     {
         public static G2C_WorldSnapshotNotify Create()
@@ -393,6 +423,7 @@ namespace Fantasy
             ServerTick = default;
             Entities.Clear();
             RemovedEntityIds.Clear();
+            AnimationMetadata.Clear();
             MessageObjectPool<G2C_WorldDeltaNotify>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.G2C_WorldDeltaNotify; } 
@@ -402,6 +433,8 @@ namespace Fantasy
         public List<G2C_WorldEntityState> Entities { get; set; } = new List<G2C_WorldEntityState>();
         [ProtoMember(3)]
         public List<long> RemovedEntityIds { get; set; } = new List<long>();
+        [ProtoMember(4)]
+        public List<G2C_WorldDeltaAnimationMetadata> AnimationMetadata { get; set; } = new List<G2C_WorldDeltaAnimationMetadata>();
     }
 
     [Serializable]

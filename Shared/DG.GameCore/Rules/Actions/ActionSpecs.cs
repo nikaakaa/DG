@@ -275,16 +275,21 @@ public sealed class ActionSpec
 public readonly struct ActionRequest
 {
     public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick)
-        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, 0, 0, 1, Array.Empty<long>())
+        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, 0, 0, 1, Array.Empty<long>(), Array.Empty<long>())
     {
     }
 
     public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId)
-        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, ownerActionId, derivedFromUnitId, 1, Array.Empty<long>())
+        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, ownerActionId, derivedFromUnitId, 1, Array.Empty<long>(), Array.Empty<long>())
     {
     }
 
     public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId, int deferredContributionCount, IReadOnlyList<long> deferredCausalitySamples)
+        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, ownerActionId, derivedFromUnitId, deferredContributionCount, deferredCausalitySamples, Array.Empty<long>())
+    {
+    }
+
+    public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId, int deferredContributionCount, IReadOnlyList<long> deferredCausalitySamples, IReadOnlyList<long> subjectEntityIds)
     {
         ActionId = actionId;
         OwnerActionId = ownerActionId == 0 ? actionId : ownerActionId;
@@ -300,6 +305,7 @@ public readonly struct ActionRequest
         ClientTick = clientTick;
         DeferredContributionCount = Math.Max(1, deferredContributionCount);
         DeferredCausalitySamples = deferredCausalitySamples == null ? Array.Empty<long>() : deferredCausalitySamples.ToArray();
+        SubjectEntityIds = subjectEntityIds == null || subjectEntityIds.Count == 0 ? Array.Empty<long>() : subjectEntityIds.ToArray();
     }
 
     public long ActionId { get; }
@@ -316,6 +322,7 @@ public readonly struct ActionRequest
     public long ClientTick { get; }
     public int DeferredContributionCount { get; }
     public IReadOnlyList<long> DeferredCausalitySamples { get; }
+    public IReadOnlyList<long> SubjectEntityIds { get; }
 }
 
 public readonly struct ActionClaim
@@ -529,9 +536,10 @@ public sealed class ActionRequestAdapter
     public ActionRequest FromWorldAction(WorldAction action)
     {
         ActionSpec spec = registry.Get(action.SpecId);
-        var source = new ActionSourceContext(spec.DefaultSource, action.EntityId, 0, spec.SourceTag);
+        ActionSourceKind sourceKind = string.IsNullOrEmpty(action.DeferredEquivalenceKey) ? spec.DefaultSource : ActionSourceKind.Handoff;
+        var source = new ActionSourceContext(sourceKind, action.EntityId, 0, spec.SourceTag);
         var target = new ActionTarget(0, action.TargetCoord, action.Direction);
-        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick, 0, 0, action.DeferredContributionCount, action.DeferredCausalitySamples);
+        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick, 0, 0, action.DeferredContributionCount, action.DeferredCausalitySamples, action.SubjectEntityIds);
     }
 
     public ActionRequest FromPendingActionState(PendingActionState state, long serverTick)
@@ -630,7 +638,7 @@ public sealed class ActionArbiter
             return;
         }
 
-        if (!TryResolveActionBody(world, entity, spec, out BehaviorBody body, out string bodyReason))
+        if (!TryResolveActionBody(world, request, entity, spec, out BehaviorBody body, out string bodyReason))
         {
             Reject(world, request, spec, position.Coord, direction, MoveErrorCode.UnknownEntity, bodyReason, false, default, result);
             return;
@@ -1016,11 +1024,31 @@ public sealed class ActionArbiter
         return tags;
     }
 
-    private bool TryResolveActionBody(GameWorld world, GameEntity entity, ActionSpec spec, out BehaviorBody body, out string reason)
+    private bool TryResolveActionBody(GameWorld world, ActionRequest request, GameEntity entity, ActionSpec spec, out BehaviorBody body, out string reason)
     {
         if (spec.AllowsConnectedBodySubject)
         {
             return bodyResolver.TryResolve(world, entity, out body, out reason);
+        }
+
+        if (request.SubjectEntityIds.Count > 1)
+        {
+            var members = new List<GameEntity>();
+            for (int i = 0; i < request.SubjectEntityIds.Count; i++)
+            {
+                if (!world.TryGetEntity(request.SubjectEntityIds[i], out GameEntity member))
+                {
+                    body = null!;
+                    reason = "entity not found";
+                    return false;
+                }
+
+                members.Add(member);
+            }
+
+            body = new BehaviorBody(BodyResolver.BuildBodyId(members), BehaviorBodyKind.PortConnected, members);
+            reason = string.Empty;
+            return true;
         }
 
         body = new BehaviorBody(entity.EntityId, BehaviorBodyKind.SingleEntity, new[] { entity });

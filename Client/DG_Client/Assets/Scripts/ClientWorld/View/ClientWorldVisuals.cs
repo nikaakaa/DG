@@ -16,10 +16,14 @@ namespace DG.Map
         [SerializeField] private Color conveyorColor = new Color(0.35f, 1f, 0.45f, 1f);
         [SerializeField] private Color portConnectorColor = new Color(0.25f, 1f, 0.9f, 1f);
         [SerializeField] private Color portLineColor = new Color(0.02f, 0.14f, 0.14f, 1f);
+        [SerializeField] private bool animationLayerEnabled = true;
         private readonly Dictionary<long, Transform> EntityViews = new();
+        private readonly Dictionary<long, ActiveEntityAnimation> activeAnimations = new();
+        private readonly Dictionary<long, ClientAnimationEvent> latestDrainedEvents = new();
         private readonly Dictionary<string, LineRenderer> portConnectionLines = new();
         private Transform entityRoot;
         private Transform portConnectionRoot;
+        public string LastAnimationSummary => runner != null && runner.Context != null ? runner.Context.AnimationLayer.RecentSummary : string.Empty;
 
         private void Awake()
         {
@@ -43,13 +47,15 @@ namespace DG.Map
             }
 
             IReadOnlyList<EntitySnapshot> snapshots = runner.Context.ClientMapWorld.CreateSnapshot();
+            runner.Context.AnimationLayer.Enabled = animationLayerEnabled;
+            DrainAnimationEvents();
             var seen = new HashSet<long>();
             for (int i = 0; i < snapshots.Count; i++)
             {
                 EntitySnapshot snapshot = snapshots[i];
                 seen.Add(snapshot.EntityId);
                 Transform view = GetOrCreateEntityView(snapshot.EntityId);
-                ConfigureEntityView(view, snapshot);
+                ConfigureEntityView(view, snapshot, Time.deltaTime);
             }
 
             RemoveMissingViews(seen);
@@ -75,15 +81,38 @@ namespace DG.Map
             return view.transform;
         }
 
-        private void ConfigureEntityView(Transform view, EntitySnapshot snapshot)
+        private void ConfigureEntityView(Transform view, EntitySnapshot snapshot, float deltaTime)
         {
-            view.localPosition = ToWorldPosition(new Vector2Int(snapshot.X, snapshot.Y), -0.1f);
-            view.localScale = Vector3.one * (cellSize * 0.8f);
+            Color resolvedColor = ResolveColor(snapshot);
+            Vector3 resolvedPosition = ToWorldPosition(new Vector2Int(snapshot.X, snapshot.Y), -0.1f);
+            Vector3 resolvedScale = Vector3.one * (cellSize * 0.8f);
+            Color displayColor = resolvedColor;
+            if (animationLayerEnabled && activeAnimations.TryGetValue(snapshot.EntityId, out ActiveEntityAnimation animation))
+            {
+                if (animation.Advance(deltaTime, resolvedPosition, resolvedScale, resolvedColor, out Vector3 animatedPosition, out Vector3 animatedScale, out Color animatedColor))
+                {
+                    view.localPosition = animatedPosition;
+                    view.localScale = animatedScale;
+                    displayColor = animatedColor;
+                }
+                else
+                {
+                    activeAnimations.Remove(snapshot.EntityId);
+                    view.localPosition = resolvedPosition;
+                    view.localScale = resolvedScale;
+                }
+            }
+            else
+            {
+                view.localPosition = resolvedPosition;
+                view.localScale = resolvedScale;
+            }
+
             SpriteRenderer spriteRenderer = view.GetComponent<SpriteRenderer>();
             if (spriteRenderer != null)
             {
                 spriteRenderer.enabled = true;
-                spriteRenderer.color = ResolveColor(snapshot);
+                spriteRenderer.color = displayColor;
             }
 
             LineRenderer lineRenderer = view.GetComponent<LineRenderer>();
@@ -172,6 +201,47 @@ namespace DG.Map
                 }
 
                 EntityViews.Remove(entityId);
+                activeAnimations.Remove(entityId);
+            }
+        }
+
+        private void DrainAnimationEvents()
+        {
+            if (!animationLayerEnabled || runner == null || runner.Context == null)
+            {
+                activeAnimations.Clear();
+                latestDrainedEvents.Clear();
+                return;
+            }
+
+            latestDrainedEvents.Clear();
+            while (runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent animationEvent))
+            {
+                latestDrainedEvents[animationEvent.EntityId] = animationEvent;
+            }
+
+            foreach (KeyValuePair<long, ClientAnimationEvent> pair in latestDrainedEvents)
+            {
+                ClientAnimationEvent animationEvent = pair.Value;
+                Transform view = GetOrCreateEntityView(animationEvent.EntityId);
+                if (animationEvent.MotionKind == ClientAnimationMotionKind.Remove)
+                {
+                    if (EntityViews.TryGetValue(animationEvent.EntityId, out Transform removedView) && removedView != null)
+                    {
+                        Destroy(removedView.gameObject);
+                    }
+
+                    EntityViews.Remove(animationEvent.EntityId);
+                    activeAnimations.Remove(animationEvent.EntityId);
+                    continue;
+                }
+
+                Vector3 startPosition = activeAnimations.ContainsKey(animationEvent.EntityId)
+                    ? view.localPosition
+                    : ToWorldPosition(animationEvent.FromCoord, -0.1f);
+                ActiveEntityAnimation animation = ActiveEntityAnimation.Create(animationEvent, startPosition, ToWorldPosition(animationEvent.ToCoord, -0.1f), cellSize);
+                view.localPosition = animation.StartPosition;
+                activeAnimations[animationEvent.EntityId] = animation;
             }
         }
 
@@ -272,6 +342,86 @@ namespace DG.Map
             Material material = new Material(Shader.Find("Sprites/Default"));
             material.color = color;
             return material;
+        }
+
+        private sealed class ActiveEntityAnimation
+        {
+            private readonly ClientAnimationEvent animationEvent;
+            private readonly Vector3 startScale;
+            private float elapsed;
+
+            private ActiveEntityAnimation(ClientAnimationEvent animationEvent, Vector3 startPosition, Vector3 endPosition, Vector3 startScale)
+            {
+                this.animationEvent = animationEvent;
+                StartPosition = startPosition;
+                EndPosition = endPosition;
+                this.startScale = startScale;
+                elapsed = 0f;
+            }
+
+            public Vector3 StartPosition { get; }
+            private Vector3 EndPosition { get; }
+
+            public static ActiveEntityAnimation Create(ClientAnimationEvent animationEvent, Vector3 startPosition, Vector3 endPosition, float cellSize)
+            {
+                if (animationEvent.IsImpulse)
+                {
+                    endPosition = startPosition + DirectionOffset(animationEvent.ImpulseDirection, cellSize * 0.32f);
+                }
+
+                return new ActiveEntityAnimation(animationEvent, startPosition, animationEvent.Style.Instant ? endPosition : endPosition, Vector3.one * (cellSize * 0.8f));
+            }
+
+            public bool Advance(float deltaTime, Vector3 finalPosition, Vector3 finalScale, Color baseColor, out Vector3 position, out Vector3 scale, out Color color)
+            {
+                if (animationEvent.Style.Instant || animationEvent.Style.DurationSeconds <= 0f)
+                {
+                    position = finalPosition;
+                    scale = finalScale;
+                    color = Color.Lerp(baseColor, animationEvent.Style.FlashColor, 0.35f);
+                    return false;
+                }
+
+                elapsed += Mathf.Max(0f, deltaTime);
+                float normalized = Mathf.Clamp01(elapsed / animationEvent.Style.DurationSeconds);
+                float eased = Ease(normalized, animationEvent.Style.Easing);
+                position = animationEvent.IsImpulse ? Vector3.Lerp(StartPosition, EndPosition, Mathf.Sin(eased * Mathf.PI)) : Vector3.Lerp(StartPosition, EndPosition, eased);
+                float pulse = Mathf.Sin(normalized * Mathf.PI);
+                float feedback = Mathf.Lerp(1f, animationEvent.Style.ScaleFeedback, pulse);
+                scale = startScale * feedback;
+                color = Color.Lerp(baseColor, animationEvent.Style.FlashColor, pulse * 0.45f);
+                if (normalized >= 1f)
+                {
+                    position = finalPosition;
+                    scale = finalScale;
+                    color = baseColor;
+                    return false;
+                }
+
+                return true;
+            }
+
+            private static float Ease(float value, ClientAnimationEasing easing)
+            {
+                return easing switch
+                {
+                    ClientAnimationEasing.EaseOut => 1f - Mathf.Pow(1f - value, 3f),
+                    ClientAnimationEasing.EaseInOut => value < 0.5f ? 4f * value * value * value : 1f - Mathf.Pow(-2f * value + 2f, 3f) * 0.5f,
+                    _ => value
+                };
+            }
+
+            private static Vector3 DirectionOffset(Direction direction, float distance)
+            {
+                return direction switch
+                {
+                    Direction.Left => new Vector3(-distance, 0f, 0f),
+                    Direction.Right => new Vector3(distance, 0f, 0f),
+                    Direction.Up => new Vector3(0f, distance, 0f),
+                    Direction.Down => new Vector3(0f, -distance, 0f),
+                    _ => Vector3.zero
+                };
+            }
         }
     }
 }

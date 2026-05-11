@@ -19,6 +19,7 @@ public partial class Tables
     public gamecore.TbPortConnectorConfig TbPortConnectorConfig {get; }
     public gamecore.TbPushOnEnterConfig TbPushOnEnterConfig {get; }
     public gamecore.TbActionSpec TbActionSpec {get; }
+    public gamecore.TbAnimationStyle TbAnimationStyle {get; }
 
 
       public Tables(System.Func<string, JArray> loader)
@@ -29,6 +30,7 @@ public partial class Tables
         TbPortConnectorConfig = new gamecore.TbPortConnectorConfig(loader("gamecore_tbportconnectorconfig"));
         TbPushOnEnterConfig = new gamecore.TbPushOnEnterConfig(loader("gamecore_tbpushonenterconfig"));
         TbActionSpec = new gamecore.TbActionSpec(loader("gamecore_tbactionspec"));
+        TbAnimationStyle = new gamecore.TbAnimationStyle(loader("gamecore_tbanimationstyle"));
         ResolveRef();
     }
     
@@ -40,6 +42,7 @@ public partial class Tables
         TbPortConnectorConfig.ResolveRef(this);
         TbPushOnEnterConfig.ResolveRef(this);
         TbActionSpec.ResolveRef(this);
+        TbAnimationStyle.ResolveRef(this);
     }
 }
 

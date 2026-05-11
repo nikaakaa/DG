@@ -122,7 +122,7 @@ public sealed class BodyResolver
         return true;
     }
 
-    private static long BuildBodyId(IReadOnlyList<GameEntity> entities)
+    public static long BuildBodyId(IReadOnlyList<GameEntity> entities)
     {
         long bodyId = 17;
         for (int i = 0; i < entities.Count; i++)

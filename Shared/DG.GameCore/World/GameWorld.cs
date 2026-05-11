@@ -13,6 +13,7 @@ public sealed class GameWorld
     private readonly SpatialDirtyTracker spatialDirty = new();
     private readonly List<DirtyChange> dirtyChanges = new();
     private readonly List<long> removedEntityIds = new();
+    private readonly List<WorldDeltaAnimationMetadata> animationMetadata = new();
     private readonly IGameConfigProvider configProvider;
     private readonly RuntimeEffectStore runtimeEffects = new();
     private readonly ComponentStateResolver componentStateResolver = new();
@@ -307,10 +308,16 @@ public sealed class GameWorld
         return dirtyChanges.ToArray();
     }
 
+    public void AddAnimationMetadata(WorldDeltaAnimationMetadata metadata)
+    {
+        animationMetadata.Add(metadata);
+    }
+
     public WorldDelta FlushDelta()
     {
         var snapshots = new List<EntitySnapshot>();
         var removed = new List<long>();
+        var metadata = new List<WorldDeltaAnimationMetadata>();
         var seen = new HashSet<long>();
         for (int i = 0; i < dirtyChanges.Count; i++)
         {
@@ -337,7 +344,9 @@ public sealed class GameWorld
 
         dirtyChanges.Clear();
         removedEntityIds.Clear();
-        return new WorldDelta(ServerTick, snapshots, removed);
+        metadata.AddRange(animationMetadata);
+        animationMetadata.Clear();
+        return new WorldDelta(ServerTick, snapshots, removed, metadata);
     }
 
     public IReadOnlyList<EntitySnapshot> CreateSnapshot()

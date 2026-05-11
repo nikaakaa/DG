@@ -16,6 +16,40 @@ public readonly struct DirtyChange
     public long ServerTick { get; }
 }
 
+public enum WorldDeltaMotionKind
+{
+    Unknown = 0,
+    PlayerMove = 1,
+    MechanismPush = 2,
+    AutoMove = 3,
+    DebugDrag = 4,
+    Spawn = 5,
+    Remove = 6
+}
+
+public readonly struct WorldDeltaAnimationMetadata
+{
+    public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey)
+        : this(entityId, serverTick, motionKind, styleKey, Direction.None)
+    {
+    }
+
+    public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Direction direction)
+    {
+        EntityId = entityId;
+        ServerTick = serverTick;
+        MotionKind = motionKind;
+        StyleKey = styleKey ?? string.Empty;
+        Direction = direction;
+    }
+
+    public long EntityId { get; }
+    public long ServerTick { get; }
+    public WorldDeltaMotionKind MotionKind { get; }
+    public string StyleKey { get; }
+    public Direction Direction { get; }
+}
+
 public readonly struct EntitySnapshot
 {
     public EntitySnapshot(long entityId, int configId, int archetypeId, int entityTarget, int x, int y, Direction direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, bool playerControlled, long serverTick)
@@ -75,15 +109,22 @@ public readonly struct WorldDelta
     }
 
     public WorldDelta(long serverTick, IReadOnlyList<EntitySnapshot> changedEntities, IReadOnlyList<long> removedEntityIds)
+        : this(serverTick, changedEntities, removedEntityIds, Array.Empty<WorldDeltaAnimationMetadata>())
+    {
+    }
+
+    public WorldDelta(long serverTick, IReadOnlyList<EntitySnapshot> changedEntities, IReadOnlyList<long> removedEntityIds, IReadOnlyList<WorldDeltaAnimationMetadata> animationMetadata)
     {
         ServerTick = serverTick;
         ChangedEntities = changedEntities;
         RemovedEntityIds = removedEntityIds;
+        AnimationMetadata = animationMetadata;
     }
 
     public long ServerTick { get; }
     public IReadOnlyList<EntitySnapshot> ChangedEntities { get; }
     public IReadOnlyList<long> RemovedEntityIds { get; }
+    public IReadOnlyList<WorldDeltaAnimationMetadata> AnimationMetadata { get; }
 }
 }
 

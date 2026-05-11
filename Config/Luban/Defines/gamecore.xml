@@ -103,6 +103,12 @@
         <var name="SetDirectionOnBounce" value="2"/>
     </enum>
 
+    <enum name="AnimationEasing">
+        <var name="Linear" value="1"/>
+        <var name="EaseOut" value="2"/>
+        <var name="EaseInOut" value="3"/>
+    </enum>
+
     <bean name="EntityArchetype">
         <var name="config_id" type="int"/>
         <var name="archetype_id" type="int"/>
@@ -167,10 +173,21 @@
         <var name="default_cost_ticks" type="int"/>
     </bean>
 
+    <bean name="AnimationStyle">
+        <var name="style_id" type="string"/>
+        <var name="motion_kind" type="string"/>
+        <var name="duration_seconds" type="float"/>
+        <var name="easing" type="AnimationEasing"/>
+        <var name="flash_color" type="string"/>
+        <var name="scale_feedback" type="float"/>
+        <var name="instant" type="bool"/>
+    </bean>
+
     <table name="TbEntityArchetype" index="config_id" value="EntityArchetype" input="gamecore/entity_archetype.xlsx"/>
     <table name="TbWorldSpawn" mode="list" value="WorldSpawn" input="gamecore/world_spawn.xlsx"/>
     <table name="TbPlayerSpawnRule" index="rule_id" value="PlayerSpawnRule" input="gamecore/player_spawn_rule.xlsx"/>
     <table name="TbPortConnectorConfig" index="config_id" value="PortConnectorConfig" input="gamecore/port_connector_config.xlsx"/>
     <table name="TbPushOnEnterConfig" index="config_id" value="PushOnEnterConfig" input="gamecore/push_on_enter_config.xlsx"/>
     <table name="TbActionSpec" index="spec_id" value="ActionSpec" input="gamecore/action_spec.xlsx"/>
+    <table name="TbAnimationStyle" index="style_id" value="AnimationStyle" input="*@gamecore/animation_style.json"/>
 </module>

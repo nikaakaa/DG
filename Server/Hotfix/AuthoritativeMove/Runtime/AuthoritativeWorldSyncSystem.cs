@@ -12,6 +12,11 @@ public sealed class AuthoritativeWorldSyncSystem
         World = world;
     }
 
+    public WorldDelta LastDelta { get; private set; }
+    public int LastDeltaObserverCount { get; private set; }
+    public bool LastDeltaBroadcasted { get; private set; }
+    public bool LastDeltaSkippedNoObservers { get; private set; }
+
     public void SendSnapshot(Session session)
     {
         IReadOnlyList<EntitySnapshot> snapshots = World.CreateSnapshot();
@@ -45,13 +50,18 @@ public sealed class AuthoritativeWorldSyncSystem
     public WorldDelta BroadcastDelta(IReadOnlyList<Session> observers)
     {
         WorldDelta delta = World.FlushDelta();
-        if (delta.ChangedEntities.Count == 0 && delta.RemovedEntityIds.Count == 0)
+        LastDelta = delta;
+        LastDeltaObserverCount = observers.Count;
+        LastDeltaBroadcasted = false;
+        LastDeltaSkippedNoObservers = false;
+        if (delta.ChangedEntities.Count == 0 && delta.RemovedEntityIds.Count == 0 && delta.AnimationMetadata.Count == 0)
         {
             return delta;
         }
 
         if (observers.Count == 0)
         {
+            LastDeltaSkippedNoObservers = true;
             Info(
                 "[AuthoritativeWorldSyncSystem] skip delta serverTick:{0} entities:{1} removed:{2} observers:0",
                 delta.ServerTick,
@@ -65,6 +75,7 @@ public sealed class AuthoritativeWorldSyncSystem
             observers[i].Send(CreateDeltaNotify(delta));
         }
 
+        LastDeltaBroadcasted = true;
         Info(
             "[AuthoritativeWorldSyncSystem] broadcast delta serverTick:{0} entities:{1} removed:{2} observers:{3}",
             delta.ServerTick,
@@ -102,8 +113,24 @@ public sealed class AuthoritativeWorldSyncSystem
         {
             notify.RemovedEntityIds.Add(delta.RemovedEntityIds[i]);
         }
+        for (int i = 0; i < delta.AnimationMetadata.Count; i++)
+        {
+            notify.AnimationMetadata.Add(CreateAnimationMetadata(delta.AnimationMetadata[i]));
+        }
 
         return notify;
+    }
+
+    private static G2C_WorldDeltaAnimationMetadata CreateAnimationMetadata(WorldDeltaAnimationMetadata metadata)
+    {
+        return new G2C_WorldDeltaAnimationMetadata
+        {
+            EntityId = metadata.EntityId,
+            ServerTick = metadata.ServerTick,
+            MotionKind = (int)metadata.MotionKind,
+            StyleKey = metadata.StyleKey,
+            Direction = (int)metadata.Direction
+        };
     }
 
     private static G2C_WorldEntityState CreateState(EntitySnapshot snapshot)

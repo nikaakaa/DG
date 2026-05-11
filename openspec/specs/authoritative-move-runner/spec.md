@@ -171,7 +171,7 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **AND** 服务端日志明确记录本次移动未广播
 
 ### Requirement: 服务端进入推动 tick
-服务端 SHALL 在权威 tick 中执行进入推动规则，并在推动产生状态变化后通过统一 WorldDelta 同步给在线客户端。
+服务端 SHALL 在权威 tick 中执行进入推动规则，并在推动产生状态变化或推力反馈后通过统一 WorldDelta 同步给在线客户端。当进入推动或 handoff 推动的目标是 connected body subject 时，服务端 MUST 在同一次成功移动结果中同步每个实际移动成员的最终状态和动画元数据。普通 push 链中间 subject 继续传递 push 但自身不移动时，服务端 MUST broadcast metadata-only WorldDelta so clients can play push feedback without changing authoritative coordinates.
 
 #### Scenario: 推动系统参与服务端 tick
 - **WHEN** 服务端 tick 推进
@@ -184,6 +184,20 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **THEN** 服务端 GameWorld 标记该 entity dirty
 - **AND** 在线 observer 收到包含该 entity 最终坐标的 WorldDelta
 - **AND** 客户端不通过本地传送带规则推导权威坐标
+
+#### Scenario: 连接体推动结果同步全体成员
+- **WHEN** 玩家移动、机关推动或进入推动通过 handoff 成功推动一个 connected body
+- **THEN** 服务端 `WorldDelta.ChangedEntities` MUST contain every moved member of that connected body
+- **AND** each moved member snapshot MUST contain the authoritative final coordinate for the same server tick
+- **AND** `WorldDelta.AnimationMetadata` MUST contain a movement metadata entry for every moved member
+- **AND** observer clients MUST receive the same full-member `WorldDelta`
+
+#### Scenario: 中间 subject 推力反馈同步
+- **WHEN** a connected body or single entity receives push and continues handoff to a downstream subject
+- **AND** that intermediate subject does not move during the current authoritative tick
+- **THEN** 服务端 `WorldDelta.ChangedEntities` MUST NOT include that intermediate subject solely because it transmitted push
+- **AND** `WorldDelta.AnimationMetadata` MUST contain mechanism push feedback metadata for the intermediate subject members
+- **AND** observer clients MUST receive the metadata-only delta when no entity snapshot changed
 
 ### Requirement: WorldDelta 删除广播协议
 系统 SHALL 通过 Outer 协议源和协议导出工具扩展 `G2C_WorldDeltaNotify`，使服务端能够在统一 delta 广播中表达被删除的 entity id。
@@ -284,5 +298,4 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **THEN** 服务端响应失败并返回 reason
 - **AND** 权威 GameWorld 不产生状态变化
 - **AND** 服务端不广播 WorldDelta
-
 

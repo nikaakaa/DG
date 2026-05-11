@@ -64,6 +64,6 @@
 - [x] 7.1 运行 `openspec validate add-debug-layout-tooling --strict --no-interactive`。
 - [x] 7.2 运行相关 Unity TestFramework EditMode 测试。
 - [x] 7.3 不执行 Unity Player build。
-- [ ] 7.4 用户手动 Play Mode：启动服务端和两个客户端，A 保存一组 port 连体结构为结构块，再加载复制到新位置，B 应看到服务端同步后的新结构。
-- [ ] 7.5 用户手动 Play Mode：A 框选多个实体并批量移动，B 应看到相同 entity id 的坐标变化；若任一请求失败，A 应显示失败 reason，B 不应出现客户端本地伪状态。
-- [ ] 7.6 用户手动 Play Mode：A 给实体添加 runtime port effect 后，调试可视化显示最终 port mask 和连接变化，B 看到一致结果。
+- [x] 7.4 用户手动 Play Mode：启动服务端和两个客户端，A 保存一组 port 连体结构为结构块，再加载复制到新位置，B 应看到服务端同步后的新结构。
+- [x] 7.5 用户手动 Play Mode：A 框选多个实体并批量移动，B 应看到相同 entity id 的坐标变化；若任一请求失败，A 应显示失败 reason，B 不应出现客户端本地伪状态。
+- [x] 7.6 用户手动 Play Mode：A 给实体添加 runtime port effect 后，调试可视化显示最终 port mask 和连接变化，B 看到一致结果。

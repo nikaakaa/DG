@@ -287,7 +287,7 @@ Unity 客户端 SHALL 在处理服务端 `G2C_WorldDeltaNotify` 时应用 remove
 - **AND** 若同一 entity id 被删除后又出现在 changed entities 中，最终以 changed snapshot 重建或更新后的状态为准
 
 ### Requirement: Unity 权威调试工具 UI
-Unity Demo SHALL 提供一个 Play Mode 可用的 Runtime 调试 UI，用于选择格子、建造实体、拖拽实体和删除实体。该工具 SHALL 只向服务端提交调试意图，MUST NOT 直接绕过服务端修改权威客户端镜像。该工具 MUST NOT 实现正式玩家背包、资源消耗、建造距离、冷却或拥有权规则。
+Unity Demo SHALL 提供一个 Play Mode 可用的 Runtime 调试 UI，用于选择格子、建造实体、拖拽实体、删除实体、保存调试结构块、加载调试结构块、批量选择、批量移动、复制结构和查看 port 调试可视化。该工具 SHALL 只向服务端提交调试意图，MUST NOT 直接绕过服务端修改权威客户端镜像。该工具 MUST NOT 实现正式玩家背包、资源消耗、建造距离、冷却或拥有权规则。调试结构块 SHALL 仅作为开发调试和测试复现资产，MUST NOT 替代 Luban 实体配置或正式关卡数据。
 
 #### Scenario: 快捷栏选择调试工具
 - **WHEN** 开发者打开调试编辑工具
@@ -348,6 +348,67 @@ Unity Demo SHALL 提供一个 Play Mode 可用的 Runtime 调试 UI，用于选�
 - **WHEN** 服务端拒绝调试编辑请求
 - **THEN** 工具显示最近一次失败 reason
 - **AND** 客户端本地 world 不因为失败请求发生权威状态变化
+
+#### Scenario: 保存选区为调试结构块
+- **WHEN** 开发者在调试 UI 中选择多个已同步 entity
+- **AND** 开发者保存当前选区为结构块
+- **THEN** 工具写入一个调试结构块 JSON
+- **AND** JSON 记录每个 entity 的 configId、方向、port mask 和相对坐标
+- **AND** 模板不写入 Luban 配置或正式关卡配置
+
+#### Scenario: 加载结构块并预览
+- **WHEN** 开发者选择一个已保存的调试结构块
+- **AND** 鼠标指向目标 anchor 格
+- **THEN** 调试 UI 显示结构块 ghost 预览
+- **AND** 预览使用模板实体的相对坐标还原结构
+- **AND** 预览显示结构块内部 port 连接和外部可接端口
+- **AND** 预览不写入 `ClientMapWorld`
+
+#### Scenario: 反序列化并实例化调试结构块
+- **WHEN** 开发者从 JSON 反序列化调试结构块
+- **AND** 开发者确认在目标 anchor 实例化结构块
+- **THEN** 客户端为模板中的实体提交调试建造请求
+- **AND** 每个请求携带由目标 anchor 和相对坐标计算出的绝对坐标
+- **AND** 客户端等待服务端响应或 WorldDelta 后显示最终权威实体
+
+#### Scenario: 鼠标控制进入结构块放置状态
+- **WHEN** 开发者加载一个调试结构块
+- **THEN** 调试 UI 进入结构块 ghost 放置状态
+- **AND** 鼠标移动会更新结构块 anchor 和整体预览
+- **AND** 确认放置前不会提交调试建造请求
+
+#### Scenario: 批量选择实体
+- **WHEN** 开发者使用框选或追加选择多个已同步 entity
+- **THEN** 调试 UI 维护一个选择集
+- **AND** 选择集显示 entity 数量和 anchor
+- **AND** 若选择集中的 entity 已被服务端删除，工具在下一次批量操作前将其标为失效
+
+#### Scenario: 批量移动选择集
+- **WHEN** 开发者选中多个 entity
+- **AND** 开发者把选择集平移到目标位置
+- **THEN** 客户端为仍有效的 entity 提交调试移动请求
+- **AND** 每个请求保留选择集内的相对布局
+- **AND** 客户端不在服务端响应前直接移动本地权威镜像
+
+#### Scenario: 复制选择集结构
+- **WHEN** 开发者选中多个 entity
+- **AND** 开发者复制结构到目标 anchor
+- **THEN** 客户端为选择集中的每个有效 entity 提交调试建造请求
+- **AND** 新结构保留原选择集的相对坐标和方向
+- **AND** 原结构不因复制操作被移动或删除
+
+#### Scenario: 批量操作显示部分失败
+- **WHEN** 批量移动、复制或模板实例化中的部分请求被服务端拒绝
+- **THEN** 调试 UI 显示成功数、失败数和最近失败 reason
+- **AND** 被拒绝的请求不产生客户端本地伪状态
+- **AND** 已成功的请求仍以服务端 WorldDelta 为准同步
+
+#### Scenario: port 调试可视化
+- **WHEN** 开发者打开调试 UI 并查看带 `PortConnectorComponent` 的 entity
+- **THEN** 调试显示读取服务端同步后的最终 port mask
+- **AND** 调试显示将 local port mask 按 entity direction 转换后的 world port 方向
+- **AND** 调试显示相邻实体之间的匹配 port 连接关系
+- **AND** 调试显示不通过 configId、entity name 或客户端本地 runtime effect 推断权威连接结果
 
 ### Requirement: 双客户端调试编辑端到端验收
 系统 SHALL 提供手动端到端验证路径，证明一个客户端发起的权威调试编辑会同步到另一个在线客户端。
@@ -471,4 +532,95 @@ Unity 客户端 SHALL mirror server-authoritative final Component results from s
 - **AND** client B is observing the same server world
 - **THEN** client B sees only the server-synchronized final Component result changes
 - **AND** client B does not need the effect source data to display the final state
+
+### Requirement: 客户端连接体推动整体动画表现
+Unity 客户端 SHALL treat server `WorldDelta` as the only authority for which connected body members moved. When the server delta contains multiple moved connected body members, the client animation layer MUST generate and play animation for every received moved member. The client MUST NOT infer missing moved members from local port graph or local push rules.
+
+#### Scenario: 服务端全员 delta 生成全员动画
+- **WHEN** 客户端收到一个 `G2C_WorldDeltaNotify`
+- **AND** notify contains changed entity snapshots for every moved member of a connected body
+- **AND** notify contains animation metadata for those moved members
+- **THEN** `ClientAnimationLayer` creates one animation event per moved member
+- **AND** `ClientWorldVisuals` can keep active animations for all moved members at the same time
+
+#### Scenario: 缺失成员不由客户端补齐
+- **WHEN** 客户端收到的 `G2C_WorldDeltaNotify` only contains part of a connected body
+- **THEN** the client applies only the authoritative snapshots present in the delta
+- **AND** the client does not use local port graph, local push rules, or cached connected body membership to move additional members
+- **AND** the missing-member condition is treated as a server sync correctness problem rather than a client-side rule decision
+
+#### Scenario: metadata-only 推力反馈不改变坐标
+- **WHEN** 客户端收到一个 `G2C_WorldDeltaNotify`
+- **AND** notify contains no changed entity snapshots
+- **AND** notify contains mechanism push animation metadata for one or more entities
+- **THEN** `ClientAnimationLayer` creates impulse animation events for those entities
+- **AND** `ClientWorldVisuals` plays push feedback for those entities
+- **AND** the client does not change any entity coordinate because of that metadata-only delta
+
+#### Scenario: 连续 delta 后全员落到最新服务端状态
+- **WHEN** the client receives consecutive server deltas for multiple connected body members
+- **THEN** each moved member eventually reaches its latest authoritative coordinate
+- **AND** later deltas replace older active animations per entity without losing other members' animations
+
+### Requirement: 调试结构块持久化
+系统 SHALL 提供可验证的调试结构块持久化格式，用于保存、加载和反序列化开发调试结构。结构块 MUST 保留实体相对布局、方向和 port mask，并 MUST 通过当前实体配置 provider 校验 configId。第一版结构块 MUST NOT 保存 runtime effect 实例、剩余过期 tick 或临时调试 tag 状态。结构块 SHALL 属于调试和测试复现资产，MUST NOT 成为正式运行时配置源。
+
+#### Scenario: 保存后加载保持结构块
+- **WHEN** 一个包含多个实体的调试结构块被保存为 JSON
+- **AND** 使用同一配置 provider 加载该结构块
+- **THEN** 加载结果保留结构块名称、schema version、实体数量、configId、方向、port mask 和相对坐标
+
+#### Scenario: 未知 configId 被拒绝
+- **WHEN** 调试结构块包含当前配置 provider 不认识的 configId
+- **THEN** 结构块加载失败
+- **AND** 失败 reason 指出未知 configId
+- **AND** 工具不提交任何调试建造请求
+
+#### Scenario: 相对坐标由 anchor 计算
+- **WHEN** 开发者从选择集导出调试结构块
+- **THEN** 模板以选择集 anchor 为原点保存每个实体的相对坐标
+- **AND** 模板加载到新 anchor 时按相同相对坐标恢复结构
+
+#### Scenario: 反序列化失败不污染工具状态
+- **WHEN** 开发者加载一个格式错误或 schema 不兼容的结构块 JSON
+- **THEN** 反序列化失败并返回可读 reason
+- **AND** 当前选择集、当前工具模式和 `ClientMapWorld` 保持不变
+
+#### Scenario: 默认保存路径和扩展名
+- **WHEN** 开发者保存调试结构块
+- **THEN** 工具默认保存到 `Assets/DebugLayouts`
+- **AND** 文件扩展名使用 `.dgdebuglayout.json`
+- **AND** 文件不会写入 `StreamingAssets/GameConfig`
+
+#### Scenario: runtime effect 不随结构块保存
+- **WHEN** 选择集中的 entity 带有 runtime effect 或临时调试 tag 状态
+- **AND** 开发者导出调试结构块
+- **THEN** 结构块只保存实体基础状态、相对坐标、方向和 port mask
+- **AND** runtime effect 实例、剩余过期 tick 和临时 tag 调试状态不会进入结构块
+
+### Requirement: 调试结构块和 port 可视化验证
+系统 SHALL 为调试结构块、选择集导出、结构块实例化、批量移动、复制结构和 port 调试可视化提供 Unity TestFramework EditMode 覆盖，并 SHALL 提供手动端到端验证路径证明服务端权威同步仍然成立。
+
+#### Scenario: EditMode 覆盖结构块序列化
+- **WHEN** 运行相关 Unity TestFramework EditMode 测试
+- **THEN** 测试覆盖保存后加载、反序列化失败、未知 configId 拒绝、anchor 相对坐标和结构块实例化坐标计算
+
+#### Scenario: EditMode 覆盖批量操作边界
+- **WHEN** 运行相关 Unity TestFramework EditMode 测试
+- **THEN** 测试证明批量移动和复制只生成调试请求
+- **AND** 测试证明它们不直接修改 `ClientMapWorld`
+- **AND** 测试覆盖失效 entity 被跳过并记录 reason
+
+#### Scenario: EditMode 覆盖 port 可视化来源
+- **WHEN** 运行相关 Unity TestFramework EditMode 测试
+- **THEN** 测试证明 port 可视化读取最终 port mask
+- **AND** 测试证明 runtime port effect 改变最终端口时，可视化数据随服务端同步结果变化
+- **AND** 测试证明可视化不只按 configId 推断静态端口
+
+#### Scenario: 手动端到端验证
+- **WHEN** 服务端运行且客户端 A、B 均已 Join
+- **AND** A 通过调试结构块实例化或复制一组 port 连体结构
+- **THEN** B 通过服务端 WorldDelta 看到对应结构
+- **AND** A 框选多个 entity 后批量移动时，B 看到相同 entity id 的最终坐标变化
+- **AND** A 给实体添加 runtime port effect 后，A 与 B 的 port 调试可视化显示一致的最终 port mask 和连接变化
 

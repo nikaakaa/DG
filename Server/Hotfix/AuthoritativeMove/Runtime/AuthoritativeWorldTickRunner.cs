@@ -82,6 +82,7 @@ public sealed class AuthoritativeWorldTickRunner
         LogRuleTickInput(serverTick, inputs, actions, beforeSnapshot);
         StateDrivenRuleExecutionResult ruleResult = RuleExecutionSystem.Tick(World, actions, serverTick);
         LogRuleTickResult(serverTick, actions, ruleResult, beforeSnapshot, CreateEntitySnapshot());
+        RecordAnimationMetadata(serverTick, actions, ruleResult);
         EnqueueDeferredActions(ruleResult.DeferredActions);
         foreach (KeyValuePair<long, AuthoritativeMoveInput> pair in pendingMoveInputs.ToArray())
         {
@@ -141,6 +142,179 @@ public sealed class AuthoritativeWorldTickRunner
                 " samples:[" + string.Join(",", group.First().Action.DeferredCausalitySamples) + "]"));
 
         TryLogInfo("[AuthoritativeWorldTickRunner] enqueue deferred summary raw:{0} enqueued:{1} merged:{2} samples:{3}", deferredActions.Count, enqueuedCount, mergedCount, sampleText.Length == 0 ? "none" : sampleText);
+    }
+
+    private void RecordAnimationMetadata(long serverTick, IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result)
+    {
+        var actionById = actions.ToDictionary(action => action.ActionId);
+        var recorded = new HashSet<string>();
+        RecordDeferredOutputAnimationMetadata(serverTick, actions, result, recorded);
+        if (result.ProposalResults.Count == 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < result.ProposalResults.Count; i++)
+        {
+            CommitProposalResult proposalResult = result.ProposalResults[i];
+            if (!proposalResult.Accepted)
+            {
+                continue;
+            }
+
+            WorldDeltaMotionKind kind = ResolveMotionKind(proposalResult.Proposal, actionById);
+            if (kind == WorldDeltaMotionKind.Unknown)
+            {
+                continue;
+            }
+
+            string key = proposalResult.Proposal.EntityId + "|" + kind;
+            if (!recorded.Add(key))
+            {
+                continue;
+            }
+
+            World.AddAnimationMetadata(new WorldDeltaAnimationMetadata(
+                proposalResult.Proposal.EntityId,
+                serverTick,
+                kind,
+                MotionKindStyleKey(kind),
+                ResolveAnimationDirection(proposalResult.Proposal, actionById)));
+        }
+    }
+
+    private void RecordDeferredOutputAnimationMetadata(long serverTick, IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result, HashSet<string> recorded)
+    {
+        for (int i = 0; i < actions.Count; i++)
+        {
+            WorldAction action = actions[i];
+            if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
+                !moveResult.Success ||
+                moveResult.Reason != "bounded/deferred-output")
+            {
+                continue;
+            }
+
+            Direction direction = action.Direction != Direction.None ? action.Direction : moveResult.FinalDirection;
+            IReadOnlyList<long> subjectIds = action.SubjectEntityIds.Count == 0 ? new[] { action.EntityId } : action.SubjectEntityIds;
+            for (int subjectIndex = 0; subjectIndex < subjectIds.Count; subjectIndex++)
+            {
+                long entityId = subjectIds[subjectIndex];
+                string key = entityId + "|" + WorldDeltaMotionKind.MechanismPush;
+                if (!recorded.Add(key))
+                {
+                    continue;
+                }
+
+                World.AddAnimationMetadata(new WorldDeltaAnimationMetadata(
+                    entityId,
+                    serverTick,
+                    WorldDeltaMotionKind.MechanismPush,
+                    MotionKindStyleKey(WorldDeltaMotionKind.MechanismPush),
+                    direction));
+            }
+        }
+    }
+
+    private static WorldDeltaMotionKind ResolveMotionKind(CommitProposal proposal, IReadOnlyDictionary<long, WorldAction> actionById)
+    {
+        if (proposal.Kind == CommitProposalKind.CreateEntity)
+        {
+            return WorldDeltaMotionKind.Spawn;
+        }
+
+        if (proposal.Kind == CommitProposalKind.DeleteEntity)
+        {
+            return WorldDeltaMotionKind.Remove;
+        }
+
+        if (proposal.Kind != CommitProposalKind.MoveEntity)
+        {
+            return WorldDeltaMotionKind.Unknown;
+        }
+
+        if (!actionById.TryGetValue(proposal.SourceActionId, out WorldAction action))
+        {
+            return proposal.SourceStateId != 0 ? WorldDeltaMotionKind.MechanismPush : WorldDeltaMotionKind.Unknown;
+        }
+
+        if (!string.IsNullOrEmpty(action.DeferredEquivalenceKey))
+        {
+            return WorldDeltaMotionKind.MechanismPush;
+        }
+
+        string specId = action.SpecId.Value;
+        if (specId == "player_move")
+        {
+            return WorldDeltaMotionKind.PlayerMove;
+        }
+
+        if (specId == "mechanism_push")
+        {
+            return WorldDeltaMotionKind.MechanismPush;
+        }
+
+        if (specId == "auto_move")
+        {
+            return WorldDeltaMotionKind.AutoMove;
+        }
+
+        if (specId == "debug_move")
+        {
+            return WorldDeltaMotionKind.DebugDrag;
+        }
+
+        return WorldDeltaMotionKind.Unknown;
+    }
+
+    private static Direction ResolveAnimationDirection(CommitProposal proposal, IReadOnlyDictionary<long, WorldAction> actionById)
+    {
+        if (actionById.TryGetValue(proposal.SourceActionId, out WorldAction action) &&
+            action.Direction != Direction.None)
+        {
+            return action.Direction;
+        }
+
+        if (proposal.Kind == CommitProposalKind.MoveEntity)
+        {
+            int dx = proposal.To.X - proposal.From.X;
+            int dy = proposal.To.Y - proposal.From.Y;
+            if (dx < 0)
+            {
+                return Direction.Left;
+            }
+
+            if (dx > 0)
+            {
+                return Direction.Right;
+            }
+
+            if (dy < 0)
+            {
+                return Direction.Down;
+            }
+
+            if (dy > 0)
+            {
+                return Direction.Up;
+            }
+        }
+
+        return Direction.None;
+    }
+
+    private static string MotionKindStyleKey(WorldDeltaMotionKind kind)
+    {
+        return kind switch
+        {
+            WorldDeltaMotionKind.PlayerMove => "player_move",
+            WorldDeltaMotionKind.MechanismPush => "mechanism_push",
+            WorldDeltaMotionKind.AutoMove => "auto_move",
+            WorldDeltaMotionKind.DebugDrag => "debug_drag",
+            WorldDeltaMotionKind.Spawn => "spawn",
+            WorldDeltaMotionKind.Remove => "remove",
+            _ => "unknown"
+        };
     }
 
     private void LogRuleTickInput(long serverTick, IReadOnlyList<AuthoritativeMoveInput> inputs, IReadOnlyList<WorldAction> actions, IReadOnlyDictionary<long, string> beforeSnapshot)

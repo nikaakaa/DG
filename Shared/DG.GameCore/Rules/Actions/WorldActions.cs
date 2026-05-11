@@ -45,6 +45,7 @@ public sealed class WorldAction
     public string DedupeKey { get; private set; } = string.Empty;
     public string DeferredEquivalenceKey { get; private set; } = string.Empty;
     public int DeferredContributionCount { get; private set; } = 1;
+    public IReadOnlyList<long> SubjectEntityIds { get; private set; } = Array.Empty<long>();
     public IReadOnlyList<long> DeferredCausalitySamples => deferredCausalitySamples;
     private readonly List<long> deferredCausalitySamples = new();
 
@@ -72,6 +73,12 @@ public sealed class WorldAction
         DeferredContributionCount = 1;
         deferredCausalitySamples.Clear();
         deferredCausalitySamples.Add(causalityId);
+        return this;
+    }
+
+    public WorldAction WithSubjectEntityIds(IReadOnlyList<long> subjectEntityIds)
+    {
+        SubjectEntityIds = subjectEntityIds == null || subjectEntityIds.Count == 0 ? Array.Empty<long>() : subjectEntityIds.ToArray();
         return this;
     }
 
@@ -196,7 +203,8 @@ public sealed class WorldActionQueue
         }
 
         var action = new WorldAction(nextActionId++, spec.DefaultPriority, deferred.SpecId, deferred.EntityId, null, deferred.Direction, 0, deferred.CreatedTick, readyTick, resolvedCost)
-            .WithDeferredSource(deferred.CausalityId, deferred.DedupeKey, equivalenceKey);
+            .WithDeferredSource(deferred.CausalityId, deferred.DedupeKey, equivalenceKey)
+            .WithSubjectEntityIds(deferred.SubjectEntityIds);
         actions.Add(action);
         return new DeferredEnqueueResult(action, true, equivalenceKey, action.DeferredContributionCount);
     }

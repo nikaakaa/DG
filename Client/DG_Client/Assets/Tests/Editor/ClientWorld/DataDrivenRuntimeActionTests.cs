@@ -1288,9 +1288,11 @@ namespace DG.EditorTests
                 new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 781, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1)
             }, world.ServerTick);
 
-            Assert.AreEqual(1, result.ActionResults.Count);
+            Assert.AreEqual(2, result.ActionResults.Count);
             Assert.IsFalse(result.ActionResults[1].Success);
             Assert.AreEqual("blocked cell", result.ActionResults[1].Reason);
+            Assert.IsFalse(result.ActionResults[2].Success);
+            Assert.AreEqual("blocked cell", result.ActionResults[2].Reason);
             AssertPosition(world, 781, new GridCoord(0, 0));
             AssertPosition(world, 782, new GridCoord(0, 1));
         }
