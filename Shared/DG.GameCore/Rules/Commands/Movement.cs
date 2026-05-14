@@ -21,7 +21,8 @@ public enum MoveErrorCode
     Occupied = 5,
     InvalidDirection = 6,
     NotJoined = 7,
-    UnauthorizedEntity = 8
+    UnauthorizedEntity = 8,
+    Immune = 9
 }
 
 public readonly struct MoveCommand

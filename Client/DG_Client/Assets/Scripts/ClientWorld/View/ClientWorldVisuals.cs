@@ -21,8 +21,16 @@ namespace DG.Map
         private readonly Dictionary<long, ActiveEntityAnimation> activeAnimations = new();
         private readonly Dictionary<long, ClientAnimationEvent> latestDrainedEvents = new();
         private readonly Dictionary<string, LineRenderer> portConnectionLines = new();
+        private readonly HashSet<long> seenEntityIds = new();
+        private readonly List<long> removedEntityIds = new();
+        private readonly HashSet<string> seenPortConnectionKeys = new();
+        private readonly List<string> removedPortConnectionKeys = new();
         private Transform entityRoot;
         private Transform portConnectionRoot;
+        private Texture2D squareTexture;
+        private Sprite squareSprite;
+        private Material gridMaterial;
+        private Material portLineMaterial;
         public string LastAnimationSummary => runner != null && runner.Context != null ? runner.Context.AnimationLayer.RecentSummary : string.Empty;
 
         private void Awake()
@@ -36,7 +44,42 @@ namespace DG.Map
             entityRoot.SetParent(transform, false);
             portConnectionRoot = new GameObject("PortConnections").transform;
             portConnectionRoot.SetParent(transform, false);
+            squareSprite = CreateSquareSprite(out squareTexture);
+            gridMaterial = CreateMaterial(gridColor);
+            portLineMaterial = CreateMaterial(portLineColor);
             DrawGrid();
+        }
+
+        private void OnDestroy()
+        {
+            foreach (KeyValuePair<long, Transform> pair in EntityViews)
+            {
+                if (pair.Value != null)
+                {
+                    DestroyImmediateOrDeferred(pair.Value.gameObject);
+                }
+            }
+
+            foreach (KeyValuePair<string, LineRenderer> pair in portConnectionLines)
+            {
+                if (pair.Value != null)
+                {
+                    DestroyImmediateOrDeferred(pair.Value.gameObject);
+                }
+            }
+
+            EntityViews.Clear();
+            activeAnimations.Clear();
+            latestDrainedEvents.Clear();
+            portConnectionLines.Clear();
+            DestroyAsset(squareSprite);
+            DestroyAsset(squareTexture);
+            DestroyAsset(gridMaterial);
+            DestroyAsset(portLineMaterial);
+            squareSprite = null;
+            squareTexture = null;
+            gridMaterial = null;
+            portLineMaterial = null;
         }
 
         private void LateUpdate()
@@ -47,18 +90,19 @@ namespace DG.Map
             }
 
             IReadOnlyList<EntitySnapshot> snapshots = runner.Context.ClientMapWorld.CreateSnapshot();
+            float animationDeltaTime = Application.isPlaying ? Time.deltaTime : 0f;
             runner.Context.AnimationLayer.Enabled = animationLayerEnabled;
             DrainAnimationEvents();
-            var seen = new HashSet<long>();
+            seenEntityIds.Clear();
             for (int i = 0; i < snapshots.Count; i++)
             {
                 EntitySnapshot snapshot = snapshots[i];
-                seen.Add(snapshot.EntityId);
+                seenEntityIds.Add(snapshot.EntityId);
                 Transform view = GetOrCreateEntityView(snapshot.EntityId);
-                ConfigureEntityView(view, snapshot, Time.deltaTime);
+                ConfigureEntityView(view, snapshot, animationDeltaTime);
             }
 
-            RemoveMissingViews(seen);
+            RemoveMissingViews(seenEntityIds);
             ConfigurePortConnections(snapshots);
         }
 
@@ -72,7 +116,7 @@ namespace DG.Map
             GameObject view = new GameObject($"Entity_{entityId}");
             view.transform.SetParent(entityRoot, false);
             SpriteRenderer spriteRenderer = view.AddComponent<SpriteRenderer>();
-            spriteRenderer.sprite = CreateSquareSprite();
+            spriteRenderer.sprite = squareSprite;
             spriteRenderer.color = playerColor;
             spriteRenderer.sortingOrder = 10;
             view.AddComponent<LineRenderer>();
@@ -136,7 +180,7 @@ namespace DG.Map
             lineRenderer.loop = false;
             lineRenderer.widthMultiplier = 0.12f;
             lineRenderer.positionCount = 2;
-            lineRenderer.material = CreateMaterial(portLineColor);
+            lineRenderer.sharedMaterial = portLineMaterial;
             lineRenderer.startColor = portLineColor;
             lineRenderer.endColor = portLineColor;
             lineRenderer.sortingOrder = 12;
@@ -183,21 +227,21 @@ namespace DG.Map
 
         private void RemoveMissingViews(HashSet<long> seen)
         {
-            var removed = new List<long>();
+            removedEntityIds.Clear();
             foreach (KeyValuePair<long, Transform> pair in EntityViews)
             {
                 if (!seen.Contains(pair.Key))
                 {
-                    removed.Add(pair.Key);
+                    removedEntityIds.Add(pair.Key);
                 }
             }
 
-            for (int i = 0; i < removed.Count; i++)
+            for (int i = 0; i < removedEntityIds.Count; i++)
             {
-                long entityId = removed[i];
+                long entityId = removedEntityIds[i];
                 if (EntityViews.TryGetValue(entityId, out Transform view) && view != null)
                 {
-                    Destroy(view.gameObject);
+                    DestroyImmediateOrDeferred(view.gameObject);
                 }
 
                 EntityViews.Remove(entityId);
@@ -228,7 +272,7 @@ namespace DG.Map
                 {
                     if (EntityViews.TryGetValue(animationEvent.EntityId, out Transform removedView) && removedView != null)
                     {
-                        Destroy(removedView.gameObject);
+                        DestroyImmediateOrDeferred(removedView.gameObject);
                     }
 
                     EntityViews.Remove(animationEvent.EntityId);
@@ -248,17 +292,17 @@ namespace DG.Map
         private void ConfigurePortConnections(IReadOnlyList<EntitySnapshot> snapshots)
         {
             IReadOnlyList<PortDebugConnection> connections = PortDebugVisualizationUtility.FindConnections(snapshots);
-            var seen = new HashSet<string>();
+            seenPortConnectionKeys.Clear();
             foreach (PortDebugConnection connection in connections)
             {
-                seen.Add(connection.Key);
+                seenPortConnectionKeys.Add(connection.Key);
                 LineRenderer line = GetOrCreatePortConnectionLine(connection.Key);
                 line.enabled = true;
                 line.useWorldSpace = false;
                 line.loop = false;
                 line.widthMultiplier = 0.06f;
                 line.positionCount = 2;
-                line.material = CreateMaterial(portLineColor);
+                line.sharedMaterial = portLineMaterial;
                 line.startColor = portLineColor;
                 line.endColor = portLineColor;
                 line.sortingOrder = 13;
@@ -266,12 +310,24 @@ namespace DG.Map
                 line.SetPosition(1, ToWorldPosition(connection.ToCoord, -0.04f));
             }
 
+            removedPortConnectionKeys.Clear();
             foreach (KeyValuePair<string, LineRenderer> pair in portConnectionLines)
             {
-                if (!seen.Contains(pair.Key) && pair.Value != null)
+                if (!seenPortConnectionKeys.Contains(pair.Key))
                 {
-                    pair.Value.enabled = false;
+                    removedPortConnectionKeys.Add(pair.Key);
                 }
+            }
+
+            for (int i = 0; i < removedPortConnectionKeys.Count; i++)
+            {
+                string key = removedPortConnectionKeys[i];
+                if (portConnectionLines.TryGetValue(key, out LineRenderer line) && line != null)
+                {
+                    DestroyImmediateOrDeferred(line.gameObject);
+                }
+
+                portConnectionLines.Remove(key);
             }
         }
 
@@ -285,6 +341,7 @@ namespace DG.Map
             GameObject lineObject = new GameObject("PortConnection_" + key);
             lineObject.transform.SetParent(portConnectionRoot, false);
             LineRenderer line = lineObject.AddComponent<LineRenderer>();
+            line.sharedMaterial = portLineMaterial;
             portConnectionLines[key] = line;
             return line;
         }
@@ -316,7 +373,7 @@ namespace DG.Map
             lineRenderer.loop = false;
             lineRenderer.widthMultiplier = 0.025f;
             lineRenderer.positionCount = 2;
-            lineRenderer.material = CreateMaterial(gridColor);
+            lineRenderer.sharedMaterial = gridMaterial;
             lineRenderer.startColor = gridColor;
             lineRenderer.endColor = gridColor;
             lineRenderer.sortingOrder = 1;
@@ -329,9 +386,9 @@ namespace DG.Map
             return new Vector3((coord.x + 0.5f) * cellSize, (coord.y + 0.5f) * cellSize, z);
         }
 
-        private static Sprite CreateSquareSprite()
+        private static Sprite CreateSquareSprite(out Texture2D texture)
         {
-            Texture2D texture = new Texture2D(1, 1);
+            texture = new Texture2D(1, 1);
             texture.SetPixel(0, 0, Color.white);
             texture.Apply();
             return Sprite.Create(texture, new Rect(0, 0, 1, 1), new Vector2(0.5f, 0.5f), 1f);
@@ -342,6 +399,38 @@ namespace DG.Map
             Material material = new Material(Shader.Find("Sprites/Default"));
             material.color = color;
             return material;
+        }
+
+        private static void DestroyImmediateOrDeferred(Object target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(target);
+                return;
+            }
+
+            DestroyImmediate(target);
+        }
+
+        private static void DestroyAsset(Object target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(target);
+                return;
+            }
+
+            DestroyImmediate(target);
         }
 
         private sealed class ActiveEntityAnimation

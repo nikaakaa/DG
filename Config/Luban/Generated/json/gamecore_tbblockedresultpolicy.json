@@ -1,0 +1,14 @@
+[
+  {
+    "policy_id": "push_or_block"
+  },
+  {
+    "policy_id": "bounce_or_block"
+  },
+  {
+    "policy_id": "immune_push_or_block"
+  },
+  {
+    "policy_id": "reject_only"
+  }
+]

@@ -90,7 +90,7 @@ public sealed class SpatialEntityIndex
         TargetIndex index = GetTargetIndex(target);
         if (index.CellEntities.TryGetValue(MapCoordinate.ToCellKey(coord), out List<long> entities))
         {
-            return entities.ToArray();
+            return entities;
         }
 
         return EmptyEntities;
@@ -106,7 +106,7 @@ public sealed class SpatialEntityIndex
         TargetIndex index = GetTargetIndex(target);
         if (index.ChunkEntities.TryGetValue(MapCoordinate.ToChunkKey(chunkCoord), out List<long> found))
         {
-            entities = found.ToArray();
+            entities = found;
             return true;
         }
 

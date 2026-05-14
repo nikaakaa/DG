@@ -69,6 +69,14 @@ public sealed class BodyCapabilityResolver
     public IReadOnlyList<ExternalPushContact> FindExternalPushContacts(GameWorld world, IReadOnlyList<ActionClaim> claims, BehaviorBody body)
     {
         var bodyIds = new HashSet<long>(body.Entities.Select(entity => entity.EntityId));
+        for (int i = 0; i < claims.Count; i++)
+        {
+            if (claims[i].Kind == ActionClaimKind.BodyMove)
+            {
+                bodyIds.Add(claims[i].EntityId);
+            }
+        }
+
         var contacts = new List<ExternalPushContact>();
         for (int i = 0; i < claims.Count; i++)
         {
@@ -78,17 +86,12 @@ public sealed class BodyCapabilityResolver
                 continue;
             }
 
-            IReadOnlyList<GameEntity> targets = world.GetEntitiesAt(claim.ToCoord);
-            for (int targetIndex = 0; targetIndex < targets.Count; targetIndex++)
+            if (!world.TryGetFirstBlockingAt(claim.ToCoord, bodyIds, out BlockingSpatialQueryResult target))
             {
-                GameEntity target = targets[targetIndex];
-                if (bodyIds.Contains(target.EntityId) || !world.HasComponent<BlockingComponent>(target))
-                {
-                    continue;
-                }
-
-                contacts.Add(new ExternalPushContact(target.EntityId, claim.EntityId, claim.FromCoord, claim.ToCoord, claim.ActionId));
+                continue;
             }
+
+            contacts.Add(new ExternalPushContact(target.EntityId, claim.EntityId, claim.FromCoord, claim.ToCoord, claim.ActionId));
         }
 
         return contacts

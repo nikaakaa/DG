@@ -16,6 +16,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyGameCoreStorageAndRuntimeIds(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyUnityStreamingConfigLayout(out reason))
         {
             return false;
@@ -93,6 +98,182 @@ public static class AuthoritativeMoveWorldVerification
 
         if (!VerifyObserverRegistry(out reason))
         {
+            return false;
+        }
+
+        if (!VerifyGeneratedRegisteredStrategyRuntimePath(out reason))
+        {
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyGameCoreStorageAndRuntimeIds(out string reason)
+    {
+        var specId = new ActionSpecId(7101, "server_primary_push");
+        var specAlias = new ActionSpecId(7101, "server_alias_push");
+        var policyId = new BlockedResultPolicyId(7201, "server_reject_policy");
+        var policyAlias = new BlockedResultPolicyId(7201, "server_reject_policy_alias");
+        var registry = new ActionSpecRegistry(new[]
+        {
+            new ActionSpec(specId, ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, policyId, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None)
+        }, new[]
+        {
+            BlockedResultPolicyFactory.RejectPolicy(policyId)
+        }, new Dictionary<string, ActionSpecId>
+        {
+            ["server_alias_push"] = specAlias
+        }, new Dictionary<string, BlockedResultPolicyId>
+        {
+            ["server_reject_policy_alias"] = policyAlias
+        });
+
+        if (!specId.Equals(specAlias) ||
+            !policyId.Equals(policyAlias) ||
+            !registry.Get("server_alias_push").SpecId.Equals(specId) ||
+            !registry.GetBlockedResultPolicy("server_reject_policy_alias").PolicyId.Equals(policyId))
+        {
+            reason = "runtime id alias resolution failed";
+            return false;
+        }
+
+        string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(ServerGameConfigPath.FindGameCoreConfigDirectory(), "..", "..", "..", ".."));
+        string storageSource = System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "WorldDataStorage.cs");
+        string journalSource = System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "WorldStorageQuery.cs");
+        string storageText = System.IO.File.Exists(storageSource) ? System.IO.File.ReadAllText(storageSource) : string.Empty;
+        string journalText = System.IO.File.Exists(journalSource) ? System.IO.File.ReadAllText(journalSource) : string.Empty;
+        if (string.IsNullOrEmpty(storageText) ||
+            storageText.Contains("Dictionary<") ||
+            storageText.Contains("HashSet<") ||
+            storageText.Contains("SortedDictionary<") ||
+            !storageText.Contains("ComponentPool<TComponent>") ||
+            !storageText.Contains("EntityRegistry") ||
+            !storageText.Contains("QueryCache") ||
+            string.IsNullOrEmpty(journalText) ||
+            !journalText.Contains("DirtyWorldJournal"))
+        {
+            reason = "ecs storage source scan failed";
+            return false;
+        }
+
+        var world = new GameWorld();
+        world.AddEntity(DefaultWorldConfig.PlayerSpawn(991001, 991001, new GridCoord(0, 0)));
+        world.AddEntity(DefaultWorldConfig.ConveyorSpawn(991002, new GridCoord(0, 0), Direction.Right));
+        world.AddEntity(DefaultWorldConfig.BallSpawn(991003, new GridCoord(2, 0), Direction.Left, 2));
+        world.ResetObservations();
+
+        IReadOnlyList<GameEntity> pushOnEnter = world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, PushOnEnterComponent>(), EntityIterationOrder.EntityId);
+        IReadOnlyList<GameEntity> autoMove = world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, AutoMoveComponent>(), EntityIterationOrder.EntityId);
+        world.ResetObservations();
+        IReadOnlyList<PushOnEnterQueryResult> narrowPushOnEnter = world.QueryPushOnEnter(EntityIterationOrder.EntityId);
+        IReadOnlyList<AutoMoveQueryResult> narrowAutoMove = world.QueryAutoMove(EntityIterationOrder.EntityId);
+        if (pushOnEnter.Count != 1 ||
+            pushOnEnter[0].EntityId != 991002 ||
+            autoMove.Count != 1 ||
+            autoMove[0].EntityId != 991003 ||
+            narrowPushOnEnter.Count != 1 ||
+            narrowPushOnEnter[0].EntityId != 991002 ||
+            narrowPushOnEnter[0].Position != new GridCoord(0, 0) ||
+            narrowPushOnEnter[0].Direction != Direction.Right ||
+            !narrowPushOnEnter[0].PushOnEnter.OutputSpecId.IsValid ||
+            narrowAutoMove.Count != 1 ||
+            narrowAutoMove[0].EntityId != 991003 ||
+            narrowAutoMove[0].Position != new GridCoord(2, 0) ||
+            narrowAutoMove[0].Direction != Direction.Left ||
+            narrowAutoMove[0].AutoMove.IntervalTicks != 2 ||
+            world.Observations.TryGetComponentCount != 0)
+        {
+            reason = "component query boundary returned unexpected entities or narrow query leaked component lookups";
+            return false;
+        }
+
+        if (!world.TryGetEntityLocation(991002, out EntityLocation location) ||
+            !location.HasSpatialLocation ||
+            location.Coord != new GridCoord(0, 0))
+        {
+            reason = "entity location boundary failed";
+            return false;
+        }
+
+        world.RemoveComponent<PushOnEnterComponent>(pushOnEnter[0]);
+        if (world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, PushOnEnterComponent>(), EntityIterationOrder.EntityId).Count != 0)
+        {
+            reason = "ecs query cache kept removed push-on-enter component";
+            return false;
+        }
+
+        world.SetComponent(pushOnEnter[0], new PushOnEnterComponent(new ActionSpecId("mechanism_push")));
+        if (world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, PushOnEnterComponent>(), EntityIterationOrder.EntityId).Count != 1)
+        {
+            reason = "ecs query cache did not include restored push-on-enter component";
+            return false;
+        }
+
+        if (!world.RemoveEntity(991001) ||
+            world.TryGetEntity(991001, out _) ||
+            world.QueryEntities(ComponentQueryDescriptor.With<PlayerControlComponent>(), EntityIterationOrder.EntityId).Count != 0)
+        {
+            reason = "ecs entity removal did not clear entity and component query state";
+            return false;
+        }
+
+        if (!world.AddEntity(DefaultWorldConfig.PlayerSpawn(991004, 991004, new GridCoord(4, 0))) ||
+            !world.TryGetEntity(991004, out GameEntity reusedPlayer) ||
+            world.TryGetEntity(991001, out _) ||
+            !world.HasComponent<PlayerControlComponent>(reusedPlayer) ||
+            !world.TryGetComponent(reusedPlayer, out PositionComponent reusedPosition) ||
+            reusedPosition.Coord != new GridCoord(4, 0))
+        {
+            reason = "ecs entity slot reuse or sparse component lookup failed";
+            return false;
+        }
+
+        world.RemoveComponent<DirectionComponent>(autoMove[0]);
+        if (world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, AutoMoveComponent>(), EntityIterationOrder.EntityId).Count != 0)
+        {
+            reason = "ecs component pool removal did not update auto move query";
+            return false;
+        }
+
+        world.SetComponent(reusedPlayer, new PushableComponent());
+        if (!world.TryGetFirstBlockingAt(new GridCoord(4, 0), null!, out BlockingSpatialQueryResult blocking) ||
+            blocking.EntityId != 991004 ||
+            world.GetColliderEntitiesAt(new GridCoord(4, 0), DefaultWorldConfig.PlayerTarget).Count != 1 ||
+            world.GetPushableEntitiesAt(new GridCoord(4, 0), DefaultWorldConfig.PlayerTarget).Count != 1)
+        {
+            reason = "narrow spatial query boundary failed";
+            return false;
+        }
+
+        world.FlushDelta();
+        world.ResetObservations();
+        world.SetComponent(reusedPlayer, new DirectionComponent(Direction.Up));
+        world.AddAnimationMetadata(new WorldDeltaAnimationMetadata(reusedPlayer.EntityId, world.ServerTick, WorldDeltaMotionKind.PlayerMove, "player_move", Direction.Up));
+        world.RecordTouchedDiagnostics(new[] { reusedPlayer.EntityId });
+        WorldDelta dirtyDelta = world.FlushDelta();
+        if (dirtyDelta.ChangedEntities.Count != 1 ||
+            dirtyDelta.ChangedEntities[0].EntityId != reusedPlayer.EntityId ||
+            dirtyDelta.AnimationMetadata.Count != 1 ||
+            world.Observations.TouchedDiagnosticCount != 1)
+        {
+            reason = "dirty responsibility boundary failed";
+            return false;
+        }
+
+        WorldDelta delta = world.FlushDelta();
+        IReadOnlyList<EntitySnapshot> snapshot = world.CreateSnapshot();
+        GameWorldObservation observation = world.Observations;
+        if (delta.ChangedEntities.Count != 0 ||
+            snapshot.Count != 3 ||
+            observation.DeltaFlushCount < 2 ||
+            observation.SnapshotBuildCount < 1)
+        {
+            reason = "storage observation or snapshot/delta semantics failed changed:" + delta.ChangedEntities.Count +
+                " snapshot:" + snapshot.Count +
+                " deltaFlush:" + observation.DeltaFlushCount +
+                " snapshotBuild:" + observation.SnapshotBuildCount;
             return false;
         }
 
@@ -762,21 +943,18 @@ public static class AuthoritativeMoveWorldVerification
         pushBlockedWorld.FlushDelta();
         pushBlockedWorld.NextTick();
         var pushBlockedQueue = new WorldActionQueue();
-        var pushBlockedStore = new PendingRuleStateStore();
         var pushBlockedSystem = new StateDrivenRuleExecutionSystem();
         WorldAction pushBlockedAction = pushBlockedQueue.EnqueuePlayerMove(950, new GridCoord(1, 0), 15);
-        StateDrivenRuleExecutionResult pushBlockedFirst = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedStore, pushBlockedWorld.ServerTick);
+        StateDrivenRuleExecutionResult pushBlockedFirst = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
         for (int i = 0; i < pushBlockedFirst.DeferredActions.Count; i++)
         {
             pushBlockedQueue.EnqueueDeferred(pushBlockedFirst.DeferredActions[i]);
         }
         pushBlockedWorld.NextTick();
-        StateDrivenRuleExecutionResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedStore, pushBlockedWorld.ServerTick);
+        StateDrivenRuleExecutionResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
         if (!pushBlockedFirst.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlockedSource) ||
             !pushBlockedSource.Success ||
             !pushBlockedFirst.Reasons.Contains("bounded/deferred-output") ||
-            pushBlockedFirst.ActivePendingCount != 0 ||
-            pushBlockedSecond.ActivePendingCount != 0 ||
             !pushBlockedSecond.Reasons.Contains("blocked cell") ||
             pushBlockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
             !pushBlockedWorld.TryGetEntity(950, out GameEntity pushBlockedPlayer) ||
@@ -924,6 +1102,7 @@ public static class AuthoritativeMoveWorldVerification
 
         WorldDelta first = autoRunner.Tick();
         WorldDelta second = autoRunner.Tick();
+        GameWorldObservation autoObservation = autoWorld.Observations;
         if (first.ChangedEntities.Count != 1 ||
             second.ChangedEntities.Count != 1 ||
             first.ServerTick >= second.ServerTick ||
@@ -931,7 +1110,9 @@ public static class AuthoritativeMoveWorldVerification
             !second.ChangedEntities.Any(entity => entity.EntityId == 5000 && entity.X == 2 && entity.Y == 0) ||
             sync.LastDelta.ServerTick != second.ServerTick ||
             !sync.LastDeltaSkippedNoObservers ||
-            sync.LastDeltaBroadcasted)
+            sync.LastDeltaBroadcasted ||
+            autoObservation.FullSnapshotBuildCount != 0 ||
+            autoObservation.TouchedSnapshotBuildCount == 0)
         {
             reason = "continuous tick diagnostics did not capture observerless auto move delta";
             return false;
@@ -949,10 +1130,13 @@ public static class AuthoritativeMoveWorldVerification
             1);
         pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
         WorldDelta pushDelta = pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
+        GameWorldObservation pushObservation = pushWorld.Observations;
         if (pushDelta.ChangedEntities.Count != 1 ||
             !pushDelta.ChangedEntities.Any(entity => entity.EntityId == 5011 && entity.X == 1 && entity.Y == 0) ||
             pushSync.LastDelta.ServerTick != pushDelta.ServerTick ||
-            !pushSync.LastDeltaSkippedNoObservers)
+            !pushSync.LastDeltaSkippedNoObservers ||
+            pushObservation.FullSnapshotBuildCount != 0 ||
+            pushObservation.TouchedSnapshotBuildCount == 0)
         {
             reason = "push-on-enter continuous tick diagnostics did not capture delta without player input";
             return false;
@@ -971,6 +1155,26 @@ public static class AuthoritativeMoveWorldVerification
             !metadataOnlySync.LastDeltaSkippedNoObservers)
         {
             reason = "metadata-only delta was not retained for observer broadcast path";
+            return false;
+        }
+
+        var fullDiagnosticWorld = new GameWorld();
+        fullDiagnosticWorld.AddEntity(DefaultWorldConfig.BallSpawn(5030, new GridCoord(0, 0), Direction.Right, 1));
+        fullDiagnosticWorld.FlushDelta();
+        fullDiagnosticWorld.ResetObservations();
+        var fullDiagnosticRunner = new AuthoritativeWorldTickRunner(
+            fullDiagnosticWorld,
+            new AuthoritativeInputQueue(),
+            new AuthoritativeWorldSyncSystem(fullDiagnosticWorld),
+            1)
+        {
+            FullWorldDiagnosticsEnabled = true
+        };
+        fullDiagnosticRunner.Tick();
+        GameWorldObservation fullDiagnosticObservation = fullDiagnosticWorld.Observations;
+        if (fullDiagnosticObservation.FullSnapshotBuildCount == 0)
+        {
+            reason = "full-world diagnostics mode did not record full snapshot construction";
             return false;
         }
 
@@ -994,8 +1198,7 @@ public static class AuthoritativeMoveWorldVerification
         AuthoritativeMoveInput singleInput = singleQueue.EnqueueMove(930, new GridCoord(1, 0), 13);
         WorldDelta singleFirstDelta = singleRunner.Tick();
         MoveResult singleResult = singleInput.WaitAsync().GetResult();
-        if (singleRunner.ActivePendingStateCount != 0 ||
-            !singleResult.Success ||
+        if (!singleResult.Success ||
             singleResult.FinalCoord != new GridCoord(0, 0) ||
             singleFirstDelta.ChangedEntities.Count != 0)
         {
@@ -1004,8 +1207,7 @@ public static class AuthoritativeMoveWorldVerification
         }
 
         WorldDelta singleSecondDelta = singleRunner.Tick();
-        if (singleRunner.ActivePendingStateCount != 0 ||
-            singleSecondDelta.ChangedEntities.Count != 1 ||
+        if (singleSecondDelta.ChangedEntities.Count != 1 ||
             !singleSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 931 && snapshot.X == 2 && snapshot.Y == 0))
         {
             reason = "state deferred push did not move target entity on next tick";
@@ -1016,7 +1218,6 @@ public static class AuthoritativeMoveWorldVerification
         if (!singleWorld.TryGetEntity(930, out GameEntity singlePlayer) ||
             !singleWorld.TryGetComponent(singlePlayer, out PositionComponent singlePlayerPosition) ||
             singlePlayerPosition.Coord != new GridCoord(0, 0) ||
-            singleRunner.ActivePendingStateCount != 0 ||
             singleThirdDelta.ChangedEntities.Count != 0)
         {
             reason = "state handoff moved source after target moved";
@@ -1039,8 +1240,7 @@ public static class AuthoritativeMoveWorldVerification
         WorldDelta bodyPushFirstDelta = bodyPushRunner.Tick();
         MoveResult bodyPushResult = bodyPushInput.WaitAsync().GetResult();
         WorldDelta bodyPushSecondDelta = bodyPushRunner.Tick();
-        if (bodyPushRunner.ActivePendingStateCount != 0 ||
-            !bodyPushResult.Success ||
+        if (!bodyPushResult.Success ||
             bodyPushResult.FinalCoord != new GridCoord(0, 0) ||
             bodyPushFirstDelta.ChangedEntities.Count != 0 ||
             bodyPushSecondDelta.ChangedEntities.Count != 2 ||
@@ -1076,8 +1276,7 @@ public static class AuthoritativeMoveWorldVerification
         WorldDelta intermediateSecondDelta = intermediateRunner.Tick();
         WorldDelta intermediateThirdDelta = intermediateRunner.Tick();
         WorldDelta intermediateFourthDelta = intermediateRunner.Tick();
-        if (intermediateRunner.ActivePendingStateCount != 0 ||
-            !intermediateResult.Success ||
+        if (!intermediateResult.Success ||
             intermediateResult.FinalCoord != new GridCoord(0, 0) ||
             intermediateFirstDelta.ChangedEntities.Count != 0 ||
             intermediateSecondDelta.ChangedEntities.Count != 0 ||
@@ -1137,11 +1336,10 @@ public static class AuthoritativeMoveWorldVerification
             firstRepeatedResult.FinalCoord != new GridCoord(0, 0) ||
             !secondRepeatedResult.Success ||
             secondRepeatedResult.FinalCoord != new GridCoord(0, 0) ||
-            repeatedRunner.ActivePendingStateCount != 0 ||
             !hasRepeatedBox ||
             repeatedBoxCoord != new GridCoord(3, 0))
         {
-            reason = $"repeated push did not resolve as independent later action first={firstRepeatedResult.Success}:{firstRepeatedResult.FinalCoord.X},{firstRepeatedResult.FinalCoord.Y}:{firstRepeatedResult.Reason} second={secondRepeatedResult.Success}:{secondRepeatedResult.FinalCoord.X},{secondRepeatedResult.FinalCoord.Y}:{secondRepeatedResult.Reason} pending={repeatedRunner.ActivePendingStateCount} box=({repeatedBoxCoord.X},{repeatedBoxCoord.Y})";
+            reason = $"repeated push did not resolve as independent later action first={firstRepeatedResult.Success}:{firstRepeatedResult.FinalCoord.X},{firstRepeatedResult.FinalCoord.Y}:{firstRepeatedResult.Reason} second={secondRepeatedResult.Success}:{secondRepeatedResult.FinalCoord.X},{secondRepeatedResult.FinalCoord.Y}:{secondRepeatedResult.Reason} box=({repeatedBoxCoord.X},{repeatedBoxCoord.Y})";
             return false;
         }
 
@@ -1172,7 +1370,6 @@ public static class AuthoritativeMoveWorldVerification
             !chainWorld.TryGetComponent(chainPlayer, out PositionComponent chainPlayerPosition) ||
             !chainResult.Success ||
             chainResult.FinalCoord != new GridCoord(0, 0) ||
-            chainRunner.ActivePendingStateCount != 0 ||
             chainPlayerPosition.Coord != new GridCoord(0, 0) ||
             chainBoxAPosition.Coord != new GridCoord(1, 0) ||
             chainBoxBPosition.Coord != new GridCoord(3, 0))
@@ -1406,12 +1603,10 @@ public static class AuthoritativeMoveWorldVerification
         world.FlushDelta();
         world.NextTick();
         var queue = new WorldActionQueue();
-        var pending = new PendingRuleStateStore();
         WorldAction action = queue.EnqueuePlayerMove(1332, new GridCoord(1, 0), 1);
         StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
         if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
             !moveResult.Success ||
-            pending.ActiveCount != 0 ||
             !world.TryGetEntity(1332, out GameEntity first) ||
             !world.TryGetEntity(1333, out GameEntity second) ||
             !world.TryGetComponent(first, out PositionComponent firstPosition) ||
@@ -1658,8 +1853,7 @@ public static class AuthoritativeMoveWorldVerification
             secondPosition.Coord != new GridCoord(2, 0) ||
             delta.ChangedEntities.Count != 2 ||
             !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1341 && snapshot.X == 1 && snapshot.Y == 0) ||
-            !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1342 && snapshot.X == 2 && snapshot.Y == 0) ||
-            runner.ActivePendingStateCount != 0)
+            !delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 1342 && snapshot.X == 2 && snapshot.Y == 0))
         {
             reason = "conveyor port push did not move connected body through subject policy";
             return false;
@@ -1706,7 +1900,6 @@ public static class AuthoritativeMoveWorldVerification
         MoveResult result = input.WaitAsync().GetResult();
         if (!result.Success ||
             result.FinalCoord != new GridCoord(0, 0) ||
-            runner.ActivePendingStateCount != 0 ||
             !world.TryGetEntity(973, out GameEntity player) ||
             !world.TryGetEntity(974, out GameEntity first) ||
             !world.TryGetEntity(975, out GameEntity second) ||
@@ -1756,7 +1949,6 @@ public static class AuthoritativeMoveWorldVerification
         MoveResult result = input.WaitAsync().GetResult();
         if (!result.Success ||
             result.FinalCoord != new GridCoord(0, 0) ||
-            runner.ActivePendingStateCount != 0 ||
             !world.TryGetEntity(976, out GameEntity player) ||
             !world.TryGetEntity(977, out GameEntity first) ||
             !world.TryGetEntity(978, out GameEntity second) ||
@@ -1782,7 +1974,7 @@ public static class AuthoritativeMoveWorldVerification
             GridCoord playerCoord = world.TryGetComponent(player, out playerPosition) ? playerPosition.Coord : default;
             GridCoord firstCoord = world.TryGetComponent(first, out firstPosition) ? firstPosition.Coord : default;
             GridCoord secondCoord = world.TryGetComponent(second, out secondPosition) ? secondPosition.Coord : default;
-            reason = $"port mismatch push unexpected result success={result.Success} final=({result.FinalCoord.X},{result.FinalCoord.Y}) player=({playerCoord.X},{playerCoord.Y}) first=({firstCoord.X},{firstCoord.Y}) second=({secondCoord.X},{secondCoord.Y}) pending={runner.ActivePendingStateCount}";
+            reason = $"port mismatch push unexpected result success={result.Success} final=({result.FinalCoord.X},{result.FinalCoord.Y}) player=({playerCoord.X},{playerCoord.Y}) first=({firstCoord.X},{firstCoord.Y}) second=({secondCoord.X},{secondCoord.Y})";
             return false;
         }
 
@@ -1809,8 +2001,7 @@ public static class AuthoritativeMoveWorldVerification
         runner.Tick();
         MoveResult result = input.WaitAsync().GetResult();
         if (!result.Success ||
-            result.FinalCoord != new GridCoord(0, 0) ||
-            runner.ActivePendingStateCount != 0)
+            result.FinalCoord != new GridCoord(0, 0))
         {
             reason = "port blocked group did not defer source action";
             return false;
@@ -1826,13 +2017,7 @@ public static class AuthoritativeMoveWorldVerification
             reason = "port blocked group moved despite external blocker";
             return false;
         }
-
         runner.Tick();
-        if (runner.ActivePendingStateCount != 0)
-        {
-            reason = "port blocked group left pending state after deferred blocker failed";
-            return false;
-        }
 
         reason = string.Empty;
         return true;
@@ -1877,30 +2062,22 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        var world = new GameWorld();
-        world.AddEntity(DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
-        world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(2, new GridCoord(1, 0)));
-        world.FlushDelta();
-        var store = new PendingRuleStateStore();
-        var sourceRequest = new ActionRequest(10, "player_move", WorldActionPriority.Player, new ActionSourceContext(ActionSourceKind.Player, 1, 0, WorldTag.SourcePlayer), 1, new ActionTarget(0, null, Direction.Right), default, 1, 1, 0);
-        store.AddHandoffActionState(sourceRequest, 2, Direction.Right, 1, 2, "player_push");
-        var system = new StateDrivenRuleExecutionSystem();
-        StateDrivenRuleExecutionResult earlyResult = system.Tick(world, Array.Empty<WorldAction>(), store, 2);
-        if (earlyResult.ActivePendingCount != 1 ||
-            !world.TryGetEntity(2, out GameEntity earlyBox) ||
-            !world.TryGetComponent(earlyBox, out PositionComponent earlyPosition) ||
-            earlyPosition.Coord != new GridCoord(1, 0))
+        var deferredQueue = new WorldActionQueue();
+        deferredQueue.EnqueueDeferred(new DeferredAction("player_push", 2, new[] { 2L }, Direction.Right, 1, 3, 2, 10, "test"));
+        IReadOnlyList<WorldAction> earlyDeferred = deferredQueue.DrainReady(2);
+        if (earlyDeferred.Count != 0)
         {
-            reason = "pending state advanced before next step tick";
+            reason = "deferred output ran before ready tick";
             return false;
         }
 
-        StateDrivenRuleExecutionResult readyResult = system.Tick(world, Array.Empty<WorldAction>(), store, 3);
-        if (readyResult.ActivePendingCount != 0 ||
-            !world.TryGetComponent(earlyBox, out PositionComponent readyPosition) ||
-            readyPosition.Coord != new GridCoord(2, 0))
+        IReadOnlyList<WorldAction> readyDeferred = deferredQueue.DrainReady(3);
+        if (readyDeferred.Count != 1 ||
+            !readyDeferred[0].SpecId.Equals(new ActionSpecId("player_push")) ||
+            readyDeferred[0].ReadyTick != 3 ||
+            readyDeferred[0].CostTicks != 2)
         {
-            reason = "pending state did not advance on next step tick";
+            reason = "deferred output did not run on ready tick";
             return false;
         }
 
@@ -2029,6 +2206,71 @@ public static class AuthoritativeMoveWorldVerification
         return result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult)
             ? moveResult
             : new MoveResult(false, entityId, default, Direction.None, MoveErrorCode.UnknownEntity, "action not resolved", false, default, clientTick);
+    }
+
+    private static bool VerifyGeneratedRegisteredStrategyRuntimePath(out string reason)
+    {
+        var actionSpecs = new ActionSpecRegistry(new[]
+        {
+            new ActionSpec("verification_runtime_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Runtime, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None)
+        }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
+        ActionStrategyRegistry strategies = VerificationGeneratedActionStrategyRegistration.CreateDefault();
+        var world = new GameWorld();
+        world.AddEntity(DefaultWorldConfig.PlayerSpawn(88, 88, new GridCoord(0, 0)));
+        world.NextTick();
+        var inputQueue = new AuthoritativeInputQueue(actionSpecs);
+        inputQueue.ActionQueue.EnqueueConfiguredMove("verification_runtime_effect", 88, Direction.None, 0, 1);
+        var runner = new AuthoritativeWorldTickRunner(
+            world,
+            inputQueue,
+            new AuthoritativeWorldSyncSystem(world),
+            1,
+            actionSpecs,
+            strategies);
+
+        runner.Tick();
+        if (!world.TryGetEntity(88, out GameEntity entity) ||
+            !world.TryGetComponent(entity, out TagSetComponent tags) ||
+            !tags.Has(WorldTag.StateSuperArmor))
+        {
+            reason = "generated registered strategy did not enter authoritative tick";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private sealed class VerificationRuntimeEffectStrategy : IActionStrategy
+    {
+        public ActionPrimitive Primitive => ActionPrimitive.ApplyRuntimeEffect;
+
+        public void Process(ActionStrategyContext context)
+        {
+            if (!context.World.TryGetEntity(context.Request.EntityId, out GameEntity entity))
+            {
+                context.ActionResults[context.Request.ActionId] = new MoveResult(false, context.Request.EntityId, default, Direction.None, MoveErrorCode.UnknownEntity, "entity not found", false, default, context.Request.ClientTick);
+                return;
+            }
+
+            context.World.AddTag(entity, WorldTag.StateSuperArmor);
+            GridCoord coord = context.World.TryGetComponent(entity, out PositionComponent position) ? position.Coord : default;
+            context.ActionResults[context.Request.ActionId] = new MoveResult(true, context.Request.EntityId, coord, Direction.None, MoveErrorCode.None, "verification-runtime-effect", false, default, context.Request.ClientTick);
+            context.Reasons.Add("verification-runtime-effect");
+        }
+    }
+
+    private static class VerificationGeneratedActionStrategyRegistration
+    {
+        public static ActionStrategyRegistry CreateDefault()
+        {
+            var registry = new ActionStrategyRegistry();
+            registry.Register(new MoveActionStrategy());
+            registry.Register(new RemoveActionStrategy());
+            registry.Register(new SpawnActionStrategy());
+            registry.Register(new VerificationRuntimeEffectStrategy());
+            return registry;
+        }
     }
 
     private static string RunDeterministicWorldHash()

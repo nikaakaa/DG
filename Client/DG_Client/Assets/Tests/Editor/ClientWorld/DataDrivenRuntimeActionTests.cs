@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using DG.GameCore;
 using NUnit.Framework;
 using UnityEngine;
@@ -27,6 +28,9 @@ namespace DG.EditorTests
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("configured_wind_push").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("connected_body_move").SubjectKind);
+            Assert.AreEqual(new BlockedResultPolicyId("push_or_block"), registry.Get("player_move").BlockedResultPolicyId);
+            Assert.AreEqual(new BlockedResultPolicyId("bounce_or_block"), registry.Get("auto_move").BlockedResultPolicyId);
+            Assert.AreEqual(new BlockedResultPolicyId("immune_push_or_block"), registry.Get("mechanism_push").BlockedResultPolicyId);
         }
 
         [Test]
@@ -43,6 +47,10 @@ namespace DG.EditorTests
             Assert.AreEqual(new ActionSpecId("player_push"), registry.Get("player_move").Handoff.SpecId);
             Assert.AreEqual(new ActionSpecId("mechanism_push"), registry.Get("mechanism_push").Handoff.SpecId);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").Handoff.SubjectKind);
+            Assert.AreEqual(3, registry.GetBlockedResultPolicy("immune_push_or_block").Branches.Count);
+            Assert.AreEqual(new TargetingSpecId("legacy_target_coord_one_step"), registry.Get("player_move").Targeting.SpecId);
+            Assert.AreEqual(new TargetingSpecId("legacy_direction_component_cell"), registry.Get("auto_move").Targeting.SpecId);
+            Assert.AreEqual(new TargetingSpecId("legacy_direction_cell"), registry.Get("mechanism_push").Targeting.SpecId);
         }
 
         [Test]
@@ -67,6 +75,33 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void RuntimeIds_CanResolveMultipleAliasesToSameActionAndPolicyData()
+        {
+            var primary = new ActionSpecId(7001, "primary_push");
+            var alias = new ActionSpecId(7001, "readable_alias_push");
+            var policy = new BlockedResultPolicyId(8001, "derive_policy");
+            var policyAlias = new BlockedResultPolicyId(8001, "derive_policy_alias");
+            var registry = new ActionSpecRegistry(new[]
+            {
+                new ActionSpec(primary, ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, policy, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None)
+            }, new[]
+            {
+                BlockedResultPolicyFactory.RejectPolicy(policy)
+            }, new Dictionary<string, ActionSpecId>
+            {
+                ["readable_alias_push"] = alias
+            }, new Dictionary<string, BlockedResultPolicyId>
+            {
+                ["derive_policy_alias"] = policyAlias
+            });
+
+            Assert.AreEqual(primary, alias);
+            Assert.AreEqual(policy, policyAlias);
+            Assert.AreSame(registry.Get(primary), registry.Get("readable_alias_push"));
+            Assert.AreSame(registry.GetBlockedResultPolicy(policy), registry.GetBlockedResultPolicy("derive_policy_alias"));
+        }
+
+        [Test]
         public void ConfiguredMoveAction_RunsThroughExistingPipeline()
         {
             var world = new GameWorld();
@@ -87,16 +122,134 @@ namespace DG.EditorTests
         [Test]
         public void ConfiguredMoveAction_UsesInjectedRegistry()
         {
+            var customSpec = new ActionSpec("custom_slide", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Debug, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "custom_slide_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None);
             var custom = new ActionSpecRegistry(new[]
             {
-                new ActionSpec("custom_slide", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Debug, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.Reject, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None)
-            });
+                customSpec
+            }, new[] { BlockedResultPolicyFactory.RejectPolicy("custom_slide_reject") });
             var queue = new WorldActionQueue(custom);
 
             WorldAction action = queue.EnqueueConfiguredMove("custom_slide", 10, Direction.Right, 0, 1);
 
             Assert.AreEqual(WorldActionPriority.Debug, action.Priority);
             Assert.AreEqual(new ActionSpecId("custom_slide"), action.SpecId);
+        }
+
+        [Test]
+        public void GameWorldQueryBoundary_PreservesQuerySnapshotAndDeltaSemantics()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(910, 910, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.ConveyorSpawn(911, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BallSpawn(912, new GridCoord(2, 0), Direction.Left, 3)));
+            world.ResetObservations();
+
+            IReadOnlyList<GameEntity> pushOnEnter = world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, PushOnEnterComponent>(), EntityIterationOrder.EntityId);
+            IReadOnlyList<GameEntity> autoMove = world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, AutoMoveComponent>(), EntityIterationOrder.EntityId);
+            bool located = world.TryGetEntityLocation(911, out EntityLocation location);
+            WorldDelta delta = world.FlushDelta();
+            IReadOnlyList<EntitySnapshot> snapshot = world.CreateSnapshot();
+            GameWorldObservation observations = world.Observations;
+
+            Assert.AreEqual(1, pushOnEnter.Count);
+            Assert.AreEqual(911, pushOnEnter[0].EntityId);
+            Assert.AreEqual(1, autoMove.Count);
+            Assert.AreEqual(912, autoMove[0].EntityId);
+            Assert.IsTrue(located);
+            Assert.IsTrue(location.HasSpatialLocation);
+            Assert.AreEqual(new GridCoord(0, 0), location.Coord.Value);
+            Assert.AreEqual(3, delta.ChangedEntities.Count);
+            Assert.AreEqual(3, snapshot.Count);
+            Assert.GreaterOrEqual(observations.ComponentQueryCount, 2);
+            Assert.GreaterOrEqual(observations.DeltaFlushCount, 1);
+            Assert.GreaterOrEqual(observations.SnapshotBuildCount, 1);
+            Assert.GreaterOrEqual(observations.FullSnapshotBuildCount, 1);
+            Assert.GreaterOrEqual(observations.TouchedSnapshotBuildCount, 3);
+        }
+
+        [Test]
+        public void GameWorldStorageBoundary_SynchronizesSpatialDirtyAndComponentSet()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(913, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(913, out GameEntity entity));
+            world.FlushDelta();
+            world.ClearSpatialDirty();
+
+            world.MoveEntity(entity, new GridCoord(1, 0));
+            Assert.IsTrue(world.TryGetEntityLocation(913, out EntityLocation movedLocation));
+            Assert.AreEqual(new GridCoord(1, 0), movedLocation.Coord.Value);
+            Assert.AreEqual(0, world.GetEntitiesAt(new GridCoord(0, 0)).Count);
+            Assert.AreEqual(1, world.GetEntitiesAt(new GridCoord(1, 0)).Count);
+            Assert.IsTrue(world.ChangedCells.Count >= 2);
+
+            Assert.IsTrue(world.RemoveComponent<ColliderComponent>(entity));
+            Assert.AreEqual(0, world.GetEntitiesAt(new GridCoord(1, 0)).Count);
+            Assert.IsFalse(world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, ColliderComponent>(), EntityIterationOrder.EntityId).Any(item => item.EntityId == 913));
+
+            world.SetComponent(entity, new ColliderComponent());
+            Assert.AreEqual(1, world.GetEntitiesAt(new GridCoord(1, 0)).Count);
+            Assert.IsTrue(world.QueryEntities(ComponentQueryDescriptor.With<PositionComponent, ColliderComponent>(), EntityIterationOrder.EntityId).Any(item => item.EntityId == 913));
+
+            WorldDelta delta = world.FlushDelta();
+            Assert.AreEqual(1, delta.ChangedEntities.Count);
+            Assert.AreEqual(913, delta.ChangedEntities[0].EntityId);
+        }
+
+        [Test]
+        public void GameWorldStorageAdapterBoundary_PreservesNarrowQueryAndDeltaSemantics()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(930, 930, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.ConveyorSpawn(931, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BallSpawn(932, new GridCoord(2, 0), Direction.Left, 3)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(933, new GridCoord(3, 0))));
+            world.FlushDelta();
+            world.ResetObservations();
+
+            IReadOnlyList<AutoMoveQueryResult> autoMove = world.QueryAutoMove(EntityIterationOrder.EntityId);
+            IReadOnlyList<PushOnEnterQueryResult> pushOnEnter = world.QueryPushOnEnter(EntityIterationOrder.EntityId);
+            bool blocking = world.TryGetFirstBlockingAt(new GridCoord(3, 0), null, out BlockingSpatialQueryResult blockingResult);
+            IReadOnlyList<ColliderSpatialQueryResult> colliders = world.GetColliderEntitiesAt(new GridCoord(0, 0), DefaultWorldConfig.BlockerTarget);
+            IReadOnlyList<PushableSpatialQueryResult> pushables = world.GetPushableEntitiesAt(new GridCoord(3, 0), DefaultWorldConfig.BlockerTarget);
+            WorldDelta delta = world.FlushDelta();
+            GameWorldObservation observations = world.Observations;
+
+            Assert.AreEqual(1, autoMove.Count);
+            Assert.AreEqual(932, autoMove[0].EntityId);
+            Assert.AreEqual(new GridCoord(2, 0), autoMove[0].Position);
+            Assert.AreEqual(Direction.Left, autoMove[0].Direction);
+            Assert.AreEqual(3, autoMove[0].AutoMove.IntervalTicks);
+            Assert.AreEqual(1, pushOnEnter.Count);
+            Assert.AreEqual(931, pushOnEnter[0].EntityId);
+            Assert.AreEqual(new GridCoord(0, 0), pushOnEnter[0].Position);
+            Assert.AreEqual(Direction.Right, pushOnEnter[0].Direction);
+            Assert.IsTrue(blocking);
+            Assert.AreEqual(933, blockingResult.EntityId);
+            Assert.AreEqual(1, colliders.Count);
+            Assert.AreEqual(931, colliders[0].EntityId);
+            Assert.AreEqual(1, pushables.Count);
+            Assert.AreEqual(933, pushables[0].EntityId);
+            Assert.AreEqual(0, delta.ChangedEntities.Count);
+            Assert.GreaterOrEqual(observations.ComponentQueryCount, 2);
+            Assert.GreaterOrEqual(observations.SpatialQueryCount, 3);
+            Assert.GreaterOrEqual(observations.DeltaFlushCount, 1);
+        }
+
+        [Test]
+        public void GameWorldStorageAdapterBoundary_PreventsInternalStorageLeakage()
+        {
+            string root = RepositoryRoot();
+            string[] ruleFiles = Directory.GetFiles(Path.Combine(root, "Shared", "DG.GameCore", "Rules"), "*.cs", SearchOption.AllDirectories);
+            string[] serverFiles = Directory.GetFiles(Path.Combine(root, "Server", "Hotfix"), "*.cs", SearchOption.AllDirectories);
+            string[] sharedFiles = Directory.GetFiles(Path.Combine(root, "Shared", "DG.GameCore"), "*.cs", SearchOption.AllDirectories);
+            string rules = string.Join(Environment.NewLine, ruleFiles.Select(File.ReadAllText));
+            string server = string.Join(Environment.NewLine, serverFiles.Select(File.ReadAllText));
+            string shared = string.Join(Environment.NewLine, sharedFiles.Select(File.ReadAllText));
+
+            Assert.IsFalse(Regex.IsMatch(rules, @"\bIWorldDataStorage\b|\bIndexedWorldDataStorage\b|\bComponentPool\b|\bQueryCache\b|\bEntityRegistry\b|\bComponentTypeRegistry\b"));
+            Assert.IsFalse(Regex.IsMatch(server, @"\bIWorldDataStorage\b|\bIndexedWorldDataStorage\b|\bComponentPool\b|\bQueryCache\b|\bEntityRegistry\b|\bComponentTypeRegistry\b"));
+            Assert.IsFalse(Regex.IsMatch(shared, @"\bArch\.|\bDefaultEcs\b|\bFlecs\b|\bUnity\.Entities\b|\bUnity\.Collections\b"));
         }
 
         [Test]
@@ -117,7 +270,6 @@ namespace DG.EditorTests
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.IsTrue(result.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, result.DeferredActions.Count);
-            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 110, new GridCoord(0, 0));
             AssertPosition(world, 111, new GridCoord(1, 0));
             AssertPosition(world, 112, new GridCoord(2, 0));
@@ -148,6 +300,296 @@ namespace DG.EditorTests
             Assert.IsTrue(claims.All(claim => claim.Mode == ActionClaimMode.Exclusive));
             Assert.IsTrue(claims.Any(claim => claim.EntityId == 200 && claim.FromCoord == new GridCoord(0, 0) && claim.ToCoord == new GridCoord(1, 0)));
             Assert.IsFalse(claims.Any(claim => claim.EntityId == 201));
+        }
+
+        [Test]
+        public void ActionContext_SeparatesSourceSubjectTargetAndSchedule()
+        {
+            var adapter = new ActionRequestAdapter(ActionSpecRegistry.Default);
+            var player = new WorldAction(41, WorldActionPriority.Player, "player_move", 9001, new GridCoord(1, 0), Direction.None, 77, 5, 6, 1);
+            var auto = new WorldAction(42, WorldActionPriority.Auto, "auto_move", 9002, null, Direction.None, 0, 10, 13, 3);
+
+            ActionRequest playerRequest = adapter.FromWorldAction(player);
+            ActionRequest autoRequest = adapter.FromWorldAction(auto);
+
+            Assert.IsTrue(playerRequest.TryCreateContext(ActionSpecRegistry.Default.Get("player_move"), out ActionContext playerContext, out _));
+            Assert.IsTrue(autoRequest.TryCreateContext(ActionSpecRegistry.Default.Get("auto_move"), out ActionContext autoContext, out _));
+
+            Assert.AreEqual(9001, playerContext.InstigatorEntityId);
+            Assert.AreEqual(9001, playerContext.SourceEntityId);
+            Assert.AreEqual(9001, playerContext.SubjectEntryEntityId);
+            Assert.AreEqual(new GridCoord(1, 0), playerContext.TargetHint.TargetCoord.Value);
+            Assert.AreEqual(77, playerContext.ClientTick);
+            Assert.AreEqual(1, playerContext.CostTicks);
+            Assert.AreEqual(9002, autoContext.InstigatorEntityId);
+            Assert.AreEqual(9002, autoContext.SourceEntityId);
+            Assert.AreEqual(9002, autoContext.SubjectEntryEntityId);
+            Assert.AreEqual(10, autoContext.CreatedTick);
+            Assert.AreEqual(13, autoContext.ReadyTick);
+            Assert.AreEqual(3, autoContext.CostTicks);
+        }
+
+        [Test]
+        public void ActionContext_ValidationFailsForMissingSubjectEntry()
+        {
+            var request = new ActionRequest(
+                1,
+                "mechanism_push",
+                WorldActionPriority.Mechanism,
+                new ActionSourceContext(ActionSourceKind.Mechanism, 0, 0, WorldTag.SourceMechanism),
+                0,
+                new ActionTarget(0, null, Direction.Right),
+                default,
+                0,
+                0,
+                0);
+
+            Assert.IsFalse(request.TryCreateContext(ActionSpecRegistry.Default.Get("mechanism_push"), out _, out string reason));
+            Assert.AreEqual("missing subject entry", reason);
+        }
+
+        [Test]
+        public void ActionContext_ValidationFailsForMissingSource()
+        {
+            var request = new ActionRequest(
+                1,
+                "mechanism_push",
+                WorldActionPriority.Mechanism,
+                default,
+                9102,
+                new ActionTarget(0, null, Direction.Right),
+                default,
+                0,
+                0,
+                0);
+
+            Assert.IsFalse(request.TryCreateContext(ActionSpecRegistry.Default.Get("mechanism_push"), out _, out string reason));
+            Assert.AreEqual("missing source", reason);
+        }
+
+        [Test]
+        public void ActionTargetSelector_EmitsSelfDirectionAndFrontTargetData()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9100, 9100, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9101, new GridCoord(1, 0))));
+            Assert.IsTrue(world.TryGetEntity(9100, out GameEntity source));
+            Assert.IsTrue(world.TryGetComponent(source, out PositionComponent position));
+            var selector = new ActionTargetSelector();
+
+            Assert.IsTrue(selector.TryResolveTargetData(world, Context(1, "self_target", 9100, Direction.Right), Spec("self_target", ActionTargetRule.Self), source, position, out IReadOnlyList<ActionTargetData> self, out _, out _, out _, out _));
+            Assert.IsTrue(selector.TryResolveTargetData(world, Context(2, "direction_target", 9100, Direction.Right), Spec("direction_target", ActionTargetRule.DirectionCell), source, position, out IReadOnlyList<ActionTargetData> cell, out _, out _, out _, out _));
+            Assert.IsTrue(selector.TryResolveTargetData(world, Context(3, "front_target", 9100, Direction.Right), Spec("front_target", ActionTargetRule.FrontEntities), source, position, out IReadOnlyList<ActionTargetData> front, out _, out _, out _, out _));
+
+            Assert.AreEqual(ActionTargetDataKind.Self, self[0].Kind);
+            Assert.AreEqual(9100, self[0].TargetEntityId);
+            Assert.AreEqual(ActionTargetDataKind.Cell, cell[0].Kind);
+            Assert.AreEqual(new GridCoord(1, 0), cell[0].TargetCoord);
+            Assert.AreEqual(ActionTargetDataKind.Entity, front[0].Kind);
+            Assert.AreEqual(9101, front[0].TargetEntityId);
+            Assert.AreEqual(new GridCoord(1, 0), front[0].TargetCoord);
+        }
+
+        [Test]
+        public void TargetingSystem_MapsSelectorIdsToBasicSelectors()
+        {
+            var registry = TargetSelectorRegistry.CreateDefault();
+
+            Assert.IsInstanceOf<SelfTargetSelector>(registry.Get("self"));
+            Assert.IsInstanceOf<DirectionCellTargetSelector>(registry.Get("direction_cell"));
+            Assert.IsInstanceOf<TargetCoordSelector>(registry.Get("target_coord"));
+            Assert.Throws<ArgumentOutOfRangeException>(() => registry.Get("missing_selector"));
+        }
+
+        [Test]
+        public void TargetingSystem_EmitsSelfDirectionAndTargetCoordData()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9140, 9140, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(9140, out GameEntity source));
+            Assert.IsTrue(world.TryGetComponent(source, out PositionComponent position));
+            var targeting = new TargetingSystem();
+
+            Assert.IsTrue(targeting.TryResolveTargetData(world, Context(1, "self_target", 9140, Direction.Right), Spec("self_target", ActionTargetRule.Self), source, position, out IReadOnlyList<ActionTargetData> self, out Direction selfDirection, out GridCoord selfTarget, out _, out _));
+            Assert.IsTrue(targeting.TryResolveTargetData(world, Context(2, "direction_target", 9140, Direction.Right), Spec("direction_target", ActionTargetRule.DirectionCell), source, position, out IReadOnlyList<ActionTargetData> cell, out Direction cellDirection, out GridCoord cellTarget, out _, out _));
+            var coordSpec = Spec("coord_target", ActionTargetRule.TargetCoordOneStep);
+            var coordRequest = new ActionRequest(3, "coord_target", WorldActionPriority.Mechanism, new ActionSourceContext(ActionSourceKind.Mechanism, 9140, 0, WorldTag.SourceMechanism), 9140, new ActionTarget(0, new GridCoord(0, 1), Direction.None), default, 0, 0, 0);
+            Assert.IsTrue(coordRequest.TryCreateContext(coordSpec, out ActionContext coordContext, out _));
+            Assert.IsTrue(targeting.TryResolveTargetData(world, coordContext, coordSpec, source, position, out IReadOnlyList<ActionTargetData> coord, out Direction coordDirection, out GridCoord coordTarget, out _, out _));
+
+            Assert.AreEqual(ActionTargetDataKind.Self, self[0].Kind);
+            Assert.AreEqual(9140, self[0].TargetEntityId);
+            Assert.AreEqual(Direction.Right, selfDirection);
+            Assert.AreEqual(new GridCoord(0, 0), selfTarget);
+            Assert.AreEqual(ActionTargetDataKind.Cell, cell[0].Kind);
+            Assert.AreEqual(Direction.Right, cellDirection);
+            Assert.AreEqual(new GridCoord(1, 0), cellTarget);
+            Assert.AreEqual(ActionTargetDataKind.Cell, coord[0].Kind);
+            Assert.AreEqual(Direction.Up, coordDirection);
+            Assert.AreEqual(new GridCoord(0, 1), coordTarget);
+        }
+
+        [Test]
+        public void TargetingSystem_TargetCoordOneStepRejectsTooFar()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9145, 9145, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(9145, out GameEntity source));
+            Assert.IsTrue(world.TryGetComponent(source, out PositionComponent position));
+            var spec = Spec("coord_target", ActionTargetRule.TargetCoordOneStep);
+            var request = new ActionRequest(1, "coord_target", WorldActionPriority.Mechanism, new ActionSourceContext(ActionSourceKind.Mechanism, 9145, 0, WorldTag.SourceMechanism), 9145, new ActionTarget(0, new GridCoord(2, 0), Direction.None), default, 0, 0, 0);
+            Assert.IsTrue(request.TryCreateContext(spec, out ActionContext context, out _));
+
+            bool ok = new TargetingSystem().TryResolveTargetData(world, context, spec, source, position, out _, out _, out _, out MoveErrorCode errorCode, out string reason);
+
+            Assert.IsFalse(ok);
+            Assert.AreEqual(MoveErrorCode.TooFar, errorCode);
+            Assert.AreEqual("target too far", reason);
+        }
+
+        [Test]
+        public void TargetingSystem_FilterUsesFinalComponentsAndDoesNotWriteWorld()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9150, 9150, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9151, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(9152, new GridCoord(2, 0))));
+            Assert.IsTrue(world.TryGetEntity(9150, out GameEntity source));
+            Assert.IsTrue(world.TryGetComponent(source, out PositionComponent position));
+            world.FlushDelta();
+            world.ClearSpatialDirty();
+            var filter = new TargetFilterSpec("pushable_filter", new[]
+            {
+                new TargetFilterCondition(TargetFilterConditionKind.HasComponent, TargetFilterSubject.Target, ComponentKind.Position),
+                new TargetFilterCondition(TargetFilterConditionKind.HasComponent, TargetFilterSubject.Target, ComponentKind.Pushable)
+            });
+            var targetingSpec = new TargetingSpec("filtered_front", "front_entities", TargetDirectionSource.Request, filter.FilterId, TargetOrderingPolicy.HitOrderThenCoordThenEntity, 4, 0, ActionTargetRule.FrontEntities);
+            var spec = new ActionSpec("filtered_front_action", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.FrontEntities, "front_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, targeting: targetingSpec);
+            var targeting = new TargetingSystem(TargetSelectorRegistry.CreateDefault(), new[] { TargetFilterSpec.None, filter });
+
+            Assert.IsTrue(targeting.TryResolveTargetData(world, Context(1, "filtered_front_action", 9150, Direction.Right), spec, source, position, out IReadOnlyList<ActionTargetData> targets, out _, out _, out _, out _));
+
+            Assert.AreEqual(1, targets.Count);
+            Assert.AreEqual(9151, targets[0].TargetEntityId);
+            Assert.AreEqual(0, world.FlushDelta().ChangedEntities.Count);
+            Assert.AreEqual(0, world.ChangedCells.Count);
+            AssertPosition(world, 9150, new GridCoord(0, 0));
+            AssertPosition(world, 9151, new GridCoord(1, 0));
+            AssertPosition(world, 9152, new GridCoord(2, 0));
+        }
+
+        [Test]
+        public void TargetingPolicy_AliasNamesDoNotChangeSelectorBehavior()
+        {
+            TargetingSpec targeting = TargetingSpec.FromLegacyRule(ActionTargetRule.DirectionFromRequest);
+            ActionSpec first = new ActionSpec("target_alias_a", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "front_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, targeting: targeting);
+            ActionSpec second = new ActionSpec("target_alias_b", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "front_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, targeting: targeting);
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9160, 9160, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(9160, out GameEntity source));
+            Assert.IsTrue(world.TryGetComponent(source, out PositionComponent position));
+            var system = new TargetingSystem();
+
+            Assert.IsTrue(system.TryResolveTargetData(world, Context(1, "target_alias_a", 9160, Direction.Right), first, source, position, out IReadOnlyList<ActionTargetData> a, out Direction directionA, out GridCoord targetA, out _, out _));
+            Assert.IsTrue(system.TryResolveTargetData(world, Context(2, "target_alias_b", 9160, Direction.Right), second, source, position, out IReadOnlyList<ActionTargetData> b, out Direction directionB, out GridCoord targetB, out _, out _));
+
+            Assert.AreEqual(directionA, directionB);
+            Assert.AreEqual(targetA, targetB);
+            Assert.AreEqual(a[0].Kind, b[0].Kind);
+            Assert.AreEqual(a[0].TargetCoord, b[0].TargetCoord);
+            Assert.AreEqual(a[0].QueryId, b[0].QueryId);
+        }
+
+        [Test]
+        public void TargetingSystem_RejectsUnknownFilterAndSelector()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9170, 9170, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(9170, out GameEntity source));
+            Assert.IsTrue(world.TryGetComponent(source, out PositionComponent position));
+            TargetingSpec missingFilter = new TargetingSpec("missing_filter", "direction_cell", TargetDirectionSource.Request, "missing_filter", TargetOrderingPolicy.HitOrderThenCoordThenEntity, 1, 1, ActionTargetRule.DirectionFromRequest);
+            ActionSpec missingFilterSpec = new ActionSpec("missing_filter_action", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "front_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, targeting: missingFilter);
+            TargetingSpec missingSelector = new TargetingSpec("missing_selector", "missing_selector", TargetDirectionSource.Request, TargetFilterSpec.None.FilterId, TargetOrderingPolicy.HitOrderThenCoordThenEntity, 1, 1, ActionTargetRule.DirectionFromRequest);
+            ActionSpec missingSelectorSpec = new ActionSpec("missing_selector_action", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "front_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, targeting: missingSelector);
+
+            Assert.IsFalse(new TargetingSystem().TryResolveTargetData(world, Context(1, "missing_filter_action", 9170, Direction.Right), missingFilterSpec, source, position, out _, out _, out _, out _, out string reason));
+            Assert.AreEqual("unknown target filter", reason);
+            Assert.Throws<ArgumentOutOfRangeException>(() => new TargetingSystem().TryResolveTargetData(world, Context(2, "missing_selector_action", 9170, Direction.Right), missingSelectorSpec, source, position, out _, out _, out _, out _, out _));
+        }
+
+        [Test]
+        public void ExecutionOutput_GeneratesClaimsWithoutWritingWorld()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9110, 9110, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(9110, out GameEntity source));
+            var body = new BehaviorBody(9110, BehaviorBodyKind.SingleEntity, new[] { source });
+            var targetData = new[] { ActionTargetData.Cell("direction", new GridCoord(1, 0), Direction.Right, 0) };
+            var context = Context(1, "mechanism_push", 9110, Direction.Right);
+
+            Assert.IsTrue(new ActionClaimBuilder().TryBuildMoveExecutionOutput(world, context, body, Direction.Right, targetData, out ActionExecutionOutput output));
+
+            Assert.AreEqual(ActionExecutionSuccessPolicy.AllOrNothing, output.SuccessPolicy);
+            Assert.AreEqual(1, output.Claims.Count);
+            Assert.AreEqual(0, output.CommitProposals.Count);
+            Assert.AreEqual(0, output.DeferredActions.Count);
+            AssertPosition(world, 9110, new GridCoord(0, 0));
+        }
+
+        [Test]
+        public void FrontEntitiesExecution_FanoutMovesAllTargetsDeterministically()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9120, 9120, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9121, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9122, new GridCoord(2, 0))));
+            var registry = FrontMoveRegistry();
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world,
+                new[] { new WorldAction(1, WorldActionPriority.Mechanism, "front_move_all", 9120, null, Direction.Right, 0, 0, 0, 1) },
+                1);
+
+            Assert.IsTrue(result.ActionResults[1].Success);
+            AssertPosition(world, 9120, new GridCoord(0, 0));
+            AssertPosition(world, 9121, new GridCoord(2, 0));
+            AssertPosition(world, 9122, new GridCoord(3, 0));
+        }
+
+        [Test]
+        public void FrontEntitiesExecution_MovesSingleFrontTargetInsteadOfSource()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9125, 9125, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9126, new GridCoord(1, 0))));
+            var registry = FrontMoveRegistry();
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world,
+                new[] { new WorldAction(1, WorldActionPriority.Mechanism, "front_move_all", 9125, null, Direction.Right, 0, 0, 0, 1) },
+                1);
+
+            Assert.IsTrue(result.ActionResults[1].Success);
+            AssertPosition(world, 9125, new GridCoord(0, 0));
+            AssertPosition(world, 9126, new GridCoord(2, 0));
+        }
+
+        [Test]
+        public void FrontEntitiesExecution_DefaultAllOrNothingRejectsPartialCommit()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(9130, 9130, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9131, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9132, new GridCoord(2, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(9133, new GridCoord(3, 0))));
+            var registry = FrontMoveRegistry();
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world,
+                new[] { new WorldAction(1, WorldActionPriority.Mechanism, "front_move_all", 9130, null, Direction.Right, 0, 0, 0, 1) },
+                1);
+
+            Assert.IsFalse(result.ActionResults[1].Success);
+            Assert.AreEqual("blocked cell", result.ActionResults[1].Reason);
+            AssertPosition(world, 9131, new GridCoord(1, 0));
+            AssertPosition(world, 9132, new GridCoord(2, 0));
         }
 
         [Test]
@@ -265,7 +707,7 @@ namespace DG.EditorTests
             Assert.AreEqual(2, result.Metadata[0].Path.Count);
             Assert.AreEqual(Direction.Right, result.Metadata[0].Path[0]);
             Assert.AreEqual(Direction.Up, result.Metadata[0].Path[1]);
-            Assert.IsTrue(result.Reasons.Contains("push-vector-path-pending"));
+            Assert.IsTrue(result.Reasons.Contains("push-vector-path-deferred"));
         }
 
         [Test]
@@ -315,28 +757,103 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void HandoffActionUnit_CreatesNextTargetUnit()
+        public void AutoMoveSelfPush_BlockedReversalCommitsToSameContextOwner()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BallSpawn(332, new GridCoord(0, 0), Direction.Right, 1)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(333, new GridCoord(1, 0))));
+            world.FlushDelta();
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueAutoMove(332, world.ServerTick - 1, 1);
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+
+            Assert.IsTrue(result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult));
+            Assert.IsFalse(moveResult.Success);
+            Assert.IsTrue(moveResult.Bounced);
+            Assert.AreEqual(332, moveResult.EntityId);
+            Assert.AreEqual(Direction.Left, moveResult.FinalDirection);
+            Assert.AreEqual(2, result.ProposalResults.Count(item => item.Proposal.SourceActionId == action.ActionId && item.Accepted));
+            Assert.IsTrue(result.ProposalResults.Any(item => item.Proposal.Kind == CommitProposalKind.SetDirection && item.Proposal.EntityId == 332 && item.Proposal.Direction == Direction.Left));
+            Assert.IsTrue(result.ProposalResults.Any(item => item.Proposal.Kind == CommitProposalKind.SetAutoMoveTick && item.Proposal.EntityId == 332));
+            AssertPosition(world, 332, new GridCoord(0, 0));
+            AssertDirection(world, 332, Direction.Left);
+            Assert.AreEqual(1, world.FlushDelta().ChangedEntities.Count(entity => entity.EntityId == 332 && entity.Direction == Direction.Left));
+        }
+
+        [Test]
+        public void AutoMoveSelfPush_PushableSuccessDoesNotReverseSource()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BallSpawn(334, new GridCoord(0, 0), Direction.Right, 1)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(335, new GridCoord(1, 0))));
+            world.FlushDelta();
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueAutoMove(334, world.ServerTick - 1, 1);
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            Assert.IsFalse(first.ProposalResults.Any(item => item.Proposal.Kind == CommitProposalKind.SetDirection && item.Proposal.EntityId == 334));
+            AssertDirection(world, 334, Direction.Right);
+            AssertPosition(world, 334, new GridCoord(0, 0));
+            AssertPosition(world, 335, new GridCoord(2, 0));
+            Assert.IsTrue(second.ActionResults.Values.Any(result => result.Success));
+        }
+
+        [Test]
+        public void AutoMoveSelfPush_DownstreamBlockReversesCurrentActionOnly()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BallSpawn(336, new GridCoord(0, 0), Direction.Right, 1)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(337, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(338, new GridCoord(2, 0))));
+            world.FlushDelta();
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueAutoMove(336, world.ServerTick - 1, 1);
+            var system = new StateDrivenRuleExecutionSystem();
+
+            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+
+            Assert.IsTrue(first.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
+            Assert.IsFalse(first.ProposalResults.Any(item => item.Proposal.Kind == CommitProposalKind.SetDirection && item.Proposal.EntityId == 336));
+            Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
+            Assert.IsFalse(second.ProposalResults.Any(item => item.Proposal.Kind == CommitProposalKind.SetDirection && item.Proposal.EntityId == 336));
+            AssertDirection(world, 336, Direction.Right);
+            AssertPosition(world, 336, new GridCoord(0, 0));
+            AssertPosition(world, 337, new GridCoord(1, 0));
+        }
+
+        [Test]
+        public void HandoffActionUnit_CreatesDeferredTargetAction()
         {
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(340, 340, new GridCoord(0, 0))));
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(341, new GridCoord(1, 0))));
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(342, new GridCoord(2, 0))));
-            var pending = new PendingRuleStateStore();
-            PendingActionState state = pending.AddHandoffActionState(MoveRequest(20, "player_move", WorldActionPriority.Player, 340, Direction.Right), 341, Direction.Right, 0, specId: "player_push");
-            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromPendingActionState(state, 1);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(340, new GridCoord(1, 0), 20);
 
-            Assert.AreEqual(ActionSourceKind.Handoff, request.Source.Kind);
-            Assert.AreEqual(20, request.DerivedFromUnitId);
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
-            ActionArbitrationResult result = new ActionArbiter().ArbitrateMoves(world, new[] { request }, 1);
-
-            Assert.AreEqual(0, result.AcceptedActions.Count);
-            Assert.AreEqual(0, result.RejectedActions.Count);
-            Assert.AreEqual(1, result.DerivedActions.Count);
-            Assert.AreEqual(ActionResultBranch.Noop, result.DerivedActions[0].Branch);
-            Assert.AreEqual("bounded/deferred-output", result.DerivedActions[0].Reason);
+            Assert.IsTrue(result.ActionResults[action.ActionId].Success);
+            Assert.IsTrue(result.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, result.DeferredActions.Count);
-            Assert.AreEqual(342, result.DeferredActions[0].EntityId);
+            Assert.AreEqual(341, result.DeferredActions[0].EntityId);
+            Assert.AreEqual(new ActionSpecId("player_push"), result.DeferredActions[0].SpecId);
+            Assert.AreEqual(Direction.Right, result.DeferredActions[0].Direction);
         }
 
         [Test]
@@ -361,9 +878,6 @@ namespace DG.EditorTests
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
-            Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 360, new GridCoord(0, 0));
             AssertPosition(world, 361, new GridCoord(2, 0));
         }
@@ -396,11 +910,6 @@ namespace DG.EditorTests
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
-            Assert.AreEqual(0, third.ActivePendingCount);
-            Assert.AreEqual(0, fourth.ActivePendingCount);
-            Assert.AreEqual(0, fifth.ActivePendingCount);
             AssertPosition(world, 370, new GridCoord(0, 0));
             AssertPosition(world, 371, new GridCoord(1, 0));
             AssertPosition(world, 372, new GridCoord(3, 0));
@@ -493,9 +1002,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
-            Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 440, new GridCoord(0, 0));
             AssertPosition(world, 441, new GridCoord(2, 0));
             AssertPosition(world, 442, new GridCoord(3, 0));
@@ -523,8 +1029,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 4410, new GridCoord(0, 0));
             AssertPosition(world, 4411, new GridCoord(2, 0));
             AssertPosition(world, 4412, new GridCoord(3, 0));
@@ -548,7 +1052,6 @@ namespace DG.EditorTests
 
             StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            Assert.AreEqual(0, first.ActivePendingCount);
             StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
             StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
@@ -556,9 +1059,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
-            Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 445, new GridCoord(0, 0));
             AssertPosition(world, 446, new GridCoord(2, 0));
             AssertPosition(world, 447, new GridCoord(3, 0));
@@ -634,10 +1134,85 @@ namespace DG.EditorTests
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(2, first.DeferredActions.Count);
             Assert.IsTrue(first.DeferredActions.All(output => output.CausalityId == action.ActionId));
             Assert.IsTrue(first.DeferredActions.All(output => output.Direction == Direction.Right));
+        }
+
+        [Test]
+        public void BlockedResultPolicy_ImmuneBranchRejectsBeforePush()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(535, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(536, new GridCoord(1, 0))));
+            Assert.IsTrue(world.TryGetEntity(535, out GameEntity source));
+            Assert.IsTrue(world.TryGetEntity(536, out GameEntity blocker));
+            world.SetComponent(source, new TagSetComponent(WorldTag.SourceMechanism | WorldTag.AbilityMechanismPush));
+            world.SetComponent(blocker, new TagSetComponent(WorldTag.ImmuneMechanismPush));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 535, Direction.Right, world.ServerTick - 1, 1);
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+
+            Assert.IsFalse(result.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(MoveErrorCode.Immune, result.ActionResults[action.ActionId].ErrorCode);
+            Assert.AreEqual("immune", result.ActionResults[action.ActionId].Reason);
+            Assert.AreEqual(0, result.DeferredActions.Count);
+            AssertPosition(world, 535, new GridCoord(0, 0));
+            AssertPosition(world, 536, new GridCoord(1, 0));
+        }
+
+        [Test]
+        public void BlockedResultPolicy_FirstMatchingBranchWins()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(537, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(538, new GridCoord(1, 0))));
+            Assert.IsTrue(world.TryGetEntity(537, out GameEntity source));
+            world.SetComponent(source, new TagSetComponent(WorldTag.SourceMechanism | WorldTag.AbilityMechanismPush));
+            world.NextTick();
+            var specs = new[]
+            {
+                new ActionSpec("branch_order_move", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "branch_order_policy", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "mechanism_push", ActionSubjectKind.ConnectedBodyIfAny)),
+                ActionSpecRegistry.Default.Get("mechanism_push")
+            };
+            var policy = new BlockedResultPolicy("branch_order_policy", new[]
+            {
+                new BlockedResultBranch(1, Array.Empty<ActionCondition>(), BlockedResultKind.Reject, default, ActionSubjectKind.HitEntity, "first", MoveErrorCode.Blocked, ActionCommitRule.None),
+                new BlockedResultBranch(2, new[] { new ActionCondition(ActionConditionKind.CanBePushed, ActionConditionSubject.Blocking) }, BlockedResultKind.DeriveAction, "mechanism_push", ActionSubjectKind.ConnectedBodyIfAny, "second", MoveErrorCode.None, ActionCommitRule.None)
+            });
+            var registry = new ActionSpecRegistry(specs, new[] { policy, ActionSpecRegistry.Default.GetBlockedResultPolicy("immune_push_or_block") });
+            var queue = new WorldActionQueue(registry);
+            WorldAction action = queue.EnqueueConfiguredMove("branch_order_move", 537, Direction.Right, world.ServerTick - 1, 1);
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+
+            Assert.IsFalse(result.ActionResults[action.ActionId].Success);
+            Assert.AreEqual("first", result.ActionResults[action.ActionId].Reason);
+            Assert.AreEqual(0, result.DeferredActions.Count);
+        }
+
+        [Test]
+        public void BlockedResultPolicy_InvalidReferencesFailClearly()
+        {
+            var spec = new ActionSpec("invalid_policy_move", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "missing_policy", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None);
+
+            Assert.Throws<InvalidOperationException>(() => new ActionSpecRegistry(new[] { spec }, Array.Empty<BlockedResultPolicy>()));
+
+            var invalidResultSpec = new ActionSpec("invalid_result_move", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "invalid_result_policy", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None);
+            var invalidPolicy = new BlockedResultPolicy("invalid_result_policy", new[]
+            {
+                new BlockedResultBranch(1, Array.Empty<ActionCondition>(), BlockedResultKind.DeriveAction, "missing_spec", ActionSubjectKind.HitEntity, string.Empty, MoveErrorCode.None, ActionCommitRule.None)
+            });
+
+            Assert.Throws<InvalidOperationException>(() => new ActionSpecRegistry(new[] { invalidResultSpec }, new[] { invalidPolicy }));
+
+            Assert.Throws<InvalidOperationException>(() => new BlockedResultPolicy("duplicate_order", new[]
+            {
+                new BlockedResultBranch(1, Array.Empty<ActionCondition>(), BlockedResultKind.Reject, default, ActionSubjectKind.HitEntity, string.Empty, MoveErrorCode.Blocked, ActionCommitRule.None),
+                new BlockedResultBranch(1, Array.Empty<ActionCondition>(), BlockedResultKind.Reject, default, ActionSubjectKind.HitEntity, string.Empty, MoveErrorCode.Blocked, ActionCommitRule.None)
+            }));
         }
 
         [Test]
@@ -674,15 +1249,12 @@ namespace DG.EditorTests
             Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, first.ActivePendingCount);
             world.NextTick();
             for (int i = 0; i < first.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(first.DeferredActions[i]);
             }
             StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
-
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 570, new GridCoord(0, 0));
             AssertPosition(world, 571, new GridCoord(0, 1));
             AssertPosition(world, 572, new GridCoord(2, 0));
@@ -723,7 +1295,6 @@ namespace DG.EditorTests
             Assert.AreEqual(2, contacts.Count);
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, first.ActivePendingCount);
             world.NextTick();
             for (int i = 0; i < first.DeferredActions.Count; i++)
             {
@@ -850,9 +1421,6 @@ namespace DG.EditorTests
             StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
-            Assert.AreEqual(0, third.ActivePendingCount);
             AssertPosition(world, 540, new GridCoord(0, 0));
             AssertPosition(world, 541, new GridCoord(0, 1));
             AssertPosition(world, 542, new GridCoord(2, 0));
@@ -882,8 +1450,6 @@ namespace DG.EditorTests
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(second.ActionResults.Values.Any(result => !result.Success));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 552, new GridCoord(2, 0));
             AssertPosition(world, 553, new GridCoord(1, 1));
             AssertPosition(world, 550, new GridCoord(0, 0));
@@ -908,7 +1474,6 @@ namespace DG.EditorTests
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 560, new GridCoord(0, 0));
             AssertPosition(world, 561, new GridCoord(0, 1));
             AssertPosition(world, 562, new GridCoord(1, 0));
@@ -931,7 +1496,6 @@ namespace DG.EditorTests
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 450, new GridCoord(0, 0));
             AssertPosition(world, 451, new GridCoord(1, 0));
             AssertPosition(world, 452, new GridCoord(2, 0));
@@ -976,8 +1540,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 471, new GridCoord(1, 0));
             AssertPosition(world, 472, new GridCoord(2, 0));
         }
@@ -1004,8 +1566,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 481, new GridCoord(1, 0));
             AssertPosition(world, 482, new GridCoord(2, 0));
             AssertPosition(world, 483, new GridCoord(3, 0));
@@ -1026,7 +1586,6 @@ namespace DG.EditorTests
             StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
-            Assert.AreEqual(0, result.ActivePendingCount);
             AssertPosition(world, 430, new GridCoord(1, 0));
             AssertPosition(world, 431, new GridCoord(2, 0));
         }
@@ -1050,8 +1609,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
-            Assert.AreEqual(0, first.ActivePendingCount);
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 380, new GridCoord(0, 0));
             AssertPosition(world, 381, new GridCoord(1, 0));
         }
@@ -1080,10 +1637,6 @@ namespace DG.EditorTests
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, second.ActivePendingCount);
-            Assert.AreEqual(0, third.ActivePendingCount);
-            Assert.AreEqual(0, fourth.ActivePendingCount);
-            Assert.AreEqual(0, fifth.ActivePendingCount);
             AssertPosition(world, 390, new GridCoord(0, 0));
             AssertPosition(world, 391, new GridCoord(1, 0));
             AssertPosition(world, 392, new GridCoord(3, 0));
@@ -1120,9 +1673,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
-            Assert.AreEqual(0, third.ActivePendingCount);
-            Assert.AreEqual(0, fourth.ActivePendingCount);
-            Assert.AreEqual(0, fifth.ActivePendingCount);
             AssertPosition(world, 490, new GridCoord(0, 0));
             AssertPosition(world, 491, new GridCoord(1, 0));
             AssertPosition(world, 492, new GridCoord(2, 0));
@@ -1145,7 +1695,6 @@ namespace DG.EditorTests
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
-            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.AreEqual(1, first.DeferredActions.Count);
             AssertPosition(world, 720, new GridCoord(0, 0));
             AssertPosition(world, 721, new GridCoord(1, 0));
@@ -1168,7 +1717,6 @@ namespace DG.EditorTests
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
-            Assert.AreEqual(0, second.ActivePendingCount);
             AssertPosition(world, 730, new GridCoord(0, 0));
             AssertPosition(world, 731, new GridCoord(2, 0));
         }
@@ -1186,9 +1734,14 @@ namespace DG.EditorTests
             world.NextTick();
             var registry = new ActionSpecRegistry(new[]
             {
-                new ActionSpec("policy_a", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
-                new ActionSpec("policy_b", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, ActionBlockedPolicy.StartPushIfPushable, ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
-                ActionSpecRegistry.Default.Get("configured_wind_push")
+                new ActionSpec("policy_a", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "equivalent_push", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
+                new ActionSpec("policy_b", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "equivalent_push", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
+                ActionSpecRegistry.Default.Get("configured_wind_push"),
+                ActionSpecRegistry.Default.Get("mechanism_push")
+            }, new[]
+            {
+                BlockedResultPolicyFactory.PushPolicy("equivalent_push", "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny),
+                ActionSpecRegistry.Default.GetBlockedResultPolicy("immune_push_or_block")
             });
 
             StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem(registry).Tick(world, new[]
@@ -1224,7 +1777,6 @@ namespace DG.EditorTests
             Assert.AreEqual(1, first.DeferredActions.Count);
             Assert.AreEqual(1, first.DeferredActions[0].CostTicks);
             Assert.AreEqual(first.DeferredActions[0].CreatedTick + 1, first.DeferredActions[0].ReadyTick);
-            Assert.AreEqual(0, first.ActivePendingCount);
             Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
             Assert.IsFalse(second.Reasons.Contains("push chain cycle"));
         }
@@ -1248,7 +1800,6 @@ namespace DG.EditorTests
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.IsFalse(second.ActionResults.Values.Any(result => result.Success));
-            Assert.AreEqual(0, first.ActivePendingCount);
             AssertPosition(world, 760, new GridCoord(0, 0));
             AssertPosition(world, 761, new GridCoord(1, 0));
         }
@@ -1388,40 +1939,35 @@ namespace DG.EditorTests
 
             Assert.IsFalse(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(0, first.DeferredActions.Count);
-            Assert.AreEqual(0, first.ActivePendingCount);
         }
 
         [Test]
-        public void PushChainCycleGuard_RejectsPartialSubjectOverlap()
+        public void DeferredOutputQueue_MergesSameSubjectOverlap()
         {
-            var pending = new PendingRuleStateStore();
-            PendingActionState state = pending.AddHandoffActionState(MoveRequest(31, "player_move", WorldActionPriority.Player, 700, Direction.Right), 701, Direction.Right, 0, 1, "player_push", new[] { 701L, 702L });
+            var queue = new WorldActionQueue();
 
-            bool added = state.TryAddChildUnits(MoveRequest(state.ReadyUnit.ActionUnitId, "player_push", WorldActionPriority.Player, 701, Direction.Right, state.StateId), new[]
-            {
-                new PendingChildUnitRequest(703, "player_push", new[] { 702L, 703L })
-            }, Direction.Right, 1, out string reason);
+            DeferredEnqueueResult first = queue.EnqueueDeferred(new DeferredAction("player_push", 701, new[] { 701L, 702L }, Direction.Right, 10, 11, 1, 31, "first"));
+            DeferredEnqueueResult second = queue.EnqueueDeferred(new DeferredAction("player_push", 701, new[] { 701L, 702L }, Direction.Right, 10, 11, 1, 32, "second"));
 
-            Assert.IsFalse(added);
-            Assert.AreEqual("push chain cycle", reason);
-            Assert.AreEqual(PendingRuleStatus.Active, state.Status);
+            Assert.IsTrue(first.Enqueued);
+            Assert.IsTrue(second.Merged);
+            Assert.AreSame(first.Action, second.Action);
+            Assert.AreEqual(2, second.ContributionCount);
         }
 
         [Test]
-        public void PendingSiblingBatch_UsesFilteredChildrenWhenSubjectAlreadyReady()
+        public void DeferredOutputQueue_DoesNotCreateDuplicateBatchForSameSubject()
         {
-            var pending = new PendingRuleStateStore();
-            PendingActionState state = pending.AddHandoffActionState(MoveRequest(41, "player_move", WorldActionPriority.Player, 610, Direction.Right), 611, Direction.Right, 0, 1, "player_push", new[] { 611L, 612L });
+            var queue = new WorldActionQueue();
 
-            bool added = state.TryAddSiblingUnitsToReadyBatch(new[]
-            {
-                new PendingChildUnitRequest(611, "player_push", new[] { 611L, 612L }),
-                new PendingChildUnitRequest(612, "player_push", new[] { 611L, 612L })
-            }, Direction.Right, 1, out string reason);
+            DeferredEnqueueResult first = queue.EnqueueDeferred(new DeferredAction("player_push", 611, new[] { 611L, 612L }, Direction.Right, 20, 21, 1, 41, "first"));
+            DeferredEnqueueResult second = queue.EnqueueDeferred(new DeferredAction("player_push", 612, new[] { 611L, 612L }, Direction.Right, 20, 21, 1, 42, "second"));
+            IReadOnlyList<WorldAction> ready = queue.DrainReady(21);
 
-            Assert.IsTrue(added, reason);
-            Assert.AreEqual(1, state.Units.Count);
-            Assert.AreEqual(0, state.PushContactBatches.Count);
+            Assert.IsTrue(first.Enqueued);
+            Assert.IsTrue(second.Merged);
+            Assert.AreEqual(1, ready.Count);
+            Assert.AreEqual(2, ready[0].DeferredContributionCount);
         }
 
         [Test]
@@ -1446,8 +1992,15 @@ namespace DG.EditorTests
         {
             string root = RepositoryRoot();
             string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Execution", "StateDrivenRules.cs"));
-            string actions = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionSpecs.cs"));
-            string pending = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Pending", "PendingRuleStates.cs"));
+            string actions = string.Concat(new[]
+            {
+                File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionArbiter.cs")),
+                File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionClaims.cs")),
+                File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionRequests.cs")),
+                File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionSpecRegistry.cs")),
+                File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "BlockedResultResolver.cs"))
+            });
+            string pendingPath = Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Pending", "PendingRuleStates.cs");
             string removedDefaultRegistryFactory = "private static ActionSpecRegistry " + "CreateDefault()";
             int createDefault = actions.IndexOf(removedDefaultRegistryFactory, StringComparison.Ordinal);
             string runtimeActions = createDefault >= 0 ? actions.Substring(0, createDefault) : actions;
@@ -1466,20 +2019,16 @@ namespace DG.EditorTests
             Assert.IsFalse(actions.Contains("ToMoveIntent"));
             Assert.IsFalse(runtimeActions.Contains("\"player_push\""));
             Assert.IsFalse(runtimeActions.Contains("\"connected_body_move\""));
-            Assert.IsFalse(pending.Contains("\"player_push\""));
+            Assert.IsFalse(File.Exists(pendingPath));
         }
 
         [Test]
-        public void PendingHandoffState_DoesNotExposeParentRetryApi()
+        public void LegacyPendingHandoffState_IsRemoved()
         {
             string root = RepositoryRoot();
-            string pending = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Pending", "PendingRuleStates.cs"));
+            string pendingPath = Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Pending", "PendingRuleStates.cs");
 
-            Assert.IsFalse(pending.Contains("ReadyToRetry"));
-            Assert.IsFalse(pending.Contains("BeginDerivedAction"));
-            Assert.IsFalse(pending.Contains("AddDerivedActionState"));
-            Assert.IsFalse(pending.Contains("WaitingForDerived"));
-            Assert.IsFalse(pending.Contains("RetryCount"));
+            Assert.IsFalse(File.Exists(pendingPath));
         }
 
         private static ActionRequest MoveRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, long entityId, Direction direction, long sourceStateId = 0)
@@ -1526,11 +2075,52 @@ namespace DG.EditorTests
             Assert.AreEqual(targetRule, spec.TargetRule);
         }
 
+        private static ActionContext Context(long actionId, ActionSpecId specId, long entityId, Direction direction)
+        {
+            ActionSpec spec = Spec(specId, ActionTargetRule.DirectionFromRequest);
+            var request = new ActionRequest(
+                actionId,
+                specId,
+                WorldActionPriority.Mechanism,
+                new ActionSourceContext(spec.DefaultSource, entityId, 0, spec.SourceTag),
+                entityId,
+                new ActionTarget(0, null, direction),
+                default,
+                0,
+                0,
+                0);
+            Assert.IsTrue(request.TryCreateContext(spec, out ActionContext context, out _));
+            return context;
+        }
+
+        private static ActionSpec Spec(ActionSpecId specId, ActionTargetRule targetRule)
+        {
+            return new ActionSpec(specId, ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, targetRule, "front_reject", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None);
+        }
+
+        private static ActionSpecRegistry FrontMoveRegistry()
+        {
+            return new ActionSpecRegistry(new[]
+            {
+                Spec("front_move_all", ActionTargetRule.FrontEntities)
+            }, new[]
+            {
+                BlockedResultPolicyFactory.RejectPolicy("front_reject")
+            });
+        }
+
         private static void AssertPosition(GameWorld world, long entityId, GridCoord expected)
         {
             Assert.IsTrue(world.TryGetEntity(entityId, out GameEntity entity));
             Assert.IsTrue(world.TryGetComponent(entity, out PositionComponent position));
             Assert.AreEqual(expected, position.Coord);
+        }
+
+        private static void AssertDirection(GameWorld world, long entityId, Direction expected)
+        {
+            Assert.IsTrue(world.TryGetEntity(entityId, out GameEntity entity));
+            Assert.IsTrue(world.TryGetComponent(entity, out DirectionComponent direction));
+            Assert.AreEqual(expected, direction.Direction);
         }
 
         private static StateDrivenRuleExecutionResult TickAndEnqueueDeferred(StateDrivenRuleExecutionSystem system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions)
@@ -1568,6 +2158,257 @@ namespace DG.EditorTests
                 Assert.IsTrue(world.TryGetEntity(entityIds[i], out GameEntity entity));
                 world.AddTag(entity, WorldTag.AbilityMechanismPush);
             }
+        }
+
+        [Test]
+        public void PolicyDataChange_ChangesBehaviorWithoutModifyingCoreModules()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(900, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(901, new GridCoord(1, 0))));
+            AddMechanismAbility(world, 900);
+            world.NextTick();
+
+            var registryWithDerive = new ActionSpecRegistry(new[]
+            {
+                new ActionSpec("test_push_derive", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "derive_only", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, new ActionHandoffSpec(ActionHandoffPolicy.Configured, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny)),
+                ActionSpecRegistry.Default.Get("configured_wind_push"),
+                ActionSpecRegistry.Default.Get("mechanism_push")
+            }, new[]
+            {
+                new BlockedResultPolicy(new BlockedResultPolicyId("derive_only"), new[]
+                {
+                    new BlockedResultBranch(1, System.Array.Empty<ActionCondition>(), BlockedResultKind.DeriveAction, "configured_wind_push", ActionSubjectKind.ConnectedBodyIfAny, "derived", MoveErrorCode.None, ActionCommitRule.None)
+                }),
+                ActionSpecRegistry.Default.GetBlockedResultPolicy("immune_push_or_block")
+            });
+
+            var registryWithBlock = new ActionSpecRegistry(new[]
+            {
+                new ActionSpec("test_push_block", ActionPrimitive.Move, ActionSourceKind.Mechanism, WorldActionPriority.Mechanism, WorldTag.SourceMechanism, WorldTag.AbilityMechanismPush, WorldTag.None, WorldTag.None, ActionTargetRule.DirectionFromRequest, "block_only", ActionConflictPolicy.ExclusiveTargetCell, ActionInterruptPolicy.HigherPriorityInterruptsLower, ActionMergePolicy.SameClaim, ActionPlanRule.MoveBody, ActionCommitRule.None, ActionSubjectKind.ConnectedBodyIfAny, ActionHandoffSpec.None),
+                ActionSpecRegistry.Default.Get("configured_wind_push"),
+                ActionSpecRegistry.Default.Get("mechanism_push")
+            }, new[]
+            {
+                new BlockedResultPolicy(new BlockedResultPolicyId("block_only"), new[]
+                {
+                    new BlockedResultBranch(1, System.Array.Empty<ActionCondition>(), BlockedResultKind.Reject, default, ActionSubjectKind.HitEntity, "blocked", MoveErrorCode.Blocked, ActionCommitRule.None)
+                }),
+                ActionSpecRegistry.Default.GetBlockedResultPolicy("immune_push_or_block")
+            });
+
+            StateDrivenRuleExecutionResult withDerive = new StateDrivenRuleExecutionSystem(registryWithDerive).Tick(world,
+                new[] { new WorldAction(1, WorldActionPriority.Mechanism, "test_push_derive", 900, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1) },
+                world.ServerTick);
+
+            StateDrivenRuleExecutionResult withBlock = new StateDrivenRuleExecutionSystem(registryWithBlock).Tick(world,
+                new[] { new WorldAction(2, WorldActionPriority.Mechanism, "test_push_block", 900, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1) },
+                world.ServerTick);
+
+            Assert.AreEqual(1, withDerive.DeferredActions.Count, "derive policy should produce deferred output");
+            Assert.AreEqual(new ActionSpecId("configured_wind_push"), withDerive.DeferredActions[0].SpecId);
+            Assert.AreEqual(0, withBlock.DeferredActions.Count, "block policy should produce no deferred output");
+            Assert.IsTrue(withBlock.ActionResults.Values.Any(r => !r.Success), "block policy should reject");
+        }
+
+        [Test]
+        public void RuleModules_DoNotContainOrdinaryActionNameBranches()
+        {
+            string root = RepositoryRoot();
+            string[] ruleFiles = new[]
+            {
+                Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "ActionPipeline.cs"),
+                Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Execution", "StateDrivenRules.cs"),
+                Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Commit", "CommitRules.cs"),
+                Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Commit", "ConflictResolver.cs"),
+                Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Planning", "RulePlanning.cs"),
+            };
+            string[] forbiddenNames = { "\"player_move\"", "\"auto_move\"", "\"mechanism_push\"", "\"debug_move\"", "\"configured_wind_push\"" };
+
+            foreach (string file in ruleFiles)
+            {
+                if (!File.Exists(file)) continue;
+                string content = File.ReadAllText(file);
+                foreach (string name in forbiddenNames)
+                {
+                    Assert.IsFalse(content.Contains(name), $"{Path.GetFileName(file)} must not branch on action name {name}");
+                }
+            }
+        }
+
+        [Test]
+        public void ActionStrategyRegistry_AddsStrategyWithoutExecutionBranch()
+        {
+            var registry = new ActionStrategyRegistry();
+            var strategy = new TestRuntimeEffectStrategy();
+            registry.Register(strategy);
+
+            var spec = new ActionSpec("test_runtime_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Runtime, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None);
+
+            Assert.AreSame(strategy, registry.Get(spec));
+
+            string root = RepositoryRoot();
+            string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Execution", "StateDrivenRules.cs"));
+            Assert.IsFalse(execution.Contains("ActionPrimitiveProcessor"));
+            Assert.IsFalse(execution.Contains("ActionPrimitive.ApplyRuntimeEffect"));
+        }
+
+        [Test]
+        public void ActionStrategyAttribute_GeneratesExplicitRegistrationSource()
+        {
+            var descriptors = new[]
+            {
+                new ActionStrategyRegistrationDescriptor(ActionPrimitive.ApplyRuntimeEffect, "runtime_effect", typeof(TestRuntimeEffectStrategy).FullName)
+            };
+
+            string source = ActionStrategyRegistrationGenerator.GenerateSource("DG.GameCore", "GeneratedActionStrategyRegistration", descriptors);
+
+            Assert.IsTrue(source.Contains("registry.Register(new DG.EditorTests.DataDrivenRuntimeActionTests.TestRuntimeEffectStrategy());"));
+            Assert.IsFalse(source.Contains("GetCustomAttribute"));
+            Assert.IsFalse(source.Contains("GetTypes"));
+            Assert.IsFalse(source.Contains("Activator.CreateInstance"));
+        }
+
+        [Test]
+        public void ActionStrategyRegistrationGenerator_RejectsDuplicateKeys()
+        {
+            var descriptors = new[]
+            {
+                new ActionStrategyRegistrationDescriptor(ActionPrimitive.ApplyRuntimeEffect, "duplicate", typeof(TestRuntimeEffectStrategy).FullName),
+                new ActionStrategyRegistrationDescriptor(ActionPrimitive.SetComponentResult, "duplicate", typeof(TestSetComponentResultStrategy).FullName)
+            };
+
+            Assert.Throws<InvalidOperationException>(() => ActionStrategyRegistrationGenerator.Validate(descriptors));
+        }
+
+        [Test]
+        public void GeneratedRegisteredStrategy_EntersRealRuleTick()
+        {
+            var actionSpecs = new ActionSpecRegistry(new[]
+            {
+                new ActionSpec("test_runtime_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Runtime, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None)
+            }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
+            ActionStrategyRegistry strategies = TestGeneratedActionStrategyRegistration.CreateDefault();
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(930, 930, new GridCoord(0, 0))));
+            var queue = new WorldActionQueue(actionSpecs);
+            WorldAction action = queue.EnqueueConfiguredMove("test_runtime_effect", 930, Direction.None, 0, 1);
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(actionSpecs, strategies).Tick(world, queue.DrainReady(1), 1);
+
+            Assert.IsTrue(result.ActionResults[action.ActionId].Success);
+            Assert.AreEqual("test-runtime-effect", result.ActionResults[action.ActionId].Reason);
+            Assert.IsTrue(result.Reasons.Contains("test-runtime-effect"));
+            Assert.AreEqual(new GridCoord(0, 0), result.ActionResults[action.ActionId].FinalCoord);
+        }
+
+        [Test]
+        public void RuntimeTickPath_DoesNotScanStrategyAttributes()
+        {
+            string root = RepositoryRoot();
+            string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Execution", "StateDrivenRules.cs"));
+            string generated = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "Rules", "Actions", "GeneratedActionStrategyRegistration.cs"));
+
+            Assert.IsFalse(execution.Contains("GetCustomAttribute"));
+            Assert.IsFalse(execution.Contains("GetTypes"));
+            Assert.IsFalse(execution.Contains("Activator.CreateInstance"));
+            Assert.IsFalse(generated.Contains("GetCustomAttribute"));
+            Assert.IsFalse(generated.Contains("GetTypes"));
+            Assert.IsFalse(generated.Contains("Activator.CreateInstance"));
+        }
+
+        [Test]
+        public void ActionUnitStateMachine_RecordsExplicitLifecycleTransitions()
+        {
+            var stateMachine = new ActionUnitStateMachine();
+
+            ActionUnitTransition ready = stateMachine.Advance(1, ActionUnitLifecycleState.Ready);
+            ActionUnitTransition candidate = stateMachine.Advance(1, ActionUnitLifecycleState.CandidateBuilt);
+            ActionUnitTransition accepted = stateMachine.Advance(1, ActionUnitLifecycleState.Accepted);
+            ActionUnitTransition deferred = stateMachine.Advance(1, ActionUnitLifecycleState.DeferredOutputEmitted);
+            ActionUnitTransition completed = stateMachine.Advance(1, ActionUnitLifecycleState.Completed);
+
+            Assert.AreEqual(ActionUnitLifecycleState.Queued, ready.From);
+            Assert.AreEqual(ActionUnitLifecycleState.Ready, ready.To);
+            Assert.AreEqual(ActionUnitLifecycleState.Ready, candidate.From);
+            Assert.AreEqual(ActionUnitLifecycleState.CandidateBuilt, accepted.From);
+            Assert.AreEqual(ActionUnitLifecycleState.Accepted, deferred.From);
+            Assert.AreEqual(ActionUnitLifecycleState.DeferredOutputEmitted, completed.From);
+            Assert.AreEqual(ActionUnitLifecycleState.Completed, stateMachine.Get(1));
+        }
+
+        [Test]
+        public void ActionArbitrationResult_RecordsLifecycleTransitionsFromUnifiedStateMachine()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(360, new GridCoord(0, 0), Direction.Right)));
+
+            ActionArbitrationResult arbitration = new ActionArbiter().ArbitrateMoves(world, new[]
+            {
+                MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 360, Direction.Right)
+            }, 1);
+
+            CollectionAssert.AreEqual(new[]
+            {
+                ActionUnitLifecycleState.Ready,
+                ActionUnitLifecycleState.CandidateBuilt,
+                ActionUnitLifecycleState.Accepted
+            }, arbitration.Transitions.Select(transition => transition.To).ToArray());
+        }
+
+        [Test]
+        public void RuleExecutionResult_RecordsPlannedAndCommittedLifecycleTransitions()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(361, new GridCoord(0, 0), Direction.Right)));
+            var queue = new WorldActionQueue();
+            queue.EnqueueConfiguredMove("mechanism_push", 361, Direction.Right, 0, 1);
+
+            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(1), 1);
+
+            Assert.IsTrue(result.Transitions.Any(transition => transition.ActionId == 1 && transition.To == ActionUnitLifecycleState.Planned));
+            Assert.IsTrue(result.Transitions.Any(transition => transition.ActionId == 1 && transition.To == ActionUnitLifecycleState.Committed));
+        }
+
+        private sealed class TestRuntimeEffectStrategy : IActionStrategy
+        {
+            public ActionPrimitive Primitive => ActionPrimitive.ApplyRuntimeEffect;
+
+            public void Process(ActionStrategyContext context)
+            {
+                context.ActionResults[context.Request.ActionId] = new MoveResult(true, context.Request.EntityId, CurrentCoord(context.World, context.Request.EntityId), Direction.None, MoveErrorCode.None, "test-runtime-effect", false, default, context.Request.ClientTick);
+                context.Reasons.Add("test-runtime-effect");
+            }
+        }
+
+        private sealed class TestSetComponentResultStrategy : IActionStrategy
+        {
+            public ActionPrimitive Primitive => ActionPrimitive.SetComponentResult;
+
+            public void Process(ActionStrategyContext context)
+            {
+            }
+        }
+
+        private static class TestGeneratedActionStrategyRegistration
+        {
+            public static ActionStrategyRegistry CreateDefault()
+            {
+                var registry = new ActionStrategyRegistry();
+                registry.Register(new MoveActionStrategy());
+                registry.Register(new RemoveActionStrategy());
+                registry.Register(new SpawnActionStrategy());
+                registry.Register(new TestRuntimeEffectStrategy());
+                return registry;
+            }
+        }
+
+        private static GridCoord CurrentCoord(GameWorld world, long entityId)
+        {
+            return world.TryGetEntity(entityId, out GameEntity entity) &&
+                world.TryGetComponent(entity, out PositionComponent position)
+                ? position.Coord
+                : default;
         }
 
         private static string RepositoryRoot()

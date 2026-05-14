@@ -1,0 +1,23 @@
+[
+  {
+    "filter_id": "target_filter_none",
+    "conditions": []
+  },
+  {
+    "filter_id": "target_filter_pushable_position",
+    "conditions": [
+      {
+        "kind": 1,
+        "subject": 1,
+        "component_kind": "Position",
+        "tag": ""
+      },
+      {
+        "kind": 1,
+        "subject": 1,
+        "component_kind": "Pushable",
+        "tag": ""
+      }
+    ]
+  }
+]

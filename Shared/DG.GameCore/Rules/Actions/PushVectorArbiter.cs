@@ -163,7 +163,7 @@ public sealed class PushVectorArbiter
             output.Add(CloneWithDirection(representative, path[0]));
             if (path.Count > 1)
             {
-                reasons.Add("push-vector-path-pending");
+                reasons.Add("push-vector-path-deferred");
             }
         }
 
@@ -175,13 +175,26 @@ public sealed class PushVectorArbiter
             merged);
     }
 
-    private static bool IsPushContribution(ActionSpec spec, ActionRequest request)
+    private bool IsPushContribution(ActionSpec spec, ActionRequest request)
     {
+        BlockedResultPolicy policy = registry.GetBlockedResultPolicy(spec.BlockedResultPolicyId);
         return spec.Primitive == ActionPrimitive.Move &&
             spec.TargetRule == ActionTargetRule.DirectionFromRequest &&
-            spec.BlockedPolicy == ActionBlockedPolicy.StartPushIfPushable &&
-            spec.Handoff.IsEnabled &&
+            HasDeriveActionBranch(policy) &&
             request.Target.Direction != Direction.None;
+    }
+
+    private static bool HasDeriveActionBranch(BlockedResultPolicy policy)
+    {
+        for (int i = 0; i < policy.Branches.Count; i++)
+        {
+            if (policy.Branches[i].ResultKind == BlockedResultKind.DeriveAction)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool TryBuildContribution(GameWorld world, ActionRequest request, ActionSpec spec, out PushVectorContribution contribution)

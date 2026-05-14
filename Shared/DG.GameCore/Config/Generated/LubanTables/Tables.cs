@@ -18,6 +18,10 @@ public partial class Tables
     public gamecore.TbPlayerSpawnRule TbPlayerSpawnRule {get; }
     public gamecore.TbPortConnectorConfig TbPortConnectorConfig {get; }
     public gamecore.TbPushOnEnterConfig TbPushOnEnterConfig {get; }
+    public gamecore.TbTargetFilterSpec TbTargetFilterSpec {get; }
+    public gamecore.TbTargetingSpec TbTargetingSpec {get; }
+    public gamecore.TbBlockedResultPolicy TbBlockedResultPolicy {get; }
+    public gamecore.TbBlockedResultBranch TbBlockedResultBranch {get; }
     public gamecore.TbActionSpec TbActionSpec {get; }
     public gamecore.TbAnimationStyle TbAnimationStyle {get; }
 
@@ -29,6 +33,10 @@ public partial class Tables
         TbPlayerSpawnRule = new gamecore.TbPlayerSpawnRule(loader("gamecore_tbplayerspawnrule"));
         TbPortConnectorConfig = new gamecore.TbPortConnectorConfig(loader("gamecore_tbportconnectorconfig"));
         TbPushOnEnterConfig = new gamecore.TbPushOnEnterConfig(loader("gamecore_tbpushonenterconfig"));
+        TbTargetFilterSpec = new gamecore.TbTargetFilterSpec(loader("gamecore_tbtargetfilterspec"));
+        TbTargetingSpec = new gamecore.TbTargetingSpec(loader("gamecore_tbtargetingspec"));
+        TbBlockedResultPolicy = new gamecore.TbBlockedResultPolicy(loader("gamecore_tbblockedresultpolicy"));
+        TbBlockedResultBranch = new gamecore.TbBlockedResultBranch(loader("gamecore_tbblockedresultbranch"));
         TbActionSpec = new gamecore.TbActionSpec(loader("gamecore_tbactionspec"));
         TbAnimationStyle = new gamecore.TbAnimationStyle(loader("gamecore_tbanimationstyle"));
         ResolveRef();
@@ -41,6 +49,10 @@ public partial class Tables
         TbPlayerSpawnRule.ResolveRef(this);
         TbPortConnectorConfig.ResolveRef(this);
         TbPushOnEnterConfig.ResolveRef(this);
+        TbTargetFilterSpec.ResolveRef(this);
+        TbTargetingSpec.ResolveRef(this);
+        TbBlockedResultPolicy.ResolveRef(this);
+        TbBlockedResultBranch.ResolveRef(this);
         TbActionSpec.ResolveRef(this);
         TbAnimationStyle.ResolveRef(this);
     }

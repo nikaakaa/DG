@@ -6,33 +6,43 @@ namespace DG.GameCore
 {
 public sealed class GameWorld
 {
-    private readonly Dictionary<long, GameEntity> entities = new();
-    private readonly Dictionary<Type, IComponentStore> componentStores = new();
+    private readonly IWorldDataStorage storage;
     private readonly ChunkStore chunks = new();
     private readonly SpatialEntityIndex spatial = new();
+    private readonly EntityLocationStore entityLocations = new();
     private readonly SpatialDirtyTracker spatialDirty = new();
-    private readonly List<DirtyChange> dirtyChanges = new();
-    private readonly List<long> removedEntityIds = new();
-    private readonly List<WorldDeltaAnimationMetadata> animationMetadata = new();
+    private readonly DirtyWorldJournal dirtyJournal = new();
     private readonly IGameConfigProvider configProvider;
     private readonly RuntimeEffectStore runtimeEffects = new();
     private readonly ComponentStateResolver componentStateResolver = new();
+    private readonly GameWorldObservationCounters observations = new();
 
-    public GameWorld() : this(LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()))
+    public GameWorld() : this(LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()), new IndexedWorldDataStorage())
     {
     }
 
-    public GameWorld(IGameConfigProvider configProvider)
+    public GameWorld(IGameConfigProvider configProvider) : this(configProvider, new IndexedWorldDataStorage())
+    {
+    }
+
+    internal GameWorld(IGameConfigProvider configProvider, IWorldDataStorage storage)
     {
         this.configProvider = configProvider ?? throw new ArgumentNullException(nameof(configProvider));
+        this.storage = storage ?? throw new ArgumentNullException(nameof(storage));
     }
 
     public long ServerTick { get; private set; }
-    public int EntityCount => entities.Count;
+    public int EntityCount => storage.EntityCount;
     public IReadOnlyDictionary<long, Chunk> LoadedChunks => chunks.LoadedChunks;
     public IReadOnlyCollection<long> ChangedCells => spatialDirty.ChangedCells;
     public IReadOnlyCollection<long> ChangedChunks => spatialDirty.ChangedChunks;
     public RuntimeEffectStore RuntimeEffects => runtimeEffects;
+    public GameWorldObservation Observations => observations.Snapshot();
+
+    public void ResetObservations()
+    {
+        observations.Reset();
+    }
 
     public long NextTick()
     {
@@ -41,13 +51,13 @@ public sealed class GameWorld
 
     public bool AddEntity(GameEntity entity)
     {
-        if (entities.ContainsKey(entity.EntityId))
+        if (!storage.AddEntity(entity))
         {
             return false;
         }
 
-        entities.Add(entity.EntityId, entity);
         MarkDirty(entity.EntityId);
+        entityLocations.Register(entity.EntityId, entity.EntityTarget);
         return true;
     }
 
@@ -82,7 +92,7 @@ public sealed class GameWorld
 
     public bool RemoveEntity(long entityId)
     {
-        if (!entities.Remove(entityId, out GameEntity entity))
+        if (!storage.RemoveEntity(entityId, out GameEntity entity))
         {
             return false;
         }
@@ -92,19 +102,15 @@ public sealed class GameWorld
             RemoveSpatial(entity.EntityId, spatialCoord);
         }
 
-        foreach (IComponentStore store in componentStores.Values)
-        {
-            store.Remove(entityId);
-        }
-
         componentStateResolver.RemoveEntity(entityId);
+        entityLocations.Remove(entityId);
         MarkRemoved(entityId);
         return true;
     }
 
     public bool TryGetEntity(long entityId, out GameEntity entity)
     {
-        if (entities.TryGetValue(entityId, out GameEntity found))
+        if (storage.TryGetEntity(entityId, out GameEntity found))
         {
             entity = found;
             return true;
@@ -116,16 +122,92 @@ public sealed class GameWorld
 
     public IReadOnlyList<GameEntity> EnumerateEntities()
     {
-        return entities.Values.OrderBy(entity => entity.EntityId).ToArray();
+        return EnumerateEntities(EntityIterationOrder.EntityId);
+    }
+
+    public IReadOnlyList<GameEntity> EnumerateEntities(EntityIterationOrder order)
+    {
+        observations.EntityEnumerationCount++;
+        if (order == EntityIterationOrder.EntityId)
+        {
+            observations.EntityEnumerationSortCount++;
+        }
+
+        return storage.EnumerateEntities(order);
+    }
+
+    public bool TryGetEntityLocation(long entityId, out EntityLocation location)
+    {
+        if (!storage.TryGetEntity(entityId, out _))
+        {
+            location = default;
+            return false;
+        }
+
+        return entityLocations.TryGet(entityId, out location);
+    }
+
+    public IReadOnlyList<GameEntity> QueryEntities(ComponentQueryDescriptor descriptor, EntityIterationOrder order = EntityIterationOrder.Unordered)
+    {
+        observations.ComponentQueryCount++;
+        IReadOnlyList<Type> componentTypes = descriptor.ComponentTypes;
+        if (componentTypes.Count == 0)
+        {
+            return EnumerateEntities(order);
+        }
+
+        if (order == EntityIterationOrder.EntityId)
+        {
+            observations.EntityEnumerationSortCount++;
+        }
+
+        return storage.QueryEntities(componentTypes, order);
+    }
+
+    public IReadOnlyList<AutoMoveQueryResult> QueryAutoMove(EntityIterationOrder order = EntityIterationOrder.EntityId)
+    {
+        IReadOnlyList<GameEntity> entities = QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, AutoMoveComponent>(), order);
+        var result = new List<AutoMoveQueryResult>(entities.Count);
+        for (int i = 0; i < entities.Count; i++)
+        {
+            GameEntity entity = entities[i];
+            if (storage.TryGetComponent(entity.EntityId, out PositionComponent position) &&
+                storage.TryGetComponent(entity.EntityId, out DirectionComponent direction) &&
+                storage.TryGetComponent(entity.EntityId, out AutoMoveComponent autoMove))
+            {
+                result.Add(new AutoMoveQueryResult(entity.EntityId, position.Coord, direction.Direction, autoMove));
+            }
+        }
+
+        return result;
+    }
+
+    public IReadOnlyList<PushOnEnterQueryResult> QueryPushOnEnter(EntityIterationOrder order = EntityIterationOrder.EntityId)
+    {
+        IReadOnlyList<GameEntity> entities = QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, PushOnEnterComponent>(), order);
+        var result = new List<PushOnEnterQueryResult>(entities.Count);
+        for (int i = 0; i < entities.Count; i++)
+        {
+            GameEntity entity = entities[i];
+            if (storage.TryGetComponent(entity.EntityId, out PositionComponent position) &&
+                storage.TryGetComponent(entity.EntityId, out DirectionComponent direction) &&
+                storage.TryGetComponent(entity.EntityId, out PushOnEnterComponent pushOnEnter))
+            {
+                result.Add(new PushOnEnterQueryResult(entity.EntityId, position.Coord, direction.Direction, pushOnEnter));
+            }
+        }
+
+        return result;
     }
 
     public IReadOnlyList<GameEntity> GetEntitiesAt(GridCoord coord)
     {
+        observations.SpatialQueryCount++;
         var result = new List<GameEntity>();
         IReadOnlyList<long> ids = spatial.GetEntitiesAt(coord);
         foreach (long entityId in ids)
         {
-            if (entities.TryGetValue(entityId, out GameEntity entity))
+            if (storage.TryGetEntity(entityId, out GameEntity entity))
             {
                 result.Add(entity);
             }
@@ -136,11 +218,90 @@ public sealed class GameWorld
 
     public IReadOnlyList<GameEntity> GetEntitiesAt(GridCoord coord, int target)
     {
+        observations.SpatialQueryCount++;
         var result = new List<GameEntity>();
         IReadOnlyList<long> ids = spatial.GetEntitiesAt(coord, target);
         foreach (long entityId in ids)
         {
-            if (entities.TryGetValue(entityId, out GameEntity entity))
+            if (storage.TryGetEntity(entityId, out GameEntity entity))
+            {
+                result.Add(entity);
+            }
+        }
+
+        return result;
+    }
+
+    public bool TryGetFirstBlockingAt(GridCoord coord, HashSet<long> excludedEntityIds, out BlockingSpatialQueryResult result)
+    {
+        observations.SpatialQueryCount++;
+        IReadOnlyList<long> ids = spatial.GetEntitiesAt(coord);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            long entityId = ids[i];
+            if ((excludedEntityIds != null && excludedEntityIds.Contains(entityId)) ||
+                !storage.TryGetEntity(entityId, out GameEntity entity) ||
+                !storage.HasComponent<BlockingComponent>(entityId) ||
+                !storage.TryGetComponent(entityId, out PositionComponent position))
+            {
+                continue;
+            }
+
+            result = new BlockingSpatialQueryResult(entityId, position.Coord, entity.EntityTarget);
+            return true;
+        }
+
+        result = default;
+        return false;
+    }
+
+    public IReadOnlyList<ColliderSpatialQueryResult> GetColliderEntitiesAt(GridCoord coord, int target)
+    {
+        observations.SpatialQueryCount++;
+        IReadOnlyList<long> ids = spatial.GetEntitiesAt(coord, target);
+        var result = new List<ColliderSpatialQueryResult>(ids.Count);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            long entityId = ids[i];
+            if (storage.TryGetEntity(entityId, out GameEntity entity) &&
+                storage.HasComponent<ColliderComponent>(entityId) &&
+                storage.TryGetComponent(entityId, out PositionComponent position))
+            {
+                result.Add(new ColliderSpatialQueryResult(entityId, position.Coord, entity.EntityTarget));
+            }
+        }
+
+        return result;
+    }
+
+    public IReadOnlyList<PushableSpatialQueryResult> GetPushableEntitiesAt(GridCoord coord, int target)
+    {
+        observations.SpatialQueryCount++;
+        IReadOnlyList<long> ids = spatial.GetEntitiesAt(coord, target);
+        var result = new List<PushableSpatialQueryResult>(ids.Count);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            long entityId = ids[i];
+            if (storage.TryGetEntity(entityId, out GameEntity entity) &&
+                storage.HasComponent<PushableComponent>(entityId) &&
+                storage.TryGetComponent(entityId, out PositionComponent position))
+            {
+                result.Add(new PushableSpatialQueryResult(entityId, position.Coord, entity.EntityTarget));
+            }
+        }
+
+        return result;
+    }
+
+    public IReadOnlyList<GameEntity> GetPositionedEntitiesAt(GridCoord coord)
+    {
+        observations.SpatialQueryCount++;
+        IReadOnlyList<long> ids = spatial.GetEntitiesAt(coord);
+        var result = new List<GameEntity>(ids.Count);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            if (storage.TryGetEntity(ids[i], out GameEntity entity) &&
+                storage.HasComponent<PositionComponent>(entity.EntityId))
             {
                 result.Add(entity);
             }
@@ -156,11 +317,12 @@ public sealed class GameWorld
 
     public bool TryGetChunkEntities(GridCoord chunkCoord, int target, out IReadOnlyList<GameEntity> entitiesInChunk)
     {
+        observations.SpatialQueryCount++;
         bool found = spatial.TryGetChunkEntities(chunkCoord, target, out IReadOnlyList<long> ids);
         var result = new List<GameEntity>();
         for (int i = 0; i < ids.Count; i++)
         {
-            if (entities.TryGetValue(ids[i], out GameEntity entity))
+            if (storage.TryGetEntity(ids[i], out GameEntity entity))
             {
                 result.Add(entity);
             }
@@ -172,11 +334,12 @@ public sealed class GameWorld
 
     public IReadOnlyList<GameEntity> GetEntitiesAround(GridCoord centerWorldCoord, int cellRange, int target)
     {
+        observations.SpatialQueryCount++;
         IReadOnlyList<long> ids = spatial.GetEntitiesAround(centerWorldCoord, cellRange, target);
         var result = new List<GameEntity>();
         for (int i = 0; i < ids.Count; i++)
         {
-            if (entities.TryGetValue(ids[i], out GameEntity entity))
+            if (storage.TryGetEntity(ids[i], out GameEntity entity))
             {
                 result.Add(entity);
             }
@@ -247,16 +410,7 @@ public sealed class GameWorld
 
     public bool CanEnterNewEntity(GridCoord coord)
     {
-        IReadOnlyList<GameEntity> targets = GetEntitiesAt(coord);
-        for (int i = 0; i < targets.Count; i++)
-        {
-            if (HasComponent<BlockingComponent>(targets[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return !TryGetFirstBlockingAt(coord, null!, out _);
     }
 
     public void CaptureStaticComponentSources(GameEntity entity)
@@ -305,29 +459,34 @@ public sealed class GameWorld
 
     public IReadOnlyList<DirtyChange> PeekDirtyChanges()
     {
-        return dirtyChanges.ToArray();
+        return dirtyJournal.PeekChanges();
+    }
+
+    public void RecordTouchedDiagnostics(IReadOnlyCollection<long> entityIds)
+    {
+        if (entityIds != null)
+        {
+            observations.TouchedDiagnosticCount += entityIds.Count;
+        }
     }
 
     public void AddAnimationMetadata(WorldDeltaAnimationMetadata metadata)
     {
-        animationMetadata.Add(metadata);
+        dirtyJournal.AddAnimationMetadata(metadata);
     }
 
     public WorldDelta FlushDelta()
     {
+        observations.DeltaFlushCount++;
         var snapshots = new List<EntitySnapshot>();
         var removed = new List<long>();
-        var metadata = new List<WorldDeltaAnimationMetadata>();
-        var seen = new HashSet<long>();
-        for (int i = 0; i < dirtyChanges.Count; i++)
+        IReadOnlyList<DirtyChange> changes = dirtyJournal.PeekChanges();
+        IReadOnlyList<long> removedEntityIds = dirtyJournal.PeekRemoved();
+        for (int i = 0; i < changes.Count; i++)
         {
-            long entityId = dirtyChanges[i].EntityId;
-            if (!seen.Add(entityId))
-            {
-                continue;
-            }
+            long entityId = changes[i].EntityId;
 
-            if (entities.TryGetValue(entityId, out GameEntity entity))
+            if (storage.TryGetEntity(entityId, out GameEntity entity))
             {
                 snapshots.Add(CreateSnapshot(entity));
             }
@@ -335,24 +494,19 @@ public sealed class GameWorld
 
         for (int i = 0; i < removedEntityIds.Count; i++)
         {
-            long entityId = removedEntityIds[i];
-            if (seen.Add(entityId))
-            {
-                removed.Add(entityId);
-            }
+            removed.Add(removedEntityIds[i]);
         }
 
-        dirtyChanges.Clear();
-        removedEntityIds.Clear();
-        metadata.AddRange(animationMetadata);
-        animationMetadata.Clear();
+        IReadOnlyList<WorldDeltaAnimationMetadata> metadata = dirtyJournal.PeekAnimationMetadata();
+        dirtyJournal.Clear();
         return new WorldDelta(ServerTick, snapshots, removed, metadata);
     }
 
     public IReadOnlyList<EntitySnapshot> CreateSnapshot()
     {
+        observations.FullSnapshotBuildCount++;
         var result = new List<EntitySnapshot>();
-        foreach (GameEntity entity in entities.Values.OrderBy(entity => entity.EntityId))
+        foreach (GameEntity entity in storage.EnumerateEntities(EntityIterationOrder.EntityId))
         {
             result.Add(CreateSnapshot(entity));
         }
@@ -362,6 +516,7 @@ public sealed class GameWorld
 
     public EntitySnapshot CreateSnapshot(GameEntity entity)
     {
+        observations.TouchedSnapshotBuildCount++;
         GridCoord coord = TryGetComponent(entity, out PositionComponent position) ? position.Coord : default;
         Direction direction = TryGetComponent(entity, out DirectionComponent directionComponent) ? directionComponent.Direction : Direction.None;
         bool hasAutoMove = TryGetComponent(entity, out AutoMoveComponent autoMove);
@@ -392,13 +547,11 @@ public sealed class GameWorld
     public void MoveEntity(GameEntity entity, GridCoord target)
     {
         SetComponent(entity, new PositionComponent(target));
-        MarkDirty(entity.EntityId);
     }
 
     public void SetDirection(GameEntity entity, Direction direction)
     {
         SetComponent(entity, new DirectionComponent(direction));
-        MarkDirty(entity.EntityId);
     }
 
     public void SetAutoMove(GameEntity entity, AutoMoveComponent component)
@@ -436,60 +589,57 @@ public sealed class GameWorld
             RemoveSpatial(entity.EntityId, oldPosition.Coord);
         }
 
-        GetStore<PositionComponent>().Set(entity.EntityId, component);
+        storage.SetComponent(entity.EntityId, component);
+        entityLocations.SetCoord(entity.EntityId, component.Coord);
         GetOrCreateCell(component.Coord);
 
         if (HasComponent<ColliderComponent>(entity))
         {
             AddSpatial(entity.EntityId, component.Coord);
         }
+
+        MarkDirty(entity.EntityId);
     }
 
     public void SetComponent(GameEntity entity, ColliderComponent component)
     {
         bool hadComponent = HasComponent<ColliderComponent>(entity);
-        GetStore<ColliderComponent>().Set(entity.EntityId, component);
+        storage.SetComponent(entity.EntityId, component);
 
         if (!hadComponent &&
             TryGetComponent(entity, out PositionComponent position))
         {
             AddSpatial(entity.EntityId, position.Coord);
         }
+
+        MarkDirty(entity.EntityId);
     }
 
     public void SetComponent<TComponent>(GameEntity entity, TComponent component) where TComponent : struct
     {
-        GetStore<TComponent>().Set(entity.EntityId, component);
+        storage.SetComponent(entity.EntityId, component);
+        MarkDirty(entity.EntityId);
     }
 
     public bool HasComponent<TComponent>(GameEntity entity) where TComponent : struct
     {
-        return TryGetStore<TComponent>(out ComponentStore<TComponent> store) && store.Has(entity.EntityId);
+        observations.HasComponentCount++;
+        return storage.HasComponent<TComponent>(entity.EntityId);
     }
 
     public bool TryGetComponent<TComponent>(GameEntity entity, out TComponent component) where TComponent : struct
     {
-        if (TryGetStore<TComponent>(out ComponentStore<TComponent> store))
-        {
-            return store.TryGet(entity.EntityId, out component);
-        }
-
-        component = default;
-        return false;
+        observations.TryGetComponentCount++;
+        return storage.TryGetComponent(entity.EntityId, out component);
     }
 
     public TComponent GetComponent<TComponent>(GameEntity entity) where TComponent : struct
     {
-        return GetStore<TComponent>().Get(entity.EntityId);
+        return storage.GetComponent<TComponent>(entity.EntityId);
     }
 
     public bool RemoveComponent<TComponent>(GameEntity entity) where TComponent : struct
     {
-        if (!TryGetStore<TComponent>(out ComponentStore<TComponent> store))
-        {
-            return false;
-        }
-
         if (typeof(TComponent) == typeof(PositionComponent) &&
             TryGetComponent(entity, out PositionComponent oldPosition) &&
             HasComponent<ColliderComponent>(entity))
@@ -503,24 +653,33 @@ public sealed class GameWorld
             RemoveSpatial(entity.EntityId, position.Coord);
         }
 
-        bool removed = store.Remove(entity.EntityId);
+        bool removed = storage.RemoveComponent<TComponent>(entity.EntityId);
+        if (removed && typeof(TComponent) == typeof(PositionComponent))
+        {
+            entityLocations.ClearCoord(entity.EntityId);
+        }
+
+        if (removed)
+        {
+            MarkDirty(entity.EntityId);
+        }
+
         return removed;
     }
 
     public void MarkDirty(long entityId)
     {
-        dirtyChanges.Add(new DirtyChange(entityId, ServerTick));
+        dirtyJournal.MarkChanged(entityId, ServerTick);
     }
 
     private void MarkRemoved(long entityId)
     {
-        removedEntityIds.Add(entityId);
-        dirtyChanges.RemoveAll(change => change.EntityId == entityId);
+        dirtyJournal.MarkRemoved(entityId);
     }
 
     private void AddSpatial(long entityId, GridCoord coord)
     {
-        if (entities.TryGetValue(entityId, out GameEntity entity))
+        if (storage.TryGetEntity(entityId, out GameEntity entity))
         {
             if (spatial.HasEntity(entityId))
             {
@@ -542,31 +701,6 @@ public sealed class GameWorld
         {
             spatialDirty.MarkCell(coord);
         }
-    }
-
-    private ComponentStore<TComponent> GetStore<TComponent>() where TComponent : struct
-    {
-        Type type = typeof(TComponent);
-        if (!componentStores.TryGetValue(type, out IComponentStore store))
-        {
-            var typedStore = new ComponentStore<TComponent>();
-            componentStores.Add(type, typedStore);
-            return typedStore;
-        }
-
-        return (ComponentStore<TComponent>)store;
-    }
-
-    private bool TryGetStore<TComponent>(out ComponentStore<TComponent> store) where TComponent : struct
-    {
-        if (componentStores.TryGetValue(typeof(TComponent), out IComponentStore found))
-        {
-            store = (ComponentStore<TComponent>)found;
-            return true;
-        }
-
-        store = default!;
-        return false;
     }
 
     private void ApplySnapshotFinalComponents(GameEntity entity, EntitySnapshot snapshot)

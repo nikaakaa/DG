@@ -18,18 +18,25 @@ public sealed class AuthoritativeWorldTickRunner
     private FCancellationToken? cancellationToken;
     private bool running;
 
+    public bool FullWorldDiagnosticsEnabled { get; set; }
+
     public AuthoritativeWorldTickRunner(GameWorld world, AuthoritativeInputQueue inputQueue, AuthoritativeWorldSyncSystem syncSystem, int tickIntervalMs)
         : this(world, inputQueue, syncSystem, tickIntervalMs, ActionSpecRegistry.Default)
     {
     }
 
     public AuthoritativeWorldTickRunner(GameWorld world, AuthoritativeInputQueue inputQueue, AuthoritativeWorldSyncSystem syncSystem, int tickIntervalMs, ActionSpecRegistry actionSpecs)
+        : this(world, inputQueue, syncSystem, tickIntervalMs, actionSpecs, ActionStrategyRegistry.Default)
+    {
+    }
+
+    public AuthoritativeWorldTickRunner(GameWorld world, AuthoritativeInputQueue inputQueue, AuthoritativeWorldSyncSystem syncSystem, int tickIntervalMs, ActionSpecRegistry actionSpecs, ActionStrategyRegistry strategyRegistry)
     {
         World = world;
         InputQueue = inputQueue;
         SyncSystem = syncSystem;
         ActionQueue = inputQueue.ActionQueue;
-        RuleExecutionSystem = new StateDrivenRuleExecutionSystem(actionSpecs);
+        RuleExecutionSystem = new StateDrivenRuleExecutionSystem(actionSpecs, strategyRegistry);
         this.tickIntervalMs = tickIntervalMs;
     }
 
@@ -61,8 +68,6 @@ public sealed class AuthoritativeWorldTickRunner
         pendingMoveInputs.Clear();
     }
 
-    public int ActivePendingStateCount => 0;
-
     public WorldDelta Tick(IReadOnlyList<Session> observers)
     {
         long serverTick = World.NextTick();
@@ -78,11 +83,14 @@ public sealed class AuthoritativeWorldTickRunner
         EnqueueAutoMoveActions(serverTick);
         ExplicitOutputPolicies.EnqueuePushOnEnterActions(World, ActionQueue, serverTick);
         IReadOnlyList<WorldAction> actions = ActionQueue.DrainReady(serverTick);
-        IReadOnlyDictionary<long, string> beforeSnapshot = CreateEntitySnapshot();
+        IReadOnlyCollection<long> preRuleTouchedEntityIds = CollectPreRuleTouchedEntityIds(inputs, actions);
+        IReadOnlyDictionary<long, string> beforeSnapshot = FullWorldDiagnosticsEnabled ? CreateFullEntitySnapshot() : CreateEntitySnapshot(preRuleTouchedEntityIds);
         LogRuleTickInput(serverTick, inputs, actions, beforeSnapshot);
         StateDrivenRuleExecutionResult ruleResult = RuleExecutionSystem.Tick(World, actions, serverTick);
-        LogRuleTickResult(serverTick, actions, ruleResult, beforeSnapshot, CreateEntitySnapshot());
         RecordAnimationMetadata(serverTick, actions, ruleResult);
+        IReadOnlyCollection<long> postRuleTouchedEntityIds = CollectPostRuleTouchedEntityIds(actions, ruleResult);
+        IReadOnlyDictionary<long, string> afterSnapshot = FullWorldDiagnosticsEnabled ? CreateFullEntitySnapshot() : CreateEntitySnapshot(postRuleTouchedEntityIds);
+        LogRuleTickResult(serverTick, actions, ruleResult, beforeSnapshot, afterSnapshot);
         EnqueueDeferredActions(ruleResult.DeferredActions);
         foreach (KeyValuePair<long, AuthoritativeMoveInput> pair in pendingMoveInputs.ToArray())
         {
@@ -233,7 +241,7 @@ public sealed class AuthoritativeWorldTickRunner
             return WorldDeltaMotionKind.Unknown;
         }
 
-        if (!actionById.TryGetValue(proposal.SourceActionId, out WorldAction action))
+        if (!actionById.TryGetValue(proposal.SourceActionId, out WorldAction? action))
         {
             return proposal.SourceStateId != 0 ? WorldDeltaMotionKind.MechanismPush : WorldDeltaMotionKind.Unknown;
         }
@@ -269,7 +277,7 @@ public sealed class AuthoritativeWorldTickRunner
 
     private static Direction ResolveAnimationDirection(CommitProposal proposal, IReadOnlyDictionary<long, WorldAction> actionById)
     {
-        if (actionById.TryGetValue(proposal.SourceActionId, out WorldAction action) &&
+        if (actionById.TryGetValue(proposal.SourceActionId, out WorldAction? action) &&
             action.Direction != Direction.None)
         {
             return action.Direction;
@@ -345,7 +353,7 @@ public sealed class AuthoritativeWorldTickRunner
                 " dedupe:" + action.DedupeKey +
                 " before:" + SnapshotText(beforeSnapshot, action.EntityId)));
 
-        TryLogInfo("[AuthoritativeWorldTickRunner] rule tick input tick:{0} pendingMoves:{1} actions:{2} activePending:{3} inputs:{4} actionList:{5}", serverTick, inputs.Count, actions.Count, ActivePendingStateCount, inputText, actionText);
+        TryLogInfo("[AuthoritativeWorldTickRunner] rule tick input tick:{0} pendingMoves:{1} actions:{2} inputs:{3} actionList:{4}", serverTick, inputs.Count, actions.Count, inputText, actionText);
     }
 
     private void LogRuleTickResult(long serverTick, IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result, IReadOnlyDictionary<long, string> beforeSnapshot, IReadOnlyDictionary<long, string> afterSnapshot)
@@ -400,7 +408,7 @@ public sealed class AuthoritativeWorldTickRunner
         string reasonText = result.Reasons.Count == 0 ? "none" : string.Join(" | ", result.Reasons);
         string touchedText = BuildTouchedSnapshot(actions, result, beforeSnapshot, afterSnapshot);
 
-        TryLogInfo("[AuthoritativeWorldTickRunner] rule tick result tick:{0} actionResults:{1} deferred:{2} proposals:{3} activePending:{4} reasons:{5} touched:{6}", serverTick, actionResultText, deferredText, proposalText, result.ActivePendingCount, reasonText, touchedText);
+        TryLogInfo("[AuthoritativeWorldTickRunner] rule tick result tick:{0} actionResults:{1} deferred:{2} proposals:{3} reasons:{4} touched:{5}", serverTick, actionResultText, deferredText, proposalText, reasonText, touchedText);
     }
 
     private string BuildTouchedSnapshot(IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result, IReadOnlyDictionary<long, string> beforeSnapshot, IReadOnlyDictionary<long, string> afterSnapshot)
@@ -434,18 +442,92 @@ public sealed class AuthoritativeWorldTickRunner
             (ids.Count > LogSampleLimit ? " | omitted:" + (ids.Count - LogSampleLimit) : string.Empty);
     }
 
-    private IReadOnlyDictionary<long, string> CreateEntitySnapshot()
+    private IReadOnlyCollection<long> CollectPreRuleTouchedEntityIds(IReadOnlyList<AuthoritativeMoveInput> inputs, IReadOnlyList<WorldAction> actions)
+    {
+        var ids = new HashSet<long>();
+        for (int i = 0; i < inputs.Count; i++)
+        {
+            ids.Add(inputs[i].EntityId);
+        }
+
+        AddActionEntityIds(actions, ids);
+        World.RecordTouchedDiagnostics(ids);
+        return ids;
+    }
+
+    private IReadOnlyCollection<long> CollectPostRuleTouchedEntityIds(IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result)
+    {
+        var ids = new HashSet<long>();
+        AddActionEntityIds(actions, ids);
+        foreach (DeferredAction deferred in result.DeferredActions)
+        {
+            ids.Add(deferred.EntityId);
+            for (int i = 0; i < deferred.SubjectEntityIds.Count; i++)
+            {
+                ids.Add(deferred.SubjectEntityIds[i]);
+            }
+        }
+
+        foreach (CommitProposalResult proposalResult in result.ProposalResults)
+        {
+            ids.Add(proposalResult.Proposal.EntityId);
+        }
+
+        IReadOnlyList<DirtyChange> dirty = World.PeekDirtyChanges();
+        for (int i = 0; i < dirty.Count; i++)
+        {
+            ids.Add(dirty[i].EntityId);
+        }
+
+        World.RecordTouchedDiagnostics(ids);
+        return ids;
+    }
+
+    private static void AddActionEntityIds(IReadOnlyList<WorldAction> actions, HashSet<long> ids)
+    {
+        for (int i = 0; i < actions.Count; i++)
+        {
+            ids.Add(actions[i].EntityId);
+            for (int subjectIndex = 0; subjectIndex < actions[i].SubjectEntityIds.Count; subjectIndex++)
+            {
+                ids.Add(actions[i].SubjectEntityIds[subjectIndex]);
+            }
+        }
+    }
+
+    private IReadOnlyDictionary<long, string> CreateEntitySnapshot(IReadOnlyCollection<long> entityIds)
+    {
+        var result = new Dictionary<long, string>();
+        foreach (long entityId in entityIds)
+        {
+            if (!World.TryGetEntity(entityId, out GameEntity entity))
+            {
+                continue;
+            }
+
+            EntitySnapshot snapshot = World.CreateSnapshot(entity);
+            result[snapshot.EntityId] = FormatSnapshot(snapshot);
+        }
+
+        return result;
+    }
+
+    private IReadOnlyDictionary<long, string> CreateFullEntitySnapshot()
     {
         return World.CreateSnapshot().ToDictionary(
             snapshot => snapshot.EntityId,
-            snapshot =>
-                "cfg:" + snapshot.ConfigId +
-                " pos:(" + snapshot.X + "," + snapshot.Y + ")" +
-                " dir:" + snapshot.Direction +
-                " push:" + snapshot.Pushable +
-                " move:" + snapshot.CanMove +
-                " bePushed:" + snapshot.CanBePushed +
-                " ports:" + snapshot.PortLocalPorts);
+            FormatSnapshot);
+    }
+
+    private static string FormatSnapshot(EntitySnapshot snapshot)
+    {
+        return "cfg:" + snapshot.ConfigId +
+            " pos:(" + snapshot.X + "," + snapshot.Y + ")" +
+            " dir:" + snapshot.Direction +
+            " push:" + snapshot.Pushable +
+            " move:" + snapshot.CanMove +
+            " bePushed:" + snapshot.CanBePushed +
+            " ports:" + snapshot.PortLocalPorts;
     }
 
     private static string SnapshotText(IReadOnlyDictionary<long, string> snapshot, long entityId)
@@ -485,18 +567,12 @@ public sealed class AuthoritativeWorldTickRunner
 
     private void EnqueueAutoMoveActions(long serverTick)
     {
-        IReadOnlyList<GameEntity> entities = World.EnumerateEntities();
+        IReadOnlyList<AutoMoveQueryResult> entities = World.QueryAutoMove(EntityIterationOrder.EntityId);
         for (int i = 0; i < entities.Count; i++)
         {
-            GameEntity entity = entities[i];
-            if (!World.TryGetComponent(entity, out PositionComponent _) ||
-                !World.TryGetComponent(entity, out DirectionComponent _) ||
-                !World.TryGetComponent(entity, out AutoMoveComponent autoMove))
-            {
-                continue;
-            }
+            AutoMoveQueryResult entity = entities[i];
 
-            if (serverTick - autoMove.LastMoveTick < autoMove.IntervalTicks)
+            if (serverTick - entity.AutoMove.LastMoveTick < entity.AutoMove.IntervalTicks)
             {
                 continue;
             }

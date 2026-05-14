@@ -29,8 +29,9 @@ public sealed partial class ActionSpec : Luban.BeanBase
         { var __json0 = _obj.GetValue("required_tags"); RequiredTags = new System.Collections.Generic.List<string>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { string __v0;  __v0 = (string)__e0;  RequiredTags.Add(__v0); }   }
         { var __json0 = _obj.GetValue("blocked_tags"); BlockedTags = new System.Collections.Generic.List<string>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { string __v0;  __v0 = (string)__e0;  BlockedTags.Add(__v0); }   }
         TargetRule = (gamecore.ActionTargetRule)(int)_obj.GetValue("target_rule");
-        BlockedPolicy = (gamecore.ActionBlockedPolicy)(int)_obj.GetValue("blocked_policy");
+        TargetingId = (string)_obj.GetValue("targeting_id");
         HandoffPolicy = (gamecore.ActionHandoffPolicy)(int)_obj.GetValue("handoff_policy");
+        BlockedResultPolicyId = (string)_obj.GetValue("blocked_result_policy_id");
         HandoffSpecId = (string)_obj.GetValue("handoff_spec_id");
         HandoffSubjectPolicy = (gamecore.ActionSubjectPolicy)(int)_obj.GetValue("handoff_subject_policy");
         MaxChainDepth = (int)_obj.GetValue("max_chain_depth");
@@ -57,8 +58,9 @@ public sealed partial class ActionSpec : Luban.BeanBase
     public readonly System.Collections.Generic.List<string> RequiredTags;
     public readonly System.Collections.Generic.List<string> BlockedTags;
     public readonly gamecore.ActionTargetRule TargetRule;
-    public readonly gamecore.ActionBlockedPolicy BlockedPolicy;
+    public readonly string TargetingId;
     public readonly gamecore.ActionHandoffPolicy HandoffPolicy;
+    public readonly string BlockedResultPolicyId;
     public readonly string HandoffSpecId;
     public readonly gamecore.ActionSubjectPolicy HandoffSubjectPolicy;
     public readonly int MaxChainDepth;
@@ -90,8 +92,9 @@ public sealed partial class ActionSpec : Luban.BeanBase
         + "requiredTags:" + Luban.StringUtil.CollectionToString(RequiredTags) + ","
         + "blockedTags:" + Luban.StringUtil.CollectionToString(BlockedTags) + ","
         + "targetRule:" + TargetRule + ","
-        + "blockedPolicy:" + BlockedPolicy + ","
+        + "targetingId:" + TargetingId + ","
         + "handoffPolicy:" + HandoffPolicy + ","
+        + "blockedResultPolicyId:" + BlockedResultPolicyId + ","
         + "handoffSpecId:" + HandoffSpecId + ","
         + "handoffSubjectPolicy:" + HandoffSubjectPolicy + ","
         + "maxChainDepth:" + MaxChainDepth + ","

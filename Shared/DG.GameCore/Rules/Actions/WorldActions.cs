@@ -277,31 +277,28 @@ public static class ExplicitOutputPolicies
     {
         int count = 0;
         var moved = new HashSet<long>();
-        IReadOnlyList<GameEntity> triggers = world.EnumerateEntities();
+        IReadOnlyList<PushOnEnterQueryResult> triggers = world.QueryPushOnEnter(EntityIterationOrder.EntityId);
         for (int i = 0; i < triggers.Count; i++)
         {
-            GameEntity trigger = triggers[i];
-            if (!world.TryGetComponent(trigger, out PositionComponent triggerPosition) ||
-                !world.TryGetComponent(trigger, out DirectionComponent triggerDirection) ||
-                !world.TryGetComponent(trigger, out PushOnEnterComponent output) ||
-                !output.OutputSpecId.IsValid)
+            PushOnEnterQueryResult trigger = triggers[i];
+            PushOnEnterComponent output = trigger.PushOnEnter;
+            if (!output.OutputSpecId.IsValid)
             {
                 continue;
             }
 
-            IReadOnlyList<GameEntity> targets = world.GetEntitiesAt(triggerPosition.Coord);
+            IReadOnlyList<GameEntity> targets = world.GetPositionedEntitiesAt(trigger.Position);
             for (int targetIndex = 0; targetIndex < targets.Count; targetIndex++)
             {
                 GameEntity target = targets[targetIndex];
                 if (target.EntityId == trigger.EntityId ||
-                    moved.Contains(target.EntityId) ||
-                    !world.TryGetComponent(target, out PositionComponent _))
+                    moved.Contains(target.EntityId))
                 {
                     continue;
                 }
 
                 moved.Add(target.EntityId);
-                actionQueue.EnqueueConfiguredMove(output.OutputSpecId, target.EntityId, triggerDirection.Direction, serverTick, output.OutputCostTicks);
+                actionQueue.EnqueueConfiguredMove(output.OutputSpecId, target.EntityId, trigger.Direction, serverTick, output.OutputCostTicks);
                 count++;
             }
         }

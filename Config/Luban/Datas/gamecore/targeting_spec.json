@@ -1,0 +1,56 @@
+[
+  {
+    "targeting_id": "legacy_none",
+    "selector_id": "none",
+    "direction_source": 0,
+    "filter_id": "target_filter_none",
+    "ordering_policy": 0,
+    "range": 0,
+    "max_targets": 0
+  },
+  {
+    "targeting_id": "legacy_target_coord_one_step",
+    "selector_id": "target_coord",
+    "direction_source": 3,
+    "filter_id": "target_filter_none",
+    "ordering_policy": 1,
+    "range": 1,
+    "max_targets": 1
+  },
+  {
+    "targeting_id": "legacy_target_coord_any",
+    "selector_id": "target_coord",
+    "direction_source": 3,
+    "filter_id": "target_filter_none",
+    "ordering_policy": 1,
+    "range": 0,
+    "max_targets": 1
+  },
+  {
+    "targeting_id": "legacy_direction_cell",
+    "selector_id": "direction_cell",
+    "direction_source": 1,
+    "filter_id": "target_filter_none",
+    "ordering_policy": 1,
+    "range": 1,
+    "max_targets": 1
+  },
+  {
+    "targeting_id": "legacy_direction_component_cell",
+    "selector_id": "direction_cell",
+    "direction_source": 2,
+    "filter_id": "target_filter_none",
+    "ordering_policy": 1,
+    "range": 1,
+    "max_targets": 1
+  },
+  {
+    "targeting_id": "legacy_self",
+    "selector_id": "self",
+    "direction_source": 1,
+    "filter_id": "target_filter_none",
+    "ordering_policy": 1,
+    "range": 0,
+    "max_targets": 1
+  }
+]

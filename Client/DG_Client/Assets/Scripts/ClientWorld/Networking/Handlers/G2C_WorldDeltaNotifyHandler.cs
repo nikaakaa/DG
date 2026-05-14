@@ -18,7 +18,7 @@ namespace DG.Map
                 return;
             }
 
-            Debug.Log($"[ClientWorldDelta] applied serverTick:{message.ServerTick} entities:{message.Entities.Count} removed:{message.RemovedEntityIds.Count}");
+            // Debug.Log($"[ClientWorldDelta] applied serverTick:{message.ServerTick} entities:{message.Entities.Count} removed:{message.RemovedEntityIds.Count}");
             await FTask.CompletedTask;
         }
     }

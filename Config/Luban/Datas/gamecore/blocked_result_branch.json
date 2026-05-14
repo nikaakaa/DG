@@ -1,0 +1,143 @@
+[
+  {
+    "policy_id": "push_or_block",
+    "order": 10,
+    "conditions": [
+      {
+        "kind": "CanBePushed",
+        "subject": "Blocking",
+        "tag": "",
+        "component_kind": "",
+        "body_kind": ""
+      }
+    ],
+    "result_kind": "DeriveAction",
+    "result_spec_id": "",
+    "subject_policy": "ConnectedBodyIfAny",
+    "reason": "bounded/deferred-output",
+    "error_code": "None",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "push_or_block",
+    "order": 100,
+    "conditions": [],
+    "result_kind": "Reject",
+    "result_spec_id": "",
+    "subject_policy": "HitEntity",
+    "reason": "blocked cell",
+    "error_code": "Blocked",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "bounce_or_block",
+    "order": 10,
+    "conditions": [
+      {
+        "kind": "CanBePushed",
+        "subject": "Blocking",
+        "tag": "",
+        "component_kind": "",
+        "body_kind": ""
+      }
+    ],
+    "result_kind": "DeriveAction",
+    "result_spec_id": "",
+    "subject_policy": "ConnectedBodyIfAny",
+    "reason": "bounded/deferred-output",
+    "error_code": "None",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "bounce_or_block",
+    "order": 20,
+    "conditions": [
+      {
+        "kind": "HasComponent",
+        "subject": "Source",
+        "tag": "",
+        "component_kind": "Bouncable",
+        "body_kind": ""
+      }
+    ],
+    "result_kind": "Bounce",
+    "result_spec_id": "",
+    "subject_policy": "HitEntity",
+    "reason": "blocked cell",
+    "error_code": "Blocked",
+    "commit_rules": [
+      "SetDirectionOnBounce"
+    ]
+  },
+  {
+    "policy_id": "bounce_or_block",
+    "order": 100,
+    "conditions": [],
+    "result_kind": "Reject",
+    "result_spec_id": "",
+    "subject_policy": "HitEntity",
+    "reason": "blocked cell",
+    "error_code": "Blocked",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "immune_push_or_block",
+    "order": 5,
+    "conditions": [
+      {
+        "kind": "HasTag",
+        "subject": "Blocking",
+        "tag": "ImmuneMechanismPush",
+        "component_kind": "",
+        "body_kind": ""
+      }
+    ],
+    "result_kind": "Reject",
+    "result_spec_id": "",
+    "subject_policy": "HitEntity",
+    "reason": "immune",
+    "error_code": "Immune",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "immune_push_or_block",
+    "order": 10,
+    "conditions": [
+      {
+        "kind": "CanBePushed",
+        "subject": "Blocking",
+        "tag": "",
+        "component_kind": "",
+        "body_kind": ""
+      }
+    ],
+    "result_kind": "DeriveAction",
+    "result_spec_id": "",
+    "subject_policy": "ConnectedBodyIfAny",
+    "reason": "bounded/deferred-output",
+    "error_code": "None",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "immune_push_or_block",
+    "order": 100,
+    "conditions": [],
+    "result_kind": "Reject",
+    "result_spec_id": "",
+    "subject_policy": "HitEntity",
+    "reason": "blocked cell",
+    "error_code": "Blocked",
+    "commit_rules": []
+  },
+  {
+    "policy_id": "reject_only",
+    "order": 100,
+    "conditions": [],
+    "result_kind": "Reject",
+    "result_spec_id": "",
+    "subject_policy": "HitEntity",
+    "reason": "blocked cell",
+    "error_code": "Blocked",
+    "commit_rules": []
+  }
+]

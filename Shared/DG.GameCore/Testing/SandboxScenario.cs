@@ -780,18 +780,12 @@ public sealed class LocalSandboxScenarioRunner
 
     private void EnqueueAutoMoveActions(long serverTick)
     {
-        IReadOnlyList<GameEntity> entities = world.EnumerateEntities();
+        IReadOnlyList<AutoMoveQueryResult> entities = world.QueryAutoMove(EntityIterationOrder.EntityId);
         for (int i = 0; i < entities.Count; i++)
         {
-            GameEntity entity = entities[i];
-            if (!world.TryGetComponent(entity, out PositionComponent _) ||
-                !world.TryGetComponent(entity, out DirectionComponent _) ||
-                !world.TryGetComponent(entity, out AutoMoveComponent autoMove))
-            {
-                continue;
-            }
+            AutoMoveQueryResult entity = entities[i];
 
-            if (serverTick - autoMove.LastMoveTick >= autoMove.IntervalTicks)
+            if (serverTick - entity.AutoMove.LastMoveTick >= entity.AutoMove.IntervalTicks)
             {
                 actionQueue.EnqueueAutoMove(entity.EntityId, serverTick - 1, 1);
             }

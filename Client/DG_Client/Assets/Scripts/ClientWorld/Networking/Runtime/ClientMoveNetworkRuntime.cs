@@ -14,7 +14,6 @@ namespace DG.Map
         public static long DemoMovingEntityId { get; private set; }
         public static bool HasDemoMovingEntity { get; private set; }
         public static long LastWorldServerTick { get; private set; }
-        public static int ActivePendingStateCount { get; private set; } = -1;
         public static string LastRuleFailureReason { get; private set; } = string.Empty;
 
         public static void SetRunner(ClientWorldRunner runner)
@@ -233,7 +232,6 @@ namespace DG.Map
             DemoMovingEntityId = 0;
             HasDemoMovingEntity = false;
             LastWorldServerTick = 0;
-            ActivePendingStateCount = -1;
             LastRuleFailureReason = string.Empty;
         }
 

@@ -218,19 +218,8 @@ public sealed class OccupancyResolver
 
     private static GameEntity FindExternalBlocking(GameWorld world, GridCoord coord, HashSet<long> bodyIds)
     {
-        IReadOnlyList<GameEntity> targets = world.GetEntitiesAt(coord);
-        for (int i = 0; i < targets.Count; i++)
-        {
-            GameEntity target = targets[i];
-            if (bodyIds.Contains(target.EntityId) || !world.HasComponent<BlockingComponent>(target))
-            {
-                continue;
-            }
-
-            return target;
-        }
-
-        return null!;
+        return world.TryGetFirstBlockingAt(coord, bodyIds, out BlockingSpatialQueryResult blocking) &&
+            world.TryGetEntity(blocking.EntityId, out GameEntity target) ? target : null!;
     }
 }
 

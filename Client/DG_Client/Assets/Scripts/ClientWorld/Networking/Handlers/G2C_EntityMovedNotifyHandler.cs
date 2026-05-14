@@ -18,7 +18,7 @@ namespace DG.Map
                 return;
             }
 
-            Debug.Log($"[ClientMoveNotify] applied ClientMapEntity:{message.EntityId} final:({message.FinalX},{message.FinalY}) serverTick:{message.ServerTick} clientTick:{message.ClientTick}");
+            // Debug.Log($"[ClientMoveNotify] applied ClientMapEntity:{message.EntityId} final:({message.FinalX},{message.FinalY}) serverTick:{message.ServerTick} clientTick:{message.ClientTick}");
             await FTask.CompletedTask;
         }
     }

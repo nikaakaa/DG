@@ -233,23 +233,22 @@ public sealed class CommitResolver
             return new CommitProposalResult(proposal, false, "target reserved");
         }
 
-        IReadOnlyList<GameEntity> targets = world.GetEntitiesAt(proposal.To);
-        for (int i = 0; i < targets.Count; i++)
+        var excluded = new HashSet<long> { proposal.EntityId };
+        if (world.TryGetFirstBlockingAt(proposal.To, excluded, out BlockingSpatialQueryResult target))
         {
-            GameEntity target = targets[i];
-            if (target.EntityId == proposal.EntityId || !world.HasComponent<BlockingComponent>(target))
-            {
-                continue;
-            }
-
             if (proposal.SourceStateId != 0 &&
                 moveGroups.TryGetValue(proposal.SourceStateId, out HashSet<long> groupIds) &&
                 groupIds.Contains(target.EntityId))
             {
-                continue;
+                return new CommitProposalResult(proposal, true, string.Empty);
             }
 
-            return new CommitProposalResult(proposal, false, world.HasComponent<PlayerControlComponent>(target) ? "occupied by player" : "blocked cell");
+            if (!world.TryGetEntity(target.EntityId, out GameEntity targetEntity))
+            {
+                return new CommitProposalResult(proposal, true, string.Empty);
+            }
+
+            return new CommitProposalResult(proposal, false, world.HasComponent<PlayerControlComponent>(targetEntity) ? "occupied by player" : "blocked cell");
         }
 
         return new CommitProposalResult(proposal, true, string.Empty);

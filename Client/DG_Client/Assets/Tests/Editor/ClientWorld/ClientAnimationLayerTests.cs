@@ -470,6 +470,54 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void VisualRefreshReusesEntitySpriteAndPortMaterial()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 90 }, DefaultWorldConfig.PortConnectorBlockerSpawn(90, new GridCoord(0, 0), Direction.Right));
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 91 }, DefaultWorldConfig.PortConnectorBlockerSpawn(91, new GridCoord(1, 0), Direction.Left));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            GameObject visualObject = new GameObject("Visuals");
+            var visuals = visualObject.AddComponent<ClientWorldVisuals>();
+            SetPrivateField(visuals, "runner", runner);
+
+            InvokePrivate(visuals, "Awake");
+            InvokePrivate(visuals, "LateUpdate");
+            Transform entityView = visualObject.transform.Find("Entities/Entity_90");
+            var spriteRenderer = entityView.GetComponent<SpriteRenderer>();
+            var lineRenderer = entityView.GetComponent<LineRenderer>();
+            Sprite sprite = spriteRenderer.sprite;
+            Material material = lineRenderer.sharedMaterial;
+
+            InvokePrivate(visuals, "LateUpdate");
+
+            Assert.AreSame(sprite, spriteRenderer.sprite);
+            Assert.AreSame(material, lineRenderer.sharedMaterial);
+        }
+
+        [Test]
+        public void RemovedPortConnectionDestroysLineView()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 92 }, DefaultWorldConfig.PortConnectorBlockerSpawn(92, new GridCoord(0, 0), Direction.Right));
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 93 }, DefaultWorldConfig.PortConnectorBlockerSpawn(93, new GridCoord(1, 0), Direction.Left));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            GameObject visualObject = new GameObject("Visuals");
+            var visuals = visualObject.AddComponent<ClientWorldVisuals>();
+            SetPrivateField(visuals, "runner", runner);
+
+            InvokePrivate(visuals, "Awake");
+            InvokePrivate(visuals, "LateUpdate");
+            object lines = GetPrivateField(visuals, "portConnectionLines");
+            Assert.AreEqual(1, (int)lines.GetType().GetProperty("Count").GetValue(lines));
+
+            runner.Context.ClientMapWorld.RemoveEntity(93);
+            InvokePrivate(visuals, "LateUpdate");
+
+            Assert.AreEqual(0, (int)lines.GetType().GetProperty("Count").GetValue(lines));
+            Assert.IsNull(visualObject.transform.Find("PortConnections/PortConnection_92:93"));
+        }
+
+        [Test]
         public void AnimationStyleProviderDoesNotChangeActionSpecResults()
         {
             ClientAnimationStyleProvider provider = ClientAnimationStyleProvider.Fallback();

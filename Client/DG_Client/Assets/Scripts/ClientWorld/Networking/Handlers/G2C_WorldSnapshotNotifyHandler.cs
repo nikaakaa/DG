@@ -18,7 +18,7 @@ namespace DG.Map
                 return;
             }
 
-            Debug.Log($"[ClientWorldSnapshot] applied serverTick:{message.ServerTick} entities:{message.Entities.Count}");
+            // Debug.Log($"[ClientWorldSnapshot] applied serverTick:{message.ServerTick} entities:{message.Entities.Count}");
             await FTask.CompletedTask;
         }
     }

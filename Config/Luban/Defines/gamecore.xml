@@ -59,10 +59,52 @@
         <var name="DirectionFromComponent" value="4"/>
     </enum>
 
-    <enum name="ActionBlockedPolicy">
+    <enum name="TargetDirectionSource">
+        <var name="None" value="0"/>
+        <var name="Request" value="1"/>
+        <var name="Component" value="2"/>
+        <var name="TargetCoord" value="3"/>
+    </enum>
+
+    <enum name="TargetOrderingPolicy">
+        <var name="None" value="0"/>
+        <var name="HitOrderThenCoordThenEntity" value="1"/>
+    </enum>
+
+    <enum name="TargetFilterConditionKind">
+        <var name="HasComponent" value="1"/>
+        <var name="MissingComponent" value="2"/>
+        <var name="HasTag" value="3"/>
+        <var name="MissingTag" value="4"/>
+    </enum>
+
+    <enum name="TargetFilterSubject">
+        <var name="Target" value="1"/>
+    </enum>
+
+    <enum name="BlockedResultKind">
         <var name="Reject" value="1"/>
-        <var name="StartPushIfPushable" value="2"/>
-        <var name="BounceIfBouncable" value="3"/>
+        <var name="DeriveAction" value="2"/>
+        <var name="Bounce" value="3"/>
+        <var name="Noop" value="4"/>
+    </enum>
+
+    <enum name="ActionConditionKind">
+        <var name="Always" value="1"/>
+        <var name="HasTag" value="2"/>
+        <var name="MissingTag" value="3"/>
+        <var name="HasComponent" value="4"/>
+        <var name="MissingComponent" value="5"/>
+        <var name="CanMove" value="6"/>
+        <var name="CanBePushed" value="7"/>
+        <var name="BodyKindIs" value="8"/>
+    </enum>
+
+    <enum name="ActionConditionSubject">
+        <var name="Source" value="1"/>
+        <var name="Blocking" value="2"/>
+        <var name="SourceBody" value="3"/>
+        <var name="BlockingBody" value="4"/>
     </enum>
 
     <enum name="ActionHandoffPolicy">
@@ -149,6 +191,52 @@
         <var name="output_cost_ticks" type="int"/>
     </bean>
 
+    <bean name="ActionCondition">
+        <var name="kind" type="ActionConditionKind"/>
+        <var name="subject" type="ActionConditionSubject"/>
+        <var name="tag" type="string"/>
+        <var name="component_kind" type="string"/>
+        <var name="body_kind" type="string"/>
+    </bean>
+
+    <bean name="TargetFilterCondition">
+        <var name="kind" type="TargetFilterConditionKind"/>
+        <var name="subject" type="TargetFilterSubject"/>
+        <var name="component_kind" type="string"/>
+        <var name="tag" type="string"/>
+    </bean>
+
+    <bean name="TargetFilterSpec">
+        <var name="filter_id" type="string"/>
+        <var name="conditions" type="(list),TargetFilterCondition"/>
+    </bean>
+
+    <bean name="TargetingSpec">
+        <var name="targeting_id" type="string"/>
+        <var name="selector_id" type="string"/>
+        <var name="direction_source" type="TargetDirectionSource"/>
+        <var name="filter_id" type="string"/>
+        <var name="ordering_policy" type="TargetOrderingPolicy"/>
+        <var name="range" type="int"/>
+        <var name="max_targets" type="int"/>
+    </bean>
+
+    <bean name="BlockedResultPolicy">
+        <var name="policy_id" type="string"/>
+    </bean>
+
+    <bean name="BlockedResultBranch">
+        <var name="policy_id" type="string"/>
+        <var name="order" type="int"/>
+        <var name="conditions" type="(list),ActionCondition"/>
+        <var name="result_kind" type="BlockedResultKind"/>
+        <var name="result_spec_id" type="string"/>
+        <var name="subject_policy" type="ActionSubjectPolicy"/>
+        <var name="reason" type="string"/>
+        <var name="error_code" type="string"/>
+        <var name="commit_rules" type="(list#sep=,),ActionCommitRule"/>
+    </bean>
+
     <bean name="ActionSpec">
         <var name="spec_id" type="string"/>
         <var name="primitive" type="ActionPrimitive"/>
@@ -159,8 +247,9 @@
         <var name="required_tags" type="(list#sep=,),string"/>
         <var name="blocked_tags" type="(list#sep=,),string"/>
         <var name="target_rule" type="ActionTargetRule"/>
-        <var name="blocked_policy" type="ActionBlockedPolicy"/>
+        <var name="targeting_id" type="string"/>
         <var name="handoff_policy" type="ActionHandoffPolicy"/>
+        <var name="blocked_result_policy_id" type="string"/>
         <var name="handoff_spec_id" type="string"/>
         <var name="handoff_subject_policy" type="ActionSubjectPolicy"/>
         <var name="max_chain_depth" type="int"/>
@@ -188,6 +277,10 @@
     <table name="TbPlayerSpawnRule" index="rule_id" value="PlayerSpawnRule" input="gamecore/player_spawn_rule.xlsx"/>
     <table name="TbPortConnectorConfig" index="config_id" value="PortConnectorConfig" input="gamecore/port_connector_config.xlsx"/>
     <table name="TbPushOnEnterConfig" index="config_id" value="PushOnEnterConfig" input="gamecore/push_on_enter_config.xlsx"/>
+    <table name="TbTargetFilterSpec" index="filter_id" value="TargetFilterSpec" input="*@gamecore/target_filter_spec.json"/>
+    <table name="TbTargetingSpec" index="targeting_id" value="TargetingSpec" input="*@gamecore/targeting_spec.json"/>
+    <table name="TbBlockedResultPolicy" index="policy_id" value="BlockedResultPolicy" input="*@gamecore/blocked_result_policy.json"/>
+    <table name="TbBlockedResultBranch" mode="list" value="BlockedResultBranch" input="*@gamecore/blocked_result_branch.json"/>
     <table name="TbActionSpec" index="spec_id" value="ActionSpec" input="gamecore/action_spec.xlsx"/>
     <table name="TbAnimationStyle" index="style_id" value="AnimationStyle" input="*@gamecore/animation_style.json"/>
 </module>
