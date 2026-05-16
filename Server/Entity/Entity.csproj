@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Fantasy-Net" Version="*" />
+    <PackageReference Include="Fantasy-Net" Version="2026.0.1019" />
   </ItemGroup>
 
 </Project>

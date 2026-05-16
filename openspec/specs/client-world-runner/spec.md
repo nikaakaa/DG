@@ -509,7 +509,7 @@ The client world folder migration SHALL preserve the existing server-authoritati
 - **AND** EditMode tests can run through Unity TestFramework without requiring a Unity Player build
 
 ### Requirement: 客户端镜像最终 Component 结果
-Unity 客户端 SHALL mirror server-authoritative final Component results from snapshot/delta. `ClientMapWorld` MUST NOT maintain a local runtime effect resolver, MUST NOT activate ability state locally, MUST NOT merge dynamic ports locally, and MUST NOT compute final Component results or movement permission from runtime effect data.
+Unity 客户端 SHALL mirror server-authoritative final Component results from snapshot/delta. `ClientMapWorld` MUST NOT maintain a local runtime effect resolver, MUST NOT activate ability state locally, MUST NOT merge dynamic ports locally, and MUST NOT compute final Component results or movement permission from runtime effect data. Server-authoritative client submitters and debug tools MUST NOT apply or remove runtime effects locally as an authority fallback.
 
 #### Scenario: Snapshot applies final result
 - **WHEN** the client receives a server snapshot or delta that contains final `BlockingComponent`, `AutoMoveComponent`, `PushableComponent`, `PortConnectorComponent`, or movement permission state
@@ -532,6 +532,16 @@ Unity 客户端 SHALL mirror server-authoritative final Component results from s
 - **AND** client B is observing the same server world
 - **THEN** client B sees only the server-synchronized final Component result changes
 - **AND** client B does not need the effect source data to display the final state
+
+#### Scenario: Server authoritative submitter does not fallback locally
+- **WHEN** a runtime debug effect RPC cannot be sent because session or networking is unavailable
+- **THEN** the server-authoritative submitter reports failure or unavailable state
+- **AND** it does not call local runtime effect add/remove APIs to mutate the authoritative mirror
+
+#### Scenario: Offline effect tooling is explicitly separated
+- **WHEN** offline sandbox or EditMode tooling needs local runtime effect simulation
+- **THEN** it is wired through a clearly named local-only path
+- **AND** tests prove that server-authoritative Play Mode wiring does not use that local-only path
 
 ### Requirement: 客户端连接体推动整体动画表现
 Unity 客户端 SHALL treat server `WorldDelta` as the only authority for which connected body members moved. When the server delta contains multiple moved connected body members, the client animation layer MUST generate and play animation for every received moved member. The client MUST NOT infer missing moved members from local port graph or local push rules.
@@ -623,4 +633,75 @@ Unity 客户端 SHALL treat server `WorldDelta` as the only authority for which 
 - **THEN** B 通过服务端 WorldDelta 看到对应结构
 - **AND** A 框选多个 entity 后批量移动时，B 看到相同 entity id 的最终坐标变化
 - **AND** A 给实体添加 runtime port effect 后，A 与 B 的 port 调试可视化显示一致的最终 port mask 和连接变化
+
+### Requirement: Client Effect Debug Intent Boundary
+Unity debug UI SHALL treat runtime effect controls as server intent submitters in server-authoritative mode. The UI MAY display requested effect kind, effect id, cue, or callback reason, but authoritative mirror changes MUST come from server response, snapshot, or WorldDelta.
+
+#### Scenario: Debug apply sends intent only
+- **WHEN** the developer clicks a debug apply runtime effect button in server-authoritative Play Mode
+- **THEN** the client sends the configured debug RPC or request
+- **AND** it does not add a local runtime effect to the Shared `GameWorld` mirror before server sync
+
+#### Scenario: Debug remove sends intent only
+- **WHEN** the developer clicks a debug remove runtime effect button in server-authoritative Play Mode
+- **THEN** the client sends the configured debug remove RPC or request
+- **AND** it does not remove local final Component/tag state unless a server delta or snapshot applies the final result
+
+### Requirement: Client Mirrors Effect Results Only
+Unity client SHALL consume server snapshot/delta data for effect-driven final Component/tag state and presentation metadata. Client code MUST NOT evaluate `EffectSpec`, `EffectApplication`, `RuntimeEffectStore`, stack policy, duration policy, or target hit rules to decide authoritative state.
+
+#### Scenario: Server-applied effect updates client mirror
+- **WHEN** the server applies a temporary pushable effect and sends a delta or snapshot
+- **THEN** `ClientMapWorld` updates its mirror from the server final result
+- **AND** client code does not locally decide whether the effect hit or whether pushability should be active
+
+#### Scenario: Expiry is server authoritative
+- **WHEN** a timed effect expires on the server
+- **THEN** clients observe the final component/tag removal through server sync
+- **AND** clients do not locally count down authoritative expiry to remove the result
+
+### Requirement: Effect Presentation Metadata
+Unity client SHALL be able to consume bounded effect presentation metadata from server deltas for visual feedback. Presentation metadata MAY include effect id, source entity, target entity/cell/body, cue id, start tick, expire tick, and result reason, but it MUST NOT be used by client code to change authoritative world state.
+
+#### Scenario: Effect cue plays without changing rules
+- **WHEN** a server delta contains an effect cue for temporary immobile
+- **THEN** the client may play visual feedback for the target
+- **AND** the cue does not modify the client authoritative mirror except through the accompanying final server state
+
+#### Scenario: Missing cue does not break state sync
+- **WHEN** an effect delta has no presentation cue id
+- **THEN** the client still applies the final server snapshot/delta state
+- **AND** only visual feedback is omitted
+
+### Requirement: Unity ClientWorld Source Layout Semantics
+Unity ClientWorld source files SHALL be organized by client responsibility: bootstrap, networking, mirror state, presentation, input, debug tools, editor-only tools, and tests. The layout MUST make it clear that default Play Mode client code consumes server-authoritative snapshot/delta results rather than deciding authoritative gameplay rules locally.
+
+#### Scenario: Mirror and presentation are separate
+- **WHEN** a developer inspects client world state synchronization
+- **THEN** mirror-state code that applies snapshots, deltas, entity ids, components, and dirty state is located under a mirror responsibility
+- **AND** visual animation, GameObject presentation, ghost previews, and UI feedback are located under presentation or debug tool responsibilities
+
+#### Scenario: Networking does not hide local authority
+- **WHEN** a client networking handler receives `G2C_WorldSnapshotNotify`, `G2C_WorldDeltaNotify`, or movement result data
+- **THEN** it routes server final state into the mirror boundary
+- **AND** it does not run local movement, push, port merge, blocked result, targeting, or runtime effect authority rules
+
+#### Scenario: Unity references survive file movement
+- **WHEN** Unity refreshes scripts after ClientWorld files are moved
+- **THEN** `.cs` and `.meta` pairs preserve serialized references for scenes, prefabs, and editor assets where those references exist
+- **AND** ClientWorld scripts compile without requiring a Unity Player build
+
+### Requirement: Unity ClientWorld Layout Verification
+Unity ClientWorld layout migration SHALL include Unity TestFramework EditMode coverage and a manual Play Mode end-to-end validation path.
+
+#### Scenario: EditMode tests cover migrated boundaries
+- **WHEN** Unity TestFramework EditMode tests run after migration
+- **THEN** tests cover mirror snapshot/delta application, client animation metadata consumption, debug layout tooling, port visualization source data, and server-authoritative submitter failure behavior
+- **AND** tests prove debug tools and networking submitters do not directly mutate authoritative mirror state before server sync
+
+#### Scenario: Manual end-to-end validation
+- **WHEN** the user manually runs server-authoritative Play Mode with two clients
+- **AND** client A performs movement, debug spawn, debug drag, debug delete, and a runtime effect debug action if available
+- **THEN** both clients converge to the same server final state
+- **AND** the user can verify that visual presentation follows mirror state from server snapshot/delta
 

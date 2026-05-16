@@ -122,7 +122,7 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &386034588
+--- !u!1 &222668071
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -130,9 +130,74 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 386034590}
-  - component: {fileID: 386034589}
-  - component: {fileID: 386034591}
+  - component: {fileID: 222668073}
+  - component: {fileID: 222668072}
+  m_Layer: 0
+  m_Name: FantasyRuntime
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &222668072
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 222668071}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 744ea2ac262d44f478bcd3c9adacca57, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  runtimeName: FantasyRuntime
+  remoteIP: 127.0.0.1
+  remotePort: 20000
+  protocol: 1
+  enableHttps: 0
+  connectTimeout: 5000
+  enableHeartbeat: 1
+  heartbeatInterval: 2000
+  heartbeatTimeOut: 30000
+  heartbeatTimeOutInterval: 5000
+  maxPingSamples: 4
+  isRuntimeInstance: 0
+  onConnectComplete:
+    m_PersistentCalls:
+      m_Calls: []
+  onConnectFail:
+    m_PersistentCalls:
+      m_Calls: []
+  onConnectDisconnect:
+    m_PersistentCalls:
+      m_Calls: []
+--- !u!4 &222668073
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 222668071}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &261619724
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 261619726}
+  - component: {fileID: 261619725}
+  - component: {fileID: 261619727}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -140,13 +205,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!20 &386034589
+--- !u!20 &261619725
 Camera:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 386034588}
+  m_GameObject: {fileID: 261619724}
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 1
@@ -191,13 +256,13 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!4 &386034590
+--- !u!4 &261619726
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 386034588}
+  m_GameObject: {fileID: 261619724}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 1.5, y: 1.5, z: -10}
@@ -206,13 +271,13 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &386034591
+--- !u!114 &261619727
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 386034588}
+  m_GameObject: {fileID: 261619724}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
@@ -250,7 +315,7 @@ MonoBehaviour:
     m_MipBias: 0
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
---- !u!1 &496882897
+--- !u!1 &961985809
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -258,13 +323,13 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 496882904}
-  - component: {fileID: 496882903}
-  - component: {fileID: 496882902}
-  - component: {fileID: 496882901}
-  - component: {fileID: 496882900}
-  - component: {fileID: 496882899}
-  - component: {fileID: 496882898}
+  - component: {fileID: 961985816}
+  - component: {fileID: 961985815}
+  - component: {fileID: 961985814}
+  - component: {fileID: 961985813}
+  - component: {fileID: 961985812}
+  - component: {fileID: 961985811}
+  - component: {fileID: 961985818}
   m_Layer: 0
   m_Name: ClientWorld
   m_TagString: Untagged
@@ -272,29 +337,13 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &496882898
+--- !u!114 &961985811
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 8b3f84d6a9a14f02b1e2c5ddc5a93211, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  runner: {fileID: 0}
-  networkSubmitter: {fileID: 0}
-  targetCamera: {fileID: 0}
-  cellSize: 1
---- !u!114 &496882899
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
+  m_GameObject: {fileID: 961985809}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: eef69a139d15ea941b0ac27bd50f7dda, type: 3}
@@ -310,13 +359,14 @@ MonoBehaviour:
   conveyorColor: {r: 0.35, g: 1, b: 0.45, a: 1}
   portConnectorColor: {r: 0.25, g: 1, b: 0.9, a: 1}
   portLineColor: {r: 0.02, g: 0.14, b: 0.14, a: 1}
---- !u!114 &496882900
+  animationLayerEnabled: 1
+--- !u!114 &961985812
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
+  m_GameObject: {fileID: 961985809}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2602e278058d8d84490d55ca02d62a5b, type: 3}
@@ -326,13 +376,13 @@ MonoBehaviour:
   networkSubmitter: {fileID: 0}
   localEntityId: 1
   autoMove: 0
---- !u!114 &496882901
+--- !u!114 &961985813
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
+  m_GameObject: {fileID: 961985809}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 682a0c9565c58694d9198408c9c990bd, type: 3}
@@ -342,13 +392,13 @@ MonoBehaviour:
   fantasyRuntime: {fileID: 0}
   serverAuthoritative: 1
   sessionWaitFrames: 600
---- !u!114 &496882902
+--- !u!114 &961985814
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
+  m_GameObject: {fileID: 961985809}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 2fbbba16c814c4d40ae491985b41c0e4, type: 3}
@@ -357,27 +407,25 @@ MonoBehaviour:
   worldBootstrap: {fileID: 0}
   fixedTickInterval: 0.1
   maxTicksPerFrame: 4
-  offlineMovementEnabled: 0
---- !u!114 &496882903
+--- !u!114 &961985815
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
+  m_GameObject: {fileID: 961985809}
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 72000e04821c30645b0a7fb0a47564a9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  useFallbackConfig: 0
---- !u!4 &496882904
+--- !u!4 &961985816
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 496882897}
+  m_GameObject: {fileID: 961985809}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
@@ -386,75 +434,29 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &1318616223
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1318616225}
-  - component: {fileID: 1318616224}
-  m_Layer: 0
-  m_Name: FantasyRuntime
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1318616224
+--- !u!114 &961985818
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1318616223}
+  m_GameObject: {fileID: 961985809}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 744ea2ac262d44f478bcd3c9adacca57, type: 3}
+  m_Script: {fileID: 11500000, guid: 8b3f84d6a9a14f02b1e2c5ddc5a93211, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  runtimeName: FantasyRuntime
-  remoteIP: 127.0.0.1
-  remotePort: 20000
-  protocol: 1
-  enableHttps: 0
-  connectTimeout: 5000
-  enableHeartbeat: 1
-  heartbeatInterval: 2000
-  heartbeatTimeOut: 30000
-  heartbeatTimeOutInterval: 5000
-  maxPingSamples: 4
-  isRuntimeInstance: 0
-  onConnectComplete:
-    m_PersistentCalls:
-      m_Calls: []
-  onConnectFail:
-    m_PersistentCalls:
-      m_Calls: []
-  onConnectDisconnect:
-    m_PersistentCalls:
-      m_Calls: []
---- !u!4 &1318616225
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1318616223}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  runner: {fileID: 0}
+  networkSubmitter: {fileID: 0}
+  targetCamera: {fileID: 0}
+  cellSize: 1
+  runtimeAutoMoveIntervalTicks: 1
+  runtimeExpireAfterTicks: 0
+  structureName: debug-selection
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 496882904}
-  - {fileID: 1318616225}
-  - {fileID: 386034590}
+  - {fileID: 961985816}
+  - {fileID: 222668073}
+  - {fileID: 261619726}

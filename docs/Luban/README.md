@@ -56,6 +56,6 @@ Luban/
 - **Data Target**: `json`
 - **Schema format**: XML definitions in `Config/Luban/Defines/`
 - **Data format**: Excel (.xlsx) in `Config/Luban/Datas/`
-- **Generated code**: `Shared/DG.GameCore/Config/Generated/LubanTables/`
+- **Generated code**: `Shared/DG.GameCore/Configuration/Generated/LubanTables/`
 - **Generated data**: `Config/Luban/Generated/json/` → copied to `Client/DG_Client/Assets/StreamingAssets/GameConfig/`
 - **Config loading**: `LubanConfigLoader` → `cfg.Tables` → `LubanGameConfigProvider` → `IGameConfigProvider`

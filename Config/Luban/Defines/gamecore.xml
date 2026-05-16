@@ -35,6 +35,39 @@
         <var name="ApplyRuntimeEffect" value="5"/>
     </enum>
 
+    <enum name="EffectKind">
+        <var name="Blocking" value="1"/>
+        <var name="AutoMove" value="2"/>
+        <var name="Pushable" value="3"/>
+        <var name="PortConnector" value="4"/>
+        <var name="MovementPermission" value="5"/>
+        <var name="Tag" value="6"/>
+    </enum>
+
+    <enum name="EffectDurationPolicy">
+        <var name="Instant" value="1"/>
+        <var name="TimedTicks" value="2"/>
+        <var name="InfiniteUntilRemove" value="3"/>
+    </enum>
+
+    <enum name="EffectStackPolicy">
+        <var name="ReplaceByStackKey" value="1"/>
+        <var name="RefreshDuration" value="2"/>
+        <var name="AllowMultiple" value="3"/>
+        <var name="RejectDuplicate" value="4"/>
+    </enum>
+
+    <enum name="EffectRemovePolicy">
+        <var name="ExplicitOrExpire" value="1"/>
+        <var name="ExplicitOnly" value="2"/>
+    </enum>
+
+    <enum name="EffectTargetBinding">
+        <var name="TargetEntity" value="1"/>
+        <var name="TargetCell" value="2"/>
+        <var name="TargetBody" value="3"/>
+    </enum>
+
     <enum name="ActionSourceKind">
         <var name="Player" value="1"/>
         <var name="Auto" value="2"/>
@@ -240,6 +273,7 @@
     <bean name="ActionSpec">
         <var name="spec_id" type="string"/>
         <var name="primitive" type="ActionPrimitive"/>
+        <var name="strategy_id" type="string"/>
         <var name="source" type="ActionSourceKind"/>
         <var name="priority" type="ActionPriority"/>
         <var name="source_tag" type="string"/>
@@ -260,6 +294,24 @@
         <var name="plan_rule" type="ActionPlanRule"/>
         <var name="commit_rules" type="(list#sep=,),ActionCommitRule"/>
         <var name="default_cost_ticks" type="int"/>
+        <var name="effect_spec_id" type="string"/>
+    </bean>
+
+    <bean name="EffectSpec">
+        <var name="effect_id" type="string"/>
+        <var name="kind" type="EffectKind"/>
+        <var name="target_binding" type="EffectTargetBinding"/>
+        <var name="duration_policy" type="EffectDurationPolicy"/>
+        <var name="stack_policy" type="EffectStackPolicy"/>
+        <var name="remove_policy" type="EffectRemovePolicy"/>
+        <var name="duration_ticks" type="long"/>
+        <var name="auto_move_interval_ticks" type="int"/>
+        <var name="port_mask" type="int"/>
+        <var name="can_move" type="bool"/>
+        <var name="can_be_pushed" type="bool"/>
+        <var name="tag" type="string"/>
+        <var name="cue_id" type="string"/>
+        <var name="stat_payload_id" type="string"/>
     </bean>
 
     <bean name="AnimationStyle">
@@ -282,5 +334,6 @@
     <table name="TbBlockedResultPolicy" index="policy_id" value="BlockedResultPolicy" input="*@gamecore/blocked_result_policy.json"/>
     <table name="TbBlockedResultBranch" mode="list" value="BlockedResultBranch" input="*@gamecore/blocked_result_branch.json"/>
     <table name="TbActionSpec" index="spec_id" value="ActionSpec" input="gamecore/action_spec.xlsx"/>
+    <table name="TbEffectSpec" index="effect_id" value="EffectSpec" input="*@gamecore/effect_spec.json"/>
     <table name="TbAnimationStyle" index="style_id" value="AnimationStyle" input="*@gamecore/animation_style.json"/>
 </module>

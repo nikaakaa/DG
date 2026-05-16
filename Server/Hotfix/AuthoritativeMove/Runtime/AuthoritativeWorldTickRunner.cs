@@ -19,6 +19,7 @@ public sealed class AuthoritativeWorldTickRunner
     private bool running;
 
     public bool FullWorldDiagnosticsEnabled { get; set; }
+    public CandidateScanMode CandidateScanMode { get; set; } = CandidateScanMode.Serial;
 
     public AuthoritativeWorldTickRunner(GameWorld world, AuthoritativeInputQueue inputQueue, AuthoritativeWorldSyncSystem syncSystem, int tickIntervalMs)
         : this(world, inputQueue, syncSystem, tickIntervalMs, ActionSpecRegistry.Default)
@@ -81,7 +82,7 @@ public sealed class AuthoritativeWorldTickRunner
         }
 
         EnqueueAutoMoveActions(serverTick);
-        ExplicitOutputPolicies.EnqueuePushOnEnterActions(World, ActionQueue, serverTick);
+        EnqueuePushOnEnterActions(serverTick);
         IReadOnlyList<WorldAction> actions = ActionQueue.DrainReady(serverTick);
         IReadOnlyCollection<long> preRuleTouchedEntityIds = CollectPreRuleTouchedEntityIds(inputs, actions);
         IReadOnlyDictionary<long, string> beforeSnapshot = FullWorldDiagnosticsEnabled ? CreateFullEntitySnapshot() : CreateEntitySnapshot(preRuleTouchedEntityIds);
@@ -567,18 +568,34 @@ public sealed class AuthoritativeWorldTickRunner
 
     private void EnqueueAutoMoveActions(long serverTick)
     {
-        IReadOnlyList<AutoMoveQueryResult> entities = World.QueryAutoMove(EntityIterationOrder.EntityId);
-        for (int i = 0; i < entities.Count; i++)
+        IReadOnlyList<AutoMoveActionCandidate> candidates = World.CollectAutoMoveCandidates(serverTick, CandidateScanMode);
+        for (int i = 0; i < candidates.Count; i++)
         {
-            AutoMoveQueryResult entity = entities[i];
+            AutoMoveActionCandidate candidate = candidates[i];
+            ActionQueue.EnqueueAutoMove(candidate.EntityId, candidate.CreatedTick, candidate.CostTicks);
+        }
 
-            if (serverTick - entity.AutoMove.LastMoveTick < entity.AutoMove.IntervalTicks)
+        World.RecordCandidateCommits(candidates.Count);
+    }
+
+    private void EnqueuePushOnEnterActions(long serverTick)
+    {
+        IReadOnlyList<PushOnEnterActionCandidate> candidates = World.CollectPushOnEnterCandidates(serverTick, CandidateScanMode);
+        var moved = new HashSet<long>();
+        int committed = 0;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            PushOnEnterActionCandidate candidate = candidates[i];
+            if (!moved.Add(candidate.SubjectEntityId))
             {
                 continue;
             }
 
-            ActionQueue.EnqueueAutoMove(entity.EntityId, serverTick - 1, 1);
+            ActionQueue.EnqueueConfiguredMove(candidate.SpecId, candidate.SubjectEntityId, candidate.Direction, candidate.CreatedTick, candidate.CostTicks);
+            committed++;
         }
+
+        World.RecordCandidateCommits(committed);
     }
 
 }

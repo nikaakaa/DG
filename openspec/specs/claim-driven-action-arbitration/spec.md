@@ -4,22 +4,30 @@
 TBD - created by archiving change refactor-action-claim-arbitration. Update Purpose after archive.
 ## Requirements
 ### Requirement: Claim-Driven Action Arbitration
-系统 SHALL use `BehaviorActionUnit + ActionSpec` to produce claim-driven arbitration results before planning or commit. `ActionClaim` MUST describe the current action unit's own claim over its source entity or current entity abstraction; ordinary action units MUST NOT claim a chain of unrelated body members as one default atomic commit.
+
+系统 SHALL use action units resolved from `ActionContext`, `ActionSpec`, TargetData, ExecutionOutput, registered strategy modules, final component/tag facts, and runtime input to produce claim-driven arbitration results before planning or commit. `ActionClaim` MUST describe the current action unit's finite claim over entities, cells, or resources. Ordinary action units MUST NOT claim an unbounded future chain, and central arbitration MUST NOT construct behavior-specific claim logic by action name.
 
 #### Scenario: Move unit becomes claims
-- **WHEN** a move behavior action unit enters arbitration
-- **THEN** the arbiter resolves its `ActionSpec`, source context, target, direction, current unit entity abstraction, and final component/tag inputs
-- **AND** the arbiter produces claims for the current action unit before planner creates a plan
+- **WHEN** a ready move-compatible action unit enters arbitration
+- **THEN** the pipeline resolves its `ActionContext`, `ActionSpec`, target data, execution output, current subject abstraction, final component/tag inputs, and registered strategy
+- **AND** execution output produces claims for the current action unit before planner creates a plan
+- **AND** the central arbitration stage only compares those claims
 
 #### Scenario: Execution does not decide move policies
-- **WHEN** `StateDrivenRules` receives behavior action units for a tick
-- **THEN** it delegates target resolution, blocker checks, merge, interrupt, blocked policy, and handoff decisions to the action arbiter or configured policy layer
-- **AND** it only orchestrates intake, arbitration, result branch handling, planning, commit, pending/handoff state update, and result application
+- **WHEN** the execution system processes ready action units
+- **THEN** it delegates tag gate, target data query, subject selection, execution output generation, blocker checks, merge, interrupt, blocked policy, deferred output, and handoff decisions to explicit pipeline stages and registered policy modules
+- **AND** it only orchestrates intake, arbitration result handling, planning, commit, deferred output enqueue, and result application
 
-#### Scenario: Ordinary unit does not claim pushed target movement
-- **WHEN** a source unit hits a pushable target
-- **THEN** the source unit records a handoff result instead of claiming the target entity's movement in the same unit
-- **AND** the target entity's movement requires its own derived behavior action unit
+#### Scenario: Ordinary unit does not claim future chain movement
+- **WHEN** a move action unit is blocked by a pushable target
+- **THEN** the source unit records a finite blocked outcome or deferred output according to policy
+- **AND** it does not claim all downstream bodies as one same-tick action-unit commit
+- **AND** any continuing motion is represented as structured future ready action input
+
+#### Scenario: Multiple target data produce multiple claims
+- **WHEN** one execution output contains multiple target data results for the same action context
+- **THEN** claim generation MAY create multiple finite claims for those targets
+- **AND** claim arbitration resolves conflicts deterministically before planning
 
 ### Requirement: Port-Connected Body Claim Projection
 系统 SHALL keep port-connected body projection isolated as compatibility semantics or a distinct entity abstraction. The arbiter MAY evaluate every member target cell for explicitly marked port-connected scenarios, but ordinary push and movement action unit atomicity MUST NOT depend on port-connected multi-member body projection.
@@ -74,17 +82,28 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 - **AND** pending state does not default an omitted spec id to `"player_push"`
 
 ### Requirement: Accepted Actions Feed Planning
-系统 SHALL pass only accepted action units or accepted claims to planning. Planning MUST create plans from accepted arbitration output and MUST NOT rediscover pushable, bounce, or blocked policy outcomes. A parent action unit that is waiting for a derived action unit MUST NOT be planned until it retries and is accepted on its own ready tick.
+
+系统 SHALL pass only accepted action units, accepted claims, or accepted execution outputs to planning. Planning MUST create plans from accepted arbitration output and MUST NOT rediscover target selection, pushable, bounce, partial success, or blocked policy outcomes. A source action that emits deferred output MUST NOT be treated as waiting on a removed pending chain before planning.
 
 #### Scenario: Planner consumes accepted claims
 - **WHEN** arbitration accepts a move action unit with body move claims
 - **THEN** planner builds `MovePlan` members from accepted body move claims
-- **AND** planner does not re-check whether the target blocker should be pushed or bounced
+- **AND** planner does not repeat target data query, tag gate, blocked branch matching, ordinary behavior strategy selection, or success policy selection
 
-#### Scenario: Waiting parent action does not plan
-- **WHEN** the arbiter derives a blocker action unit from a blocked parent action unit
-- **THEN** planner does not build a move plan for the waiting parent action unit
-- **AND** action result and pending action unit state reflect that the parent is waiting
+#### Scenario: Deferred output is future input
+- **WHEN** a blocked action emits deferred output
+- **THEN** execution enqueues structured future action input according to output policy
+- **AND** the source action is not held in `PendingRuleStates` waiting for the downstream action result
+
+#### Scenario: No old pending fallback
+- **WHEN** a strategy or policy cannot express required waiting behavior
+- **THEN** the implementation fails validation or requires a separate OpenSpec change
+- **AND** it MUST NOT silently fall back to `PendingActionState`, `PendingActionUnit`, or removed parent retry semantics
+
+#### Scenario: Planning receives multi-target all-or-nothing intent
+- **WHEN** an accepted execution output has required claims for multiple targets under all-or-nothing policy
+- **THEN** planning and commit preserve the group result boundary
+- **AND** they do not report action success when only a subset of required claims can commit
 
 ### Requirement: Pending Push Uses Unified Action Flow
 系统 SHALL express pending push continuation as parent / derived action units in the same claim-driven arbiter. Pending push MUST NOT use execution-layer special branches for port front, chain expansion, final move acceptance, or same-tick whole-chain solving when those can be represented through reusable arbitration policies, action unit handoff, and push contact batches. A blocked action MAY create a push contact batch containing multiple derived child action units when its own move claims contact multiple distinct downstream pushable subjects in the same blocked step. Contacts MUST be resolved to handoff subjects before child unit creation, and multiple contacts resolving to the same downstream subject MUST create only one child unit. Those child units MUST remain independent action units with their own claims, arbitration, plans, and commits; execution MUST NOT combine parent and downstream bodies into one action-unit commit.
@@ -128,17 +147,41 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 - **AND** the parent action unit does not include downstream body members in its own accepted claims or move plan
 
 ### Requirement: Ordinary Behavior Extension Does Not Modify Core Orchestration
-系统 SHALL allow new ordinary move-like behavior to reuse existing primitives, claim kinds, conflict policies, merge policies, interrupt policies, blocked policies, and commit policies without editing `StateDrivenRules`, `ActionArbiter`, `RulePlanner`, or commit orchestration.
+系统 SHALL select behavior construction through a strategy registry or equivalent typed module registry. The registry SHALL map typed primitive / strategy / policy keys to small behavior modules. Adding a new ordinary behavior that uses existing modules MUST NOT require editing the central arbitration class. Adding a new module MUST include tests that prove central claim arbitration remains generic. Strategy classes MAY declare registration metadata with attributes, but runtime arbitration MUST consume explicit generated registration code and injected registries, not reflection scanning.
 
-#### Scenario: Add configured wind push
-- **WHEN** a configured `wind_push` behavior uses existing move primitive and claim policies
-- **THEN** adding or changing the behavior requires only data/registry/test updates
-- **AND** no new execution or arbitration orchestration branch is required
+#### Scenario: Existing strategy handles new behavior
+- **WHEN** a new ordinary move-like action spec references an existing move strategy and existing policy data
+- **THEN** the strategy creates equivalent action unit and claim structures for equivalent world state
+- **AND** no central arbitration code is edited for that action id
 
-#### Scenario: New reusable policy is explicit core extension
-- **WHEN** a behavior needs a policy not representable by existing policy types
-- **THEN** adding that policy is treated as a core extension
-- **AND** the extension includes focused tests proving existing policies remain unchanged
+#### Scenario: New strategy handles new primitive
+- **WHEN** a new pull-line primitive cannot be expressed by existing move/spawn/remove strategies
+- **THEN** a new registered strategy module MAY be added
+- **AND** Luban action policy references the new strategy or primitive key
+- **AND** central arbitration still only compares produced claims and priority
+
+#### Scenario: Attribute generates explicit strategy registration
+- **WHEN** a strategy class declares its key through an action-strategy attribute
+- **THEN** the editor generator or Roslyn source generator emits explicit C# registration code for that strategy
+- **AND** the emitted code constructs or resolves the strategy module and registers it into `ActionStrategyRegistry`
+- **AND** the emitted code is the only source used by runtime assembly to discover that strategy
+
+#### Scenario: Registered strategy reaches runtime execution
+- **WHEN** a server-authoritative execution system is created with a strategy registry containing a default strategy set plus one new strategy module
+- **THEN** a ready action whose `ActionSpec` resolves to that strategy is processed by the injected module during the real tick path
+- **AND** `StateDrivenRuleExecutionSystem` does not construct a closed internal-only registry that prevents the new strategy from running
+- **AND** `ActionArbiter` and execution orchestration do not add ordinary action-name branches for the new behavior
+
+#### Scenario: Runtime does not scan attributes
+- **WHEN** the server-authoritative tick path starts
+- **THEN** it receives a prebuilt or generated strategy registry from composition code
+- **AND** it does not scan loaded assemblies, inspect strategy attributes, or infer strategies from class names during tick execution
+- **AND** missing or duplicate generated registrations fail during build, generation, or startup validation before gameplay ticks
+
+#### Scenario: Registry is not a gameplay-name switch
+- **WHEN** strategy registry resolves a module
+- **THEN** it uses typed primitive / strategy keys from imported policy data
+- **AND** it does not contain behavior-name-specific branches such as `wind_push`, `ice_slide`, or `trap_pull`
 
 ### Requirement: Claim Arbitration Verification
 系统 SHALL include automated Unity TestFramework EditMode coverage and Shared/server validation for action-unit arbitration. Unity Player build MUST NOT be required.
@@ -403,4 +446,63 @@ TBD - created by archiving change refactor-action-claim-arbitration. Update Purp
 - **WHEN** a composed push intent and another accepted move attempt target the same cell
 - **THEN** target claim arbitration still chooses or rejects candidates according to existing priority and claim rules
 - **AND** push vector composition does not reserve target cells by itself
+
+### Requirement: Targeting Precedes Execution And Claims
+系统 SHALL run authoritative targeting before execution output and claim generation. Targeting MUST produce a read-only, deterministic `TargetData[]` candidate set from `ActionContext`, targeting selector, targeting policy, target filters, and `GameWorld`. Execution and claim generation MUST consume that candidate set rather than rediscovering target shape through action names or ad hoc spatial scans.
+
+#### Scenario: move action consumes TargetData
+- **WHEN** a ready move-compatible action enters arbitration
+- **THEN** the targeting stage produces target data before move execution builds claims
+- **AND** move execution consumes that target data to produce action claims
+- **AND** planning and commit still validate accepted claims before writing world state
+
+#### Scenario: Targeting 不裁决 blocked
+- **WHEN** targeting returns a target cell or target entity that later proves occupied, blocked, reserved, or invalid for movement
+- **THEN** blocked policy, arbitration, planning, or commit decides the result
+- **AND** targeting does not derive push, bounce, reject, deferred output, or commit proposals
+
+#### Scenario: selector 扩展不改仲裁职责
+- **WHEN** a future `FrontLine`, `FrontEntities`, box, or circle selector class is added
+- **THEN** it still returns candidate target data only
+- **AND** arbitration, planning, and commit responsibilities remain unchanged
+
+### Requirement: Deterministic Multi-Target Data
+系统 SHALL make multi-target `TargetData[]` finite, bounded, and deterministically ordered. Multi-target output MUST include enough metadata for downstream fanout, diagnostics, and future effect binding without relying on dictionary order, Unity object order, client arrival order, or raw debug strings.
+
+#### Scenario: selector stable ordering
+- **WHEN** a selector returns several target entries for the same action
+- **THEN** target data is ordered by explicit hit order and deterministic tie-breakers such as coordinate and entity id
+- **AND** repeated runs over the same world state produce equivalent target data order
+
+#### Scenario: multi-target fanout remains claim-driven
+- **WHEN** a multi-target action produces several entity target data entries
+- **THEN** execution may fan them out into multiple action claims
+- **AND** each target claim still enters normal arbitration, planning, and commit
+- **AND** target data alone does not move any entity
+
+### Requirement: TargetData Metadata Boundary
+`TargetData` SHALL describe candidate target facts such as target entity id, target coordinate, target body or subject key, hit cell, hit order, distance, direction, query id, and filter result. `TargetData` MUST NOT store pending lifecycle, action result ownership, commit state, or world mutation side effects.
+
+#### Scenario: target body metadata supports later subject resolution
+- **WHEN** targeting finds a target entity that belongs to a connected body
+- **THEN** target data may include a body id or subject key for later layers
+- **AND** subject resolution and connected body movement are still decided by subject policy, body capability resolution, claims, planning, and commit
+
+#### Scenario: no world mutation
+- **WHEN** targeting runs for any action
+- **THEN** entity positions, components, tags, dirty state, runtime effects, and world delta buffers remain unchanged
+- **AND** any world write must occur later through commit
+
+### Requirement: Targeting Failure Is Structured
+系统 SHALL return structured targeting failure when required target hints, direction, range, config, or filter inputs are invalid. Failure MUST carry stable error and reason data that action arbitration can map to action results without guessing from action names.
+
+#### Scenario: missing direction
+- **WHEN** an action requires direction from request but the context direction is `None`
+- **THEN** targeting fails with stable invalid-direction data
+- **AND** arbitration maps that failure to a rejected action result without executing claims
+
+#### Scenario: target too far
+- **WHEN** an action requires one-step target coordinate and the target is beyond one grid cell
+- **THEN** targeting fails with stable too-far data
+- **AND** no claim, plan, commit, or deferred output is created for that invalid target
 

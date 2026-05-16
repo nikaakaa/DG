@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace DG.GameCore
@@ -15,6 +16,7 @@ public sealed class GameWorld
     private readonly IGameConfigProvider configProvider;
     private readonly RuntimeEffectStore runtimeEffects = new();
     private readonly ComponentStateResolver componentStateResolver = new();
+    private readonly SnapshotComponentRegistry snapshotComponents = SnapshotComponentRegistry.Default;
     private readonly GameWorldObservationCounters observations = new();
 
     public GameWorld() : this(LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()), new IndexedWorldDataStorage())
@@ -23,6 +25,25 @@ public sealed class GameWorld
 
     public GameWorld(IGameConfigProvider configProvider) : this(configProvider, new IndexedWorldDataStorage())
     {
+    }
+
+    public static GameWorld CreateIndexed(IGameConfigProvider configProvider)
+    {
+        return new GameWorld(configProvider, new IndexedWorldDataStorage());
+    }
+
+    public static GameWorld CreateArchBacked(IGameConfigProvider configProvider)
+    {
+#if UNITY_5_3_OR_NEWER
+        return new GameWorld(configProvider, new IndexedWorldDataStorage());
+#else
+        return new GameWorld(configProvider, new ArchWorldDataStorage());
+#endif
+    }
+
+    public static GameWorld CreateArchBacked()
+    {
+        return CreateArchBacked(LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()));
     }
 
     internal GameWorld(IGameConfigProvider configProvider, IWorldDataStorage storage)
@@ -75,7 +96,7 @@ public sealed class GameWorld
         }
 
         componentStateResolver.RemoveEntity(snapshot.EntityId);
-        ApplySnapshotFinalComponents(entity, snapshot);
+        snapshotComponents.Apply(this, entity, snapshot);
         MarkDirty(snapshot.EntityId);
         return true;
     }
@@ -166,6 +187,12 @@ public sealed class GameWorld
 
     public IReadOnlyList<AutoMoveQueryResult> QueryAutoMove(EntityIterationOrder order = EntityIterationOrder.EntityId)
     {
+        return QueryAutoMoveSources(order);
+    }
+
+    public IReadOnlyList<AutoMoveQueryResult> QueryAutoMoveSources(EntityIterationOrder order = EntityIterationOrder.EntityId)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
         IReadOnlyList<GameEntity> entities = QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, AutoMoveComponent>(), order);
         var result = new List<AutoMoveQueryResult>(entities.Count);
         for (int i = 0; i < entities.Count; i++)
@@ -179,11 +206,14 @@ public sealed class GameWorld
             }
         }
 
+        stopwatch.Stop();
+        observations.QueryTimeTicks += stopwatch.ElapsedTicks;
         return result;
     }
 
     public IReadOnlyList<PushOnEnterQueryResult> QueryPushOnEnter(EntityIterationOrder order = EntityIterationOrder.EntityId)
     {
+        Stopwatch stopwatch = Stopwatch.StartNew();
         IReadOnlyList<GameEntity> entities = QueryEntities(ComponentQueryDescriptor.With<PositionComponent, DirectionComponent, PushOnEnterComponent>(), order);
         var result = new List<PushOnEnterQueryResult>(entities.Count);
         for (int i = 0; i < entities.Count; i++)
@@ -197,7 +227,58 @@ public sealed class GameWorld
             }
         }
 
+        stopwatch.Stop();
+        observations.QueryTimeTicks += stopwatch.ElapsedTicks;
         return result;
+    }
+
+    public IReadOnlyList<AutoMoveActionCandidate> CollectAutoMoveCandidates(long serverTick, CandidateScanMode mode)
+    {
+        IReadOnlyList<AutoMoveQueryResult> sources = QueryAutoMoveSources(EntityIterationOrder.EntityId);
+        AutoMoveActionCandidate[] candidates = mode == CandidateScanMode.Parallel
+            ? sources.AsParallel().Where(source => IsAutoMoveReady(source, serverTick)).Select(source => CreateAutoMoveCandidate(source, serverTick)).ToArray()
+            : sources.Where(source => IsAutoMoveReady(source, serverTick)).Select(source => CreateAutoMoveCandidate(source, serverTick)).ToArray();
+        Array.Sort(candidates, static (left, right) =>
+        {
+            int ready = left.ReadyTick.CompareTo(right.ReadyTick);
+            return ready != 0 ? ready : left.EntityId.CompareTo(right.EntityId);
+        });
+        observations.CandidateCount += candidates.Length;
+        return candidates;
+    }
+
+    public IReadOnlyList<PushOnEnterActionCandidate> CollectPushOnEnterCandidates(long serverTick, CandidateScanMode mode)
+    {
+        IReadOnlyList<PushOnEnterQueryResult> triggers = QueryPushOnEnter(EntityIterationOrder.EntityId);
+        IEnumerable<PushOnEnterActionCandidate> query = mode == CandidateScanMode.Parallel
+            ? triggers.AsParallel().SelectMany(trigger => BuildPushOnEnterCandidates(trigger, serverTick))
+            : triggers.SelectMany(trigger => BuildPushOnEnterCandidates(trigger, serverTick));
+        PushOnEnterActionCandidate[] candidates = query.ToArray();
+        Array.Sort(candidates, static (left, right) =>
+        {
+            int created = left.CreatedTick.CompareTo(right.CreatedTick);
+            if (created != 0)
+            {
+                return created;
+            }
+
+            int source = left.SourceEntityId.CompareTo(right.SourceEntityId);
+            return source != 0 ? source : left.SubjectEntityId.CompareTo(right.SubjectEntityId);
+        });
+        observations.CandidateCount += candidates.Length;
+        return candidates;
+    }
+
+    public IReadOnlyList<RuntimeEffectId> CollectExpiredRuntimeEffectCandidates(long tick, CandidateScanMode mode)
+    {
+        IReadOnlyList<RuntimeEffectId> expired = runtimeEffects.CollectExpired(tick, mode);
+        observations.CandidateCount += expired.Count;
+        return expired;
+    }
+
+    public void RecordCandidateCommits(int count)
+    {
+        observations.CommitCount += Math.Max(0, count);
     }
 
     public IReadOnlyList<GameEntity> GetEntitiesAt(GridCoord coord)
@@ -423,27 +504,56 @@ public sealed class GameWorld
         componentStateResolver.AddStaticSource(contribution);
     }
 
-    public void ResolveComponentResults()
+    public void AddRuntimeComponentSource(ComponentSourceContribution contribution)
     {
-        componentStateResolver.Resolve(this, runtimeEffects, ServerTick);
+        componentStateResolver.AddRuntimeSource(contribution);
     }
 
-    public RuntimeEffectInstance AddRuntimeEffect(RuntimeEffectSpec spec)
+    public bool RemoveRuntimeComponentSource(long entityId, ComponentSourceKey source)
     {
-        RuntimeEffectInstance instance = runtimeEffects.Add(spec);
-        ResolveComponentResults();
-        return instance;
+        return componentStateResolver.RemoveRuntimeSource(entityId, source);
     }
 
-    public bool RemoveRuntimeEffect(RuntimeEffectId id)
+    public void AddStaticTagSource(long entityId, ComponentSourceKey source, WorldTag tag)
     {
-        bool removed = runtimeEffects.Remove(id);
+        componentStateResolver.AddStaticTagSource(entityId, source, tag);
+    }
+
+    public void AddRuntimeTagSource(long entityId, ComponentSourceKey source, WorldTag tag)
+    {
+        componentStateResolver.AddRuntimeTagSource(entityId, source, tag);
+    }
+
+    public bool RemoveRuntimeTagSource(long entityId, ComponentSourceKey source, WorldTag tag)
+    {
+        return componentStateResolver.RemoveRuntimeTagSource(entityId, source, tag);
+    }
+
+    public bool RemoveEntityRuntimeSources(long entityId)
+    {
+        bool removed = componentStateResolver.RemoveRuntimeSources(entityId);
+        removed |= runtimeEffects.RemoveByTarget(entityId).Count > 0;
         if (removed)
         {
             ResolveComponentResults();
         }
 
         return removed;
+    }
+
+    public void ResolveComponentResults()
+    {
+        componentStateResolver.Resolve(this, runtimeEffects, ServerTick);
+    }
+
+    internal RuntimeEffectInstance AddRuntimeEffectSource(RuntimeEffectSpec spec)
+    {
+        return runtimeEffects.Add(spec);
+    }
+
+    internal bool RemoveRuntimeEffectSource(RuntimeEffectId id)
+    {
+        return runtimeEffects.Remove(id);
     }
 
     public IReadOnlyList<RuntimeEffectId> ExpireRuntimeEffects(long tick)
@@ -478,6 +588,7 @@ public sealed class GameWorld
     public WorldDelta FlushDelta()
     {
         observations.DeltaFlushCount++;
+        observations.DeltaMaterializationCount++;
         var snapshots = new List<EntitySnapshot>();
         var removed = new List<long>();
         IReadOnlyList<DirtyChange> changes = dirtyJournal.PeekChanges();
@@ -517,31 +628,7 @@ public sealed class GameWorld
     public EntitySnapshot CreateSnapshot(GameEntity entity)
     {
         observations.TouchedSnapshotBuildCount++;
-        GridCoord coord = TryGetComponent(entity, out PositionComponent position) ? position.Coord : default;
-        Direction direction = TryGetComponent(entity, out DirectionComponent directionComponent) ? directionComponent.Direction : Direction.None;
-        bool hasAutoMove = TryGetComponent(entity, out AutoMoveComponent autoMove);
-        bool hasPortConnector = TryGetComponent(entity, out PortConnectorComponent portConnector);
-        bool hasMovementPermission = TryGetComponent(entity, out MovementPermissionComponent permission);
-        return new EntitySnapshot(
-            entity.EntityId,
-            entity.ConfigId,
-            entity.ArchetypeId,
-            entity.EntityTarget,
-            coord.X,
-            coord.Y,
-            direction,
-            HasComponent<ColliderComponent>(entity),
-            HasComponent<BlockingComponent>(entity),
-            HasComponent<BouncableComponent>(entity),
-            hasAutoMove,
-            hasAutoMove ? autoMove.IntervalTicks : 0,
-            HasComponent<PlayerControlComponent>(entity),
-            HasComponent<PushableComponent>(entity),
-            hasPortConnector ? portConnector.LocalPorts : DirectionMask.None,
-            hasMovementPermission,
-            hasMovementPermission && permission.CanMove,
-            !hasMovementPermission || permission.CanBePushed,
-            ServerTick);
+        return snapshotComponents.Project(this, entity, ServerTick);
     }
 
     public void MoveEntity(GameEntity entity, GridCoord target)
@@ -703,64 +790,40 @@ public sealed class GameWorld
         }
     }
 
-    private void ApplySnapshotFinalComponents(GameEntity entity, EntitySnapshot snapshot)
+    private static bool IsAutoMoveReady(AutoMoveQueryResult source, long serverTick)
     {
-        ApplySnapshotPresence(entity, snapshot.Blocking, new BlockingComponent());
-        ApplySnapshotPresence(entity, snapshot.Pushable, new PushableComponent());
-        ApplySnapshotAutoMove(entity, snapshot);
-        ApplySnapshotPortConnector(entity, snapshot.PortLocalPorts);
-        ApplySnapshotMovementPermission(entity, snapshot);
+        return serverTick - source.AutoMove.LastMoveTick >= source.AutoMove.IntervalTicks;
     }
 
-    private void ApplySnapshotPresence<TComponent>(GameEntity entity, bool desired, TComponent component) where TComponent : struct
+    private static AutoMoveActionCandidate CreateAutoMoveCandidate(AutoMoveQueryResult source, long serverTick)
     {
-        if (desired)
+        return new AutoMoveActionCandidate(source.EntityId, serverTick - 1, 1, serverTick);
+    }
+
+    private IReadOnlyList<PushOnEnterActionCandidate> BuildPushOnEnterCandidates(PushOnEnterQueryResult trigger, long serverTick)
+    {
+        PushOnEnterComponent output = trigger.PushOnEnter;
+        if (!output.OutputSpecId.IsValid)
         {
-            SetComponent(entity, component);
-            return;
+            return Array.Empty<PushOnEnterActionCandidate>();
         }
 
-        RemoveComponent<TComponent>(entity);
-    }
-
-    private void ApplySnapshotAutoMove(GameEntity entity, EntitySnapshot snapshot)
-    {
-        if (!snapshot.AutoMove)
+        IReadOnlyList<GameEntity> targets = GetPositionedEntitiesAt(trigger.Position);
+        var candidates = new List<PushOnEnterActionCandidate>(targets.Count);
+        for (int i = 0; i < targets.Count; i++)
         {
-            RemoveComponent<AutoMoveComponent>(entity);
-            return;
+            GameEntity target = targets[i];
+            if (target.EntityId == trigger.EntityId)
+            {
+                continue;
+            }
+
+            candidates.Add(new PushOnEnterActionCandidate(trigger.EntityId, target.EntityId, output.OutputSpecId, trigger.Direction, serverTick, output.OutputCostTicks));
         }
 
-        int interval = snapshot.AutoMoveIntervalTicks > 0 ? snapshot.AutoMoveIntervalTicks : 1;
-        long lastMoveTick = TryGetComponent(entity, out AutoMoveComponent existing) ? existing.LastMoveTick : 0;
-        var component = new AutoMoveComponent(interval)
-        {
-            LastMoveTick = lastMoveTick
-        };
-        SetComponent(entity, component);
+        return candidates;
     }
 
-    private void ApplySnapshotPortConnector(GameEntity entity, DirectionMask localPorts)
-    {
-        if (localPorts == DirectionMask.None)
-        {
-            RemoveComponent<PortConnectorComponent>(entity);
-            return;
-        }
-
-        SetComponent(entity, new PortConnectorComponent(localPorts));
-    }
-
-    private void ApplySnapshotMovementPermission(GameEntity entity, EntitySnapshot snapshot)
-    {
-        if (!snapshot.HasMovementPermission)
-        {
-            RemoveComponent<MovementPermissionComponent>(entity);
-            return;
-        }
-
-        SetComponent(entity, new MovementPermissionComponent(snapshot.CanMove, snapshot.CanBePushed));
-    }
 }
 }
 

@@ -66,6 +66,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyParallelCandidateBoundary(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyStateDrivenPush(out reason))
         {
             return false;
@@ -106,6 +111,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyEffectApplicationLayer(out reason))
+        {
+            return false;
+        }
+
         reason = string.Empty;
         return true;
     }
@@ -140,9 +150,14 @@ public static class AuthoritativeMoveWorldVerification
         }
 
         string root = System.IO.Path.GetFullPath(System.IO.Path.Combine(ServerGameConfigPath.FindGameCoreConfigDirectory(), "..", "..", "..", ".."));
-        string storageSource = System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "WorldDataStorage.cs");
-        string journalSource = System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "WorldStorageQuery.cs");
-        string storageText = System.IO.File.Exists(storageSource) ? System.IO.File.ReadAllText(storageSource) : string.Empty;
+        string storageSource = string.Concat(
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "Storage", "IWorldDataStorage.cs")),
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "Storage", "IndexedWorldDataStorage.cs")),
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "Storage", "ComponentPool.cs")),
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "Storage", "EntityRegistry.cs")),
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "Storage", "QueryCache.cs")));
+        string journalSource = System.IO.Path.Combine(root, "Shared", "DG.GameCore", "World", "Storage", "WorldStorageQuery.cs");
+        string storageText = storageSource;
         string journalText = System.IO.File.Exists(journalSource) ? System.IO.File.ReadAllText(journalSource) : string.Empty;
         if (string.IsNullOrEmpty(storageText) ||
             storageText.Contains("Dictionary<") ||
@@ -611,6 +626,11 @@ public static class AuthoritativeMoveWorldVerification
         {
             config = new PushOnEnterConfig(configId, "mechanism_push", 1);
             return true;
+        }
+
+        public bool TryGetEffectSpec(EffectSpecId effectSpecId, out EffectSpec spec)
+        {
+            return FallbackGameConfigProvider.Instance.TryGetEffectSpec(effectSpecId, out spec);
         }
     }
 
@@ -1182,6 +1202,73 @@ public static class AuthoritativeMoveWorldVerification
         return true;
     }
 
+    private static bool VerifyParallelCandidateBoundary(out string reason)
+    {
+        var serialWorld = CreateCandidateWorld();
+        var parallelWorld = CreateCandidateWorld();
+        serialWorld.NextTick();
+        parallelWorld.NextTick();
+
+        IReadOnlyList<AutoMoveActionCandidate> serialAuto = serialWorld.CollectAutoMoveCandidates(serialWorld.ServerTick, CandidateScanMode.Serial);
+        IReadOnlyList<AutoMoveActionCandidate> parallelAuto = parallelWorld.CollectAutoMoveCandidates(parallelWorld.ServerTick, CandidateScanMode.Parallel);
+        IReadOnlyList<PushOnEnterActionCandidate> serialPush = serialWorld.CollectPushOnEnterCandidates(serialWorld.ServerTick, CandidateScanMode.Serial);
+        IReadOnlyList<PushOnEnterActionCandidate> parallelPush = parallelWorld.CollectPushOnEnterCandidates(parallelWorld.ServerTick, CandidateScanMode.Parallel);
+        IReadOnlyList<RuntimeEffectId> serialExpired = serialWorld.CollectExpiredRuntimeEffectCandidates(serialWorld.ServerTick, CandidateScanMode.Serial);
+        IReadOnlyList<RuntimeEffectId> parallelExpired = parallelWorld.CollectExpiredRuntimeEffectCandidates(parallelWorld.ServerTick, CandidateScanMode.Parallel);
+
+        if (!CandidateAutoEqual(serialAuto, parallelAuto) ||
+            !CandidatePushEqual(serialPush, parallelPush) ||
+            !serialExpired.SequenceEqual(parallelExpired))
+        {
+            reason = "serial and parallel candidate scans diverged";
+            return false;
+        }
+
+        if (!serialWorld.TryGetEntity(9002, out GameEntity serialPlayer) ||
+            !parallelWorld.TryGetEntity(9002, out GameEntity parallelPlayer) ||
+            !serialWorld.TryGetComponent(serialPlayer, out PositionComponent serialPosition) ||
+            !parallelWorld.TryGetComponent(parallelPlayer, out PositionComponent parallelPosition) ||
+            serialPosition.Coord != new GridCoord(0, 0) ||
+            parallelPosition.Coord != new GridCoord(0, 0) ||
+            serialWorld.RuntimeEffects.Count == 0 ||
+            parallelWorld.RuntimeEffects.Count == 0)
+        {
+            reason = "candidate scan mutated GameWorld before commit";
+            return false;
+        }
+
+        WorldDelta serialDelta = RunCandidateWorld(CandidateScanMode.Serial);
+        WorldDelta parallelDelta = RunCandidateWorld(CandidateScanMode.Parallel);
+        if (!DeltaEquivalent(serialDelta, parallelDelta))
+        {
+            reason = "serial and parallel candidate commits produced different deltas";
+            return false;
+        }
+
+        GameWorld observationWorld = CreateCandidateWorld();
+        var runner = new AuthoritativeWorldTickRunner(
+            observationWorld,
+            new AuthoritativeInputQueue(),
+            new AuthoritativeWorldSyncSystem(observationWorld),
+            1)
+        {
+            CandidateScanMode = CandidateScanMode.Parallel
+        };
+        runner.Tick();
+        GameWorldObservation observation = observationWorld.Observations;
+        if (observation.CandidateCount == 0 ||
+            observation.CommitCount == 0 ||
+            observation.QueryTimeTicks == 0 ||
+            observation.DeltaMaterializationCount == 0)
+        {
+            reason = "candidate observation counters did not record query/candidate/commit/delta work";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
     private static bool VerifyStateDrivenPush(out string reason)
     {
         var singleWorld = new GameWorld();
@@ -1436,6 +1523,97 @@ public static class AuthoritativeMoveWorldVerification
 
         reason = string.Empty;
         return true;
+    }
+
+    private static GameWorld CreateCandidateWorld()
+    {
+        var world = new GameWorld();
+        world.AddEntity(DefaultWorldConfig.BallSpawn(9001, new GridCoord(-1, 0), Direction.Right, 1));
+        world.AddEntity(DefaultWorldConfig.ConveyorSpawn(9003, new GridCoord(0, 0), Direction.Right));
+        world.AddEntity(DefaultWorldConfig.PlayerSpawn(9002, 9002, new GridCoord(0, 0)));
+        world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9004, new GridCoord(1, 0)));
+        world.NextTick();
+        var effectSpec = new EffectSpec("candidate", EffectKind.Pushable, EffectTargetBinding.TargetEntity, EffectDurationPolicy.TimedTicks, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOrExpire, 1, 1, DirectionMask.None, true, true, WorldTag.None);
+        var context = new ActionContext(90000, 90000, "candidate", WorldActionPriority.Debug, new ActionSourceContext(ActionSourceKind.Debug, 9002, 0, WorldTag.SourceDebug), 9002, 9002, 9002, 9002, new ActionTarget(9002, null, Direction.None), Direction.None, world.ServerTick, world.ServerTick, 1, 0, 90000);
+        new CommitResolver().Resolve(world, new[] { CommitProposal.AddRuntimeEffect(WorldActionPriority.Debug, 90000, new EffectApplication(context, effectSpec, ActionTargetData.Self(9002, default, Direction.None), world.ServerTick, "candidate"), world.ServerTick) });
+        world.FlushDelta();
+        return world;
+    }
+
+    private static WorldDelta RunCandidateWorld(CandidateScanMode mode)
+    {
+        GameWorld world = CreateCandidateWorld();
+        var runner = new AuthoritativeWorldTickRunner(
+            world,
+            new AuthoritativeInputQueue(),
+            new AuthoritativeWorldSyncSystem(world),
+            1)
+        {
+            CandidateScanMode = mode
+        };
+        return runner.Tick();
+    }
+
+    private static bool CandidateAutoEqual(IReadOnlyList<AutoMoveActionCandidate> left, IReadOnlyList<AutoMoveActionCandidate> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Count; i++)
+        {
+            if (left[i].EntityId != right[i].EntityId ||
+                left[i].CreatedTick != right[i].CreatedTick ||
+                left[i].ReadyTick != right[i].ReadyTick ||
+                left[i].CostTicks != right[i].CostTicks)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool CandidatePushEqual(IReadOnlyList<PushOnEnterActionCandidate> left, IReadOnlyList<PushOnEnterActionCandidate> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Count; i++)
+        {
+            if (left[i].SourceEntityId != right[i].SourceEntityId ||
+                left[i].SubjectEntityId != right[i].SubjectEntityId ||
+                !left[i].SpecId.Equals(right[i].SpecId) ||
+                left[i].Direction != right[i].Direction ||
+                left[i].CreatedTick != right[i].CreatedTick ||
+                left[i].CostTicks != right[i].CostTicks)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool DeltaEquivalent(WorldDelta left, WorldDelta right)
+    {
+        return left.ServerTick == right.ServerTick &&
+            left.RemovedEntityIds.SequenceEqual(right.RemovedEntityIds) &&
+            left.ChangedEntities.Select(DeltaSnapshotKey).OrderBy(item => item).SequenceEqual(right.ChangedEntities.Select(DeltaSnapshotKey).OrderBy(item => item)) &&
+            left.AnimationMetadata.Select(MetadataKey).OrderBy(item => item).SequenceEqual(right.AnimationMetadata.Select(MetadataKey).OrderBy(item => item));
+    }
+
+    private static string DeltaSnapshotKey(EntitySnapshot snapshot)
+    {
+        return snapshot.EntityId + ":" + snapshot.X + ":" + snapshot.Y + ":" + snapshot.Direction + ":" + snapshot.ServerTick;
+    }
+
+    private static string MetadataKey(WorldDeltaAnimationMetadata metadata)
+    {
+        return metadata.EntityId + ":" + metadata.ServerTick + ":" + metadata.MotionKind + ":" + metadata.Direction + ":" + metadata.StyleKey;
     }
 
     private static bool VerifyPortConnectedPush(out string reason)
@@ -2241,9 +2419,72 @@ public static class AuthoritativeMoveWorldVerification
         return true;
     }
 
+    private static bool VerifyEffectApplicationLayer(out string reason)
+    {
+        var provider = LubanGameConfigProvider.FromDirectory(ServerGameConfigPath.FindGameCoreConfigDirectory());
+        if (!provider.TryGetEffectSpec("temporary_pushable", out EffectSpec pushable) ||
+            pushable.Kind != EffectKind.Pushable)
+        {
+            reason = "effect spec registry failed";
+            return false;
+        }
+
+        var actionSpec = new ActionSpec("verification_apply_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.Self, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None, effectSpecId: "temporary_pushable");
+        var actionSpecs = new ActionSpecRegistry(new[] { actionSpec }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
+        var strategies = new ActionStrategyRegistry();
+        strategies.Register(new ApplyRuntimeEffectActionStrategy());
+        var world = new GameWorld(provider);
+        world.AddEntity(DefaultWorldConfig.BlockerSpawn(12001, new GridCoord(0, 0)));
+        world.NextTick();
+        var queue = new WorldActionQueue(actionSpecs);
+        WorldAction action = queue.EnqueueConfiguredMove("verification_apply_effect", 12001, Direction.None, 0, 1);
+        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(actionSpecs, strategies, provider).Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        if (!result.ActionResults[action.ActionId].Success ||
+            world.RuntimeEffects.Count != 1 ||
+            !world.TryGetEntity(12001, out GameEntity entity) ||
+            !world.HasComponent<PushableComponent>(entity))
+        {
+            reason = "effect application commit did not produce final component";
+            return false;
+        }
+
+        RuntimeEffectId effectId = world.RuntimeEffects.ActiveAt(world.ServerTick).Single().Id;
+        IReadOnlyList<CommitProposalResult> remove = new CommitResolver().Resolve(world, new[] { CommitProposal.RemoveRuntimeEffect(WorldActionPriority.Debug, 0, 12001, effectId, world.ServerTick) });
+        if (remove.Count != 1 ||
+            !remove[0].Accepted ||
+            world.HasComponent<PushableComponent>(entity))
+        {
+            reason = "effect remove did not clear own runtime source";
+            return false;
+        }
+
+        var refreshSpec = new EffectSpec("refresh_server", EffectKind.Blocking, EffectTargetBinding.TargetEntity, EffectDurationPolicy.TimedTicks, EffectStackPolicy.RefreshDuration, EffectRemovePolicy.ExplicitOrExpire, 6, 1, DirectionMask.None, true, true, WorldTag.None);
+        RuntimeEffectInstance first = AddVerificationEffect(world, refreshSpec, 12001, 1, "same");
+        RuntimeEffectInstance second = AddVerificationEffect(world, refreshSpec, 12001, 3, "same");
+        if (world.RuntimeEffects.ActiveAt(3).Count(effect => effect.Spec.EffectSpecId.Equals("refresh_server")) != 1 ||
+            second.Id.Equals(first.Id) ||
+            world.RuntimeEffects.ActiveAt(3).Single(effect => effect.Spec.EffectSpecId.Equals("refresh_server")).Spec.ExpireTick != 9)
+        {
+            reason = "effect stack refresh failed";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static RuntimeEffectInstance AddVerificationEffect(GameWorld world, EffectSpec spec, long entityId, long startTick, string stackKey)
+    {
+        var context = new ActionContext(9000 + startTick, 9000 + startTick, "verification_effect", WorldActionPriority.Debug, new ActionSourceContext(ActionSourceKind.Debug, entityId, 0, WorldTag.SourceDebug), entityId, entityId, entityId, entityId, new ActionTarget(entityId, null, Direction.None), Direction.None, startTick, startTick, 1, 0, 9000 + startTick);
+        var application = new EffectApplication(context, spec, ActionTargetData.Self(entityId, default, Direction.None), startTick, stackKey);
+        new CommitResolver().Resolve(world, new[] { CommitProposal.AddRuntimeEffect(WorldActionPriority.Debug, context.ActionId, application, startTick) });
+        return world.RuntimeEffects.ActiveAt(startTick).OrderByDescending(effect => effect.Id.Value).First(effect => effect.TargetEntityId == entityId && effect.Spec.EffectSpecId.Equals(spec.SpecId));
+    }
+
     private sealed class VerificationRuntimeEffectStrategy : IActionStrategy
     {
         public ActionPrimitive Primitive => ActionPrimitive.ApplyRuntimeEffect;
+        public ActionStrategyId StrategyId => "runtime_effect";
 
         public void Process(ActionStrategyContext context)
         {

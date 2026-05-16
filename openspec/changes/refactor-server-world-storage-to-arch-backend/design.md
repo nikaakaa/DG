@@ -160,7 +160,7 @@ TagSet
 规则层仍调用：
 
 ```text
-GameWorld.QueryAutoMove()
+GameWorld.QueryAutoMoveSources()
 GameWorld.QueryPushOnEnter()
 GameWorld.GetColliderEntitiesAt(...)
 GameWorld.TryGetFirstBlockingAt(...)
@@ -169,6 +169,88 @@ GameWorld.TryGetComponent(...)
 ```
 
 调用方不得看到 Arch query 类型。
+
+## Parallel Compute Boundary
+
+Arch 接入不是只替换字典。真正的服务端收益来自把权威 tick 拆成三段：
+
+```text
+Read Phase
+  Arch query / DG spatial readonly view / runtime effect readonly view
+
+Compute Phase
+  parallel candidate collection
+  no world mutation
+  no dirty write
+  no network broadcast
+
+Commit Phase
+  deterministic single authority commit
+  action enqueue / arbitration / rule planning / conflict resolution / component write / dirty / delta
+```
+
+首批可并行内容：
+
+```text
+AutoPushSourceCandidateScan
+  Position + Direction + AutoMove
+  output: source entity id, push direction, configured output action spec, ready tick data
+
+PushOnEnterCandidateScan
+  Position + Direction + PushOnEnter
+  output: source tile, subject entity id, output action spec, cost data
+
+RuntimeEffectExpiryScan
+  active runtime effects
+  output: expired effect ids and affected entity ids
+
+TouchedSnapshotMaterialization
+  touched entity ids + component readonly access
+  output: snapshot candidates
+```
+
+这些阶段只产出 candidate：
+
+```text
+CandidateAction
+ExpiredEffectCandidate
+SnapshotCandidate
+AnimationCandidate
+```
+
+最终写入仍然只在 commit phase：
+
+```text
+ActionQueue.Enqueue...
+RuleExecutionSystem.Tick...
+GameWorld.SetComponent...
+GameWorld.RemoveComponent...
+DirtyWorldJournal.Mark...
+WorldDelta build
+Fantasy broadcast
+```
+
+这样做的边界是：
+
+- 并行阶段可以读 Arch component storage。
+- 并行阶段可以读 DG spatial readonly query。
+- 并行阶段不得改 `GameWorld`。
+- 并行阶段不得写 dirty。
+- 并行阶段不得直接完成 move result。
+- 并行阶段不得调用 Fantasy session。
+- commit 阶段必须按 stable key 排序，保证同输入同 tick 得到同结果。
+
+稳定排序键：
+
+```text
+serverTick
+readyTick
+action priority
+source entity id
+action sequence id
+```
+
+如果一个候选计算依赖当前 tick 已提交结果，它不能放进 parallel compute phase，必须留在 commit/rule phase。
 
 ## Spatial And ECS Chunk Boundary
 
@@ -208,8 +290,9 @@ animation metadata
 要求：
 
 - 服务端 tick 是唯一权威结算节拍。
-- 玩家移动、自动移动、机关推动、connected body movement 都必须进入 action cost / ready tick / commit 边界。
-- 同一类 action 的默认逻辑速度来自 ActionSpec 或配置化 cost policy，不来自客户端帧率。
+- 玩家移动、自动 push source、机关推动、connected body movement 都必须进入 action cost / ready tick / commit 边界。
+- AutoMoveComponent 只表达自动源的定时能力，不表达一套独立于 push/action pipeline 的移动裁决。
+- 自动源到期后产生 configured push/action output，默认逻辑速度来自 ActionSpec 或配置化 cost policy，不来自客户端帧率。
 - 客户端表现速度只能来自服务端 delta、server tick、animation metadata 或表现配置。
 - 客户端不得为了画面顺滑而提前决定最终坐标。
 - 如果客户端表现需要插值、追帧、压缩播放，必须保证最终落点等于服务端 WorldDelta。

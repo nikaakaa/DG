@@ -19,7 +19,7 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **AND** core execution does not add a new branch for the behavior name
 
 ### Requirement: 行为原语和行为来源分离
-系统 SHALL 用行为原语表达执行类型，用 source context 表达行为来源。`Move`、`Spawn`、`Remove`、`SetComponentResult`、`ApplyRuntimeEffect` 和 `HandoffMove` SHALL be primitives or primitive candidates; `Player`、`Auto`、`Mechanism`、`RuntimeResult`、`Debug` 和 `Handoff` SHALL be source / policy context, not separate execution branches for the same primitive.
+系统 SHALL 用行为原语表达执行类型，用 source context 表达行为来源。`Move`、`Spawn`、`Remove`、`SetComponentResult`、`ApplyRuntimeEffect` and compatible handoff primitives SHALL be primitives or primitive candidates; `Player`、`Auto`、`Mechanism`、`RuntimeResult`、`Debug` and `Handoff` SHALL be source / policy context, not separate execution branches for the same primitive. Runtime component/tag result primitives MUST produce commit proposals that add or remove source contributions and MUST NOT directly mutate final Component/tag state.
 
 #### Scenario: 现有移动来源归一化
 - **WHEN** 迁移现有玩家移动、自动移动、机关推动、调试移动和 push handoff
@@ -35,6 +35,16 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **WHEN** runtime component result needs to cause movement, spawn, remove, or state mutation
 - **THEN** it creates a behavior action unit instead of directly mutating authoritative world state
 - **AND** the rule pipeline applies the result through the same arbitration and commit boundaries
+
+#### Scenario: SetComponentResult writes source contribution
+- **WHEN** a strategy emits `SetComponentResult`
+- **THEN** commit records a component source contribution
+- **AND** final component state changes only after resolver settlement
+
+#### Scenario: Tag result writes source contribution
+- **WHEN** a strategy emits `AddTag` or `RemoveTag` as a runtime result
+- **THEN** commit records or removes a tag source contribution
+- **AND** it does not directly edit final `TagSetComponent` as the runtime result path
 
 ### Requirement: 数据驱动仲裁 claim
 系统 SHALL 在仲裁层从 ready action unit、`ActionRequest` 输入和 `ActionSpec` 生成 `ActionClaim`。仲裁 MUST use claims to decide body conflict, target occupancy, same-claim merge, exclusive resources, and derived action proposals instead of hardcoding per behavior-name conflict branches.
@@ -89,48 +99,73 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **AND** 规则层不通过 ability 或 effect 名称判断
 
 ### Requirement: 执行层只消费统一结果
-系统 SHALL keep execution focused on ready action units, accepted claims, plans, commit proposals, commit results, dirty state, pending state transitions, push contact batch transitions, and owner action results. Execution MUST NOT branch on ordinary business behavior names such as player move, auto move, mechanism push, wind push, trap pull, or ice slide.
+系统 SHALL process ordinary runtime behavior through an Action Policy Pipeline with explicit stages for action intake, `ActionSpec` lookup, tag/component gate, subject selection, target selection, registered strategy execution, claim production, claim arbitration, planning, and commit. The central arbitration stage SHALL compare candidates and claims; it MUST NOT build every behavior-specific outcome in one monolithic action interpreter. Runtime effect and runtime component/tag outputs SHALL leave strategy execution as commit proposals or effect applications, never as direct `GameWorld` final-state writes.
 
-#### Scenario: 执行统一 Move
-- **WHEN** player move, auto move, mechanism push, or configured wind push reaches its ready tick
-- **THEN** execution sends the ready action unit through the unified action pipeline
-- **AND** execution does not switch by behavior name to decide movement rules
+#### Scenario: 普通行为进入管线
+- **WHEN** player move, auto move, mechanism push, configured wind push, debug move, debug spawn, or debug remove is submitted
+- **THEN** the request enters the same pipeline stages
+- **AND** each stage consumes `ActionSpec` policy data and final `GameWorld` component/tag facts
+- **AND** no stage selects ordinary behavior by comparing raw action id strings
 
-#### Scenario: 调试行为使用配置
-- **WHEN** debug move, debug spawn, or debug remove is submitted
-- **THEN** they also enter through their corresponding `ActionSpec`
-- **AND** debug-specific permission and target policy are expressed as action data or explicit debug source policy
+#### Scenario: 策略注册选择底层能力
+- **WHEN** a ready action references a strategy or primitive key
+- **THEN** the pipeline resolves the registered strategy module for that key
+- **AND** the central arbitration stage does not switch on ordinary behavior names to choose the module
 
-#### Scenario: Pending continuation uses unified execution
-- **WHEN** a waiting parent action unit becomes ready to continue
-- **THEN** execution treats it like another ready action unit
-- **AND** it is not advanced through a push-front special branch
+#### Scenario: 生成注册代码进入管线
+- **WHEN** a strategy class has valid registration metadata
+- **THEN** the editor/Roslyn generation path produces explicit registration source
+- **AND** server/test composition uses that generated source to build the strategy registry injected into the pipeline
+- **AND** the pipeline behavior is deterministic without runtime reflection or Unity editor-only scanning
 
-#### Scenario: push contact batch uses unified execution
-- **WHEN** one blocked action unit creates a push contact batch with multiple child units
-- **THEN** execution schedules those child units through the same ready action unit path
-- **AND** execution does not add a behavior-name branch to move all child subjects directly
+#### Scenario: 仲裁器只处理候选和 claim
+- **WHEN** strategies produce candidate action units and claims
+- **THEN** central arbitration sorts and resolves them by priority, claim mode, merge policy, interrupt policy, and conflict policy
+- **AND** it does not perform target selection, subject expansion, blocked branch matching, deferred output construction, or commit mutation directly
 
-#### Scenario: push-specific handoff interpretation stays out of execution
-- **WHEN** a blocked move discovers multiple external push contacts
-- **THEN** contact-to-handoff-subject interpretation happens in the action policy / arbitration layer
-- **AND** execution only observes derived action units, pending transitions, commit results, and owner action results
-- **AND** execution does not infer child unit count from raw contact count
+#### Scenario: 配置行为不修改中央类
+- **WHEN** a new ordinary behavior reuses existing strategy and policy capabilities
+- **THEN** implementation changes are limited to Luban data, generated config, tests, and optional documentation
+- **AND** files containing central arbitration orchestration do not change for that behavior
+
+#### Scenario: Effect output does not write final state
+- **WHEN** `ApplyRuntimeEffect` or future effect-driven strategy executes
+- **THEN** it emits `EffectApplication` and commit proposals
+- **AND** it does not call `GameWorld.SetComponent`, `GameWorld.AddTag`, `GameWorld.RemoveTag`, or runtime effect store mutation directly
 
 ### Requirement: 普通新增行为不修改核心代码
-系统 SHALL allow a new ordinary behavior built from existing primitives and policies to be added by Luban action policy data and tests. It MUST NOT require new branches in core execution, arbitration, planning, pending state, or commit orchestration.
+系统 SHALL allow a new ordinary behavior built from existing primitives, strategy modules, tag gates, subject policies, target rules, blocked result policies, deferred output policies, claim policies, plan rules, commit rules, and cost policies to be added by Luban action policy data and tests. It MUST NOT require new branches in core execution, central arbitration, planning, deferred output, or commit orchestration. If a behavior requires a new primitive, condition kind, result kind, claim kind, or reusable strategy type, the system SHALL add that capability through an explicit registered strategy or policy module with focused tests, not by editing a central action-name branch.
 
 #### Scenario: 新增风场推动
-- **WHEN** 新增一个 `wind_push` 行为，使用 existing `Move` primitive、mechanism-like source、exclusive target cell claim 和 blocked tag policy
-- **THEN** 开发者新增或修改 Luban Excel action policy row
+- **WHEN** 新增一个 `wind_push` 行为，使用 existing `Move` primitive、mechanism-like source、tag gate、exclusive target cell claim、configured blocked result branches and connected-body subject policy
+- **THEN** 开发者新增或修改 Luban action policy and blocked result policy rows
 - **AND** 运行 Luban 导出生成 JSON/provider
 - **AND** 添加 Unity TestFramework EditMode 覆盖
-- **AND** 不修改核心 execution / arbitration orchestration code
+- **AND** 不修改核心 execution / central arbitration / planning / deferred output / commit orchestration code
 
-#### Scenario: 新增底层原语
-- **WHEN** 新需求无法由已有 primitive 和 reusable policies 表达
-- **THEN** 系统 MAY add a new primitive or policy type
-- **AND** 该新增 MUST be treated as core extension with explicit tests and proposal/task coverage
+#### Scenario: 新增冰面滑行
+- **WHEN** 新增一个 `ice_slide` 行为，能够由已有 primitive、strategy module、target rule、blocked result policy、cost policy 和 commit policy 表达
+- **THEN** 行为差异由 action policy 数据表达
+- **AND** 核心规则模块不新增 `ice_slide` 名字分支
+- **AND** 中央仲裁器不需要理解冰面玩法名
+
+#### Scenario: 新增底层策略模块
+- **WHEN** 新需求无法由已有 primitive、condition kinds、result kinds、claim kinds、strategy modules 和 reusable policies 表达
+- **THEN** 系统 MAY add a new primitive, condition kind, result kind, claim kind, strategy module, or policy type
+- **AND** 该新增 MUST be treated as a core extension with explicit OpenSpec proposal, tasks, automated tests, and manual verification path
+- **AND** the new module declares registration metadata with an attribute or equivalent compile-time declaration
+- **AND** editor/Roslyn generation emits explicit registry code for that module
+- **AND** the new module is selected by typed strategy or policy data instead of an ordinary behavior action-name branch
+
+#### Scenario: 同策略不同行为 id 等价
+- **WHEN** two ordinary action specs have different ids but identical relevant strategy, tag gate, subject, target, blocked result, deferred output, claim, plan, commit, and cost policy fields
+- **THEN** they produce equivalent action units, claims, arbitration decisions, planning, commit, blocked result, handoff, and deferred output behavior for the same world state
+- **AND** differences in behavior require explicit policy data differences or a different registered strategy module
+
+#### Scenario: tag 不形成隐藏策略
+- **WHEN** an entity has source, ability, state, immunity, or blocker tags
+- **THEN** those tags may be used as condition inputs or filters
+- **AND** rules do not infer a complete behavior strategy from tag combinations without an explicit strategy, policy field, or policy type
 
 ### Requirement: 兼容迁移现有行为
 系统 SHALL migrate existing `PlayerMove`、`AutoMove`、`MechanismPush`、`DebugMove`、`DebugSpawn`、`DebugRemove` and push handoff behavior into behavior action units. During migration, compatibility adapters MAY exist, but the target architecture MUST make source-specific behavior data-driven and MUST remove ordinary parent retry as a success path.
@@ -279,18 +314,27 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **AND** they do not rely on fallback provider defaults to choose output spec or cost
 
 ### Requirement: 普通 action pipeline 不依赖 Pending
-系统 SHALL allow ordinary ready actions and structured deferred outputs to execute through the action pipeline without a `PendingRuleStateStore`. Pending state MUST NOT be required for push continuation, PushOnEnter output, or deferred output re-entry.
+系统 SHALL manage action unit lifecycle through one unified state machine or equivalent centralized lifecycle module. Strategies, policy evaluators, tag gates, subject selectors, target selectors, claim arbiters, planners, and commit systems MAY request state transitions, but they MUST NOT each maintain hidden lifecycle state for waiting, retry, completion, cancellation, or failure.
 
-#### Scenario: Server runner executes without pending push chain
-- **WHEN** a server tick drains ready player, mechanism, auto, debug, or deferred actions
-- **THEN** the main rule execution path processes them without creating pending child units for push continuation
-- **AND** downstream push continuation is represented by deferred output
-- **AND** source action results do not wait for downstream deferred result success
+#### Scenario: ready unit 进入候选构建
+- **WHEN** an action unit reaches its ready tick
+- **THEN** the unified lifecycle moves it into the candidate-building stage
+- **AND** strategy modules may build candidates and claims without directly marking the unit completed
 
-#### Scenario: Future waiting action is explicit
-- **WHEN** a future behavior needs parent action result to wait for child action results
-- **THEN** that behavior requires an explicit waiting-action proposal and policy
-- **AND** it MUST NOT reuse legacy push pending chain as an implicit default path
+#### Scenario: 仲裁结果推进状态
+- **WHEN** claim arbitration accepts, rejects, interrupts, or merges an action unit
+- **THEN** the unified lifecycle records the explicit accepted, rejected, interrupted, or merged state
+- **AND** downstream planning and commit consume that recorded state
+
+#### Scenario: deferred output 不创建隐藏等待链
+- **WHEN** a strategy or blocked policy emits deferred output
+- **THEN** the unified lifecycle records that the current unit emitted finite output or completed according to policy
+- **AND** it does not create hidden parent-child waiting state outside the lifecycle module
+
+#### Scenario: 等待语义需要显式状态扩展
+- **WHEN** a future behavior truly needs waiting, retry, or child-result dependency
+- **THEN** the lifecycle MUST add explicit states or transitions through a separate OpenSpec change
+- **AND** the implementation MUST NOT reuse removed push pending chain semantics as an implicit lifecycle state
 
 ### Requirement: 同 tick Push Vector Composition
 系统 SHALL compose same-tick push contributions targeting the same resolved subject into a deterministic net push vector before those contributions become independent movement attempts. All push contributions SHALL enter the same default composition pool unless a future explicit composition-group policy is added. Composition MUST preserve contribution metadata and MUST NOT use repeated queued action count as the source of strength.
@@ -361,4 +405,187 @@ Runtime action execution SHALL reject or flag new ordinary behavior strategy bra
 - **WHEN** client animation, editor UI, sandbox authoring, logs, or diagnostics need readable names
 - **THEN** they MAY use readable aliases or debug names
 - **AND** those aliases do not affect server-authoritative arbitration, planning, commit, pending, or final coordinates
+
+### Requirement: Targeting Policy Data Boundary
+系统 SHALL express ordinary action target selection through explicit targeting policy data. `ActionSpec` MUST reference a resolved targeting policy or compatible migration rule, and runtime execution MUST NOT add ordinary behavior-name branches to choose target shape, direction source, filter, ordering, selector class, or empty-target handling.
+
+#### Scenario: action 引用 targeting policy
+- **WHEN** player move, auto move, mechanism push, debug move, or configured front multi-target behavior enters the rules layer
+- **THEN** its target selection is resolved from `ActionSpec` targeting policy data
+- **AND** the rule layer does not compare raw action names to choose target shape
+
+#### Scenario: legacy target rule 只作迁移入口
+- **WHEN** an existing action still uses `ActionTargetRule`
+- **THEN** the registry or adapter maps it into equivalent targeting policy semantics
+- **AND** new ordinary behavior does not require adding a new central `ActionTargetRule` branch
+- **AND** new target algorithms are introduced as selector classes or extensions and then mapped from configuration
+
+#### Scenario: selector class comes from config
+- **WHEN** an action policy references a targeting selector id
+- **THEN** the runtime resolves that id to a registered target selector class or extension
+- **AND** changing the action alias does not change selector behavior
+
+### Requirement: Targeting Config Import Resolution
+系统 SHALL resolve targeting selector, targeting spec, and target filter authoring names into runtime identifiers or enums before authoritative rules consume them. Runtime action arbitration, execution, planning, and commit MUST NOT compare raw targeting names, selector names, filter names, tag strings, or action aliases to decide target behavior.
+
+#### Scenario: 配置名在 provider 边界解析
+- **WHEN** Luban data declares `targeting_selector_id`, `targeting_id`, `filter_id`, target tags, or readable target policy names
+- **THEN** the provider resolves them into runtime identifiers, enums, or typed tag values
+- **AND** `Shared.DG.GameCore` rule modules consume only the resolved values
+
+#### Scenario: 未知 targeting 引用显式失败
+- **WHEN** an action policy references an unknown targeting, selector, or filter id
+- **THEN** registry construction fails with a clear error
+- **AND** the action is not silently treated as player move, direction cell, self, or front entities
+
+### Requirement: Target Filter Reads Final Facts
+Target filter policy SHALL evaluate final `GameWorld` component, tag, and spatial facts only. It MUST NOT read RuntimeEffect source data, Unity presentation state, Fantasy session state, entity names, action names, or debug aliases to decide whether a target is included.
+
+#### Scenario: final component 过滤
+- **WHEN** a targeting policy filters for pushable positioned entities
+- **THEN** the filter reads final `PositionComponent` and `PushableComponent` facts
+- **AND** it does not inspect which RuntimeEffect or authoring source produced those final facts
+
+#### Scenario: tag 过滤不替代策略字段
+- **WHEN** a target has source, ability, state, immunity, or blocker tags
+- **THEN** target filtering may include or exclude the target using resolved tag facts
+- **AND** those tags do not choose target shape, subject policy, blocked policy, handoff policy, or commit behavior
+
+### Requirement: Targeting Verification
+系统 SHALL verify targeting policy data through OpenSpec validation, Shared build, server verification, and Unity TestFramework EditMode tests. End-to-end target hit behavior SHALL remain a manual Play Mode / two-client verification step.
+
+#### Scenario: automated targeting validation
+- **WHEN** automated validation runs
+- **THEN** it includes `openspec validate`, Shared GameCore build, server authoritative verification, and Unity EditMode tests for targeting data import, selector registry mapping, self target, direction cell, target coord, filter evaluation, deterministic ordering, and unknown-id failure
+
+#### Scenario: manual targeting validation
+- **WHEN** the user manually runs server-authoritative Play Mode with two clients
+- **THEN** target selection results are observed only through server-produced snapshot/delta
+- **AND** both clients converge to the same final server state for player move, auto move, and mechanism push
+
+### Requirement: Action Execution Emits EffectApplications
+系统 SHALL allow action execution to emit `EffectApplication` outputs from `ActionContext`, `TargetData[]`, and `EffectSpec` references. `ApplyRuntimeEffect` and future `ApplyEffectsToTargets` execution MUST produce effect applications or commit proposals without directly mutating final `GameWorld` Component/tag state.
+
+#### Scenario: ApplyRuntimeEffect uses TargetData
+- **WHEN** a configured action uses `ApplyRuntimeEffect`
+- **AND** targeting resolves three target entities
+- **THEN** execution emits three `EffectApplication` values using the configured effect spec
+- **AND** each target receives its own target binding and causality metadata
+
+#### Scenario: Execution does not bypass commit
+- **WHEN** an effect application is produced
+- **THEN** execution routes it to commit output
+- **AND** execution does not call runtime effect store, component setters, tag setters, or world mutation APIs directly
+
+### Requirement: Effect Spec References Are Data Driven
+系统 SHALL resolve effect spec references from Luban action/effect configuration data. A new ordinary effect-driven action that reuses existing targeting, payload, duration, stack, and commit policies MUST be addable through config/provider data and tests without editing core action execution or arbitration flow.
+
+#### Scenario: New temporary pushable action changes data only
+- **WHEN** a new action grants Pushable for a timed duration to its target
+- **THEN** the developer adds or updates action/effect config and tests
+- **AND** no core branch compares the action name or effect name to choose behavior
+
+#### Scenario: Effect id resolves through Luban registry
+- **WHEN** an action references an effect spec id
+- **THEN** the id resolves through the Luban-backed effect spec registry
+- **AND** runtime rules do not compare raw effect name strings to choose payload, duration, or stack behavior
+
+#### Scenario: Unknown effect id fails clearly
+- **WHEN** runtime code attempts to execute an action referencing an unknown effect spec id
+- **THEN** Shared GameCore fails the action with a clear reason
+- **AND** it does not silently apply a default runtime effect
+
+### Requirement: Effect Outputs Do Not Replace Claim Arbitration
+系统 SHALL keep movement, push, body movement, target cell reservation, spawn, remove, and direction changes inside the existing claim/planning/commit boundaries. Effect applications MAY change final component/tag/stat-like facts that later action arbitration reads, but they MUST NOT directly accept or reject movement claims.
+
+#### Scenario: Immobile effect affects later movement
+- **WHEN** an action applies an immobile effect to an entity
+- **AND** a later move action is processed for that entity
+- **THEN** movement is rejected through normal action arbitration reading final movement permission
+- **AND** the effect application itself does not perform movement arbitration
+
+#### Scenario: Effect does not reserve target cell
+- **WHEN** an effect is applied to a target entity in a cell
+- **THEN** the effect does not reserve, occupy, or move into any target cell by itself
+- **AND** target cell conflicts remain owned by action claims and commit validation
+
+### Requirement: Authoritative Action Context
+
+系统 SHALL represent each server-authoritative action with an explicit `ActionContext` or equivalent runtime context. The context MUST distinguish instigator, source entity, optional causer, subject entry, target hint, direction, spec id, owner action id, causality, created tick, ready tick, and cost tick. The context MUST NOT decide behavior policy by itself and MUST NOT create implicit parent/child waiting.
+
+#### Scenario: Player move context
+- **WHEN** a player move input enters the authoritative action queue
+- **THEN** the created context records the player as instigator, source entity, and subject entry
+- **AND** it records the target hint or direction supplied by input
+- **AND** it resolves behavior through `ActionSpec` rather than action-name branches
+
+#### Scenario: AutoMove self push context
+- **WHEN** an AutoMove entity reaches its cost tick
+- **THEN** the created context records the AutoMove entity as instigator, source entity, and subject entry
+- **AND** it records direction from final `DirectionComponent`
+- **AND** it does not create pending parent/child state to remember the source
+
+#### Scenario: Context is not world state
+- **WHEN** arbitration needs current position, tags, components, blocking, or pushability
+- **THEN** it reads those facts from final `GameWorld` state at the current tick
+- **AND** it does not reuse stale world facts embedded inside `ActionContext`
+
+### Requirement: TargetData Targeting Output
+
+系统 SHALL express targeting/query results as `TargetData` or an equivalent finite target-data set before claim generation. TargetData MUST be a read-only candidate target description, not a commit, not a claim, and not a final result. The first supported target data policies MUST include Self, DirectionCell, and a front-cell/front-entity query sufficient for moving all objects in front of a source.
+
+#### Scenario: Self targeting
+- **WHEN** an action uses Self targeting
+- **THEN** targeting emits one TargetData item for the action subject entry
+- **AND** later execution may turn that TargetData into claims according to configured strategy
+
+#### Scenario: DirectionCell targeting
+- **WHEN** an action uses DirectionCell targeting with a valid direction
+- **THEN** targeting emits one TargetData item for the adjacent cell in that direction
+- **AND** the TargetData records the source query id and direction
+
+#### Scenario: Front entities targeting
+- **WHEN** an action uses the minimal front-entities targeting policy
+- **THEN** targeting emits a finite ordered TargetData set for matching entities or occupied cells in front of the source
+- **AND** ordering is deterministic and does not depend on dictionary enumeration order
+
+### Requirement: ExecutionOutput Contract
+
+系统 SHALL convert `ActionContext` plus TargetData into `ExecutionOutput` or an equivalent structured execution result before claim arbitration. ExecutionOutput MAY include claim candidates, blocked outcome candidates, deferred output candidates, commit candidates, result owner mapping, and success policy. ExecutionOutput MUST NOT directly mutate `GameWorld`.
+
+#### Scenario: Move execution creates claim candidates
+- **WHEN** a move-compatible execution consumes one or more TargetData items
+- **THEN** it emits move claim candidates for the resolved subject or target subjects
+- **AND** it does not directly change entity positions
+
+#### Scenario: Blocked output stays structured
+- **WHEN** execution detects or receives a blocked outcome candidate
+- **THEN** it emits structured blocked/deferred/result data for the policy layer
+- **AND** it does not hardcode push, bounce, or reject behavior by action id
+
+#### Scenario: Commit still owns world mutation
+- **WHEN** ExecutionOutput contains commit candidates or accepted claims
+- **THEN** planning and commit validation still decide whether `GameWorld` changes
+- **AND** failed validation prevents mutation even if execution produced candidates
+
+### Requirement: Multi Target Success Policy Entry
+
+系统 SHALL provide an explicit success policy entry for multi-target execution. The default policy MUST be all-or-nothing for required claims. Partial success MUST require explicit policy support and MUST NOT occur accidentally because some generated claims committed while others failed.
+
+#### Scenario: Default all-or-nothing
+- **WHEN** one action produces required claims for multiple TargetData items
+- **AND** any required claim fails arbitration, planning, or commit
+- **THEN** the action result is not reported as overall success
+- **AND** no partial success is treated as the default behavior
+
+#### Scenario: Partial success requires policy
+- **WHEN** an action spec or execution policy does not explicitly allow partial success
+- **AND** only some target claims can succeed
+- **THEN** the system rejects or fails the unit according to all-or-nothing rules
+- **AND** it does not silently report partial success
+
+#### Scenario: Partial policy has data entry
+- **WHEN** a future action needs partial success
+- **THEN** the success behavior is represented through explicit success policy data and per-target result mapping
+- **AND** adding that behavior does not require central action-name branching
 

@@ -299,3 +299,76 @@ TBD - created by archiving change add-authoritative-move-runner. Update Purpose 
 - **AND** 权威 GameWorld 不产生状态变化
 - **AND** 服务端不广播 WorldDelta
 
+### Requirement: 服务端权威 Runtime Effect 调试执行
+服务端 SHALL execute debug runtime effect apply/remove through the same commit and effect spec boundary as ordinary effect application. Debug effect requests MUST resolve to an `EffectSpecId` and an `EffectSpec` from Luban-backed config or an explicit debug effect registry before producing `EffectApplication`. Debug execution MUST NOT construct ad hoc authoritative `EffectSpec` objects from `RuntimeEffectKind` as the main path.
+
+#### Scenario: Debug apply resolves effect spec
+- **WHEN** a client sends a debug apply runtime effect request using the legacy effect kind input
+- **THEN** the server maps that input to an explicit effect spec id
+- **AND** loads the effect definition from provider or debug registry
+- **AND** creates an `EffectApplication` from that definition
+- **AND** submits `AddRuntimeEffect` through commit
+
+#### Scenario: Debug remove uses runtime source identity
+- **WHEN** a client sends a debug remove runtime effect request with runtime effect id
+- **THEN** the server submits `RemoveRuntimeEffect` through commit
+- **AND** only the matching runtime effect source is removed
+- **AND** final Component/tag state is recomputed by resolver
+
+#### Scenario: Debug failure does not mutate world
+- **WHEN** effect kind cannot resolve to an effect spec id, effect spec is missing, entity is missing, or debug editing is disabled
+- **THEN** the server responds with failure reason
+- **AND** no runtime effect source, final Component, final tag, or WorldDelta is produced
+
+#### Scenario: Debug apply broadcasts final result
+- **WHEN** debug apply runtime effect succeeds
+- **THEN** the authoritative GameWorld changes only through commit and resolver
+- **AND** observers receive the same final Component/tag result through WorldDelta
+
+### Requirement: Runtime Effect Debug Verification
+系统 SHALL verify server debug runtime effect behavior through server authoritative verification and manual two-client validation.
+
+#### Scenario: Server verification covers debug effect
+- **WHEN** server authoritative verification runs
+- **THEN** it covers debug apply effect, debug remove effect, missing effect spec failure, and static source preservation
+- **AND** it proves debug effect execution does not bypass commit
+
+#### Scenario: Manual debug effect sync
+- **WHEN** client A applies and removes runtime effects through debug UI
+- **AND** client B observes the same server world
+- **THEN** both clients converge to server final Component/tag state
+- **AND** client B does not need runtime effect source data to display the result
+
+### Requirement: Server Authoritative Source Layout Semantics
+The Fantasy Hotfix authoritative move source layout SHALL separate network Handler entrypoints, application services, authoritative tick runtime, world bootstrap, synchronization, debug editing, and protocol mapping. Handler files MUST remain thin Fantasy message boundaries and MUST NOT become the place where gameplay rules, storage backend details, or client presentation policy are implemented.
+
+#### Scenario: Handler remains an entrypoint
+- **WHEN** a `C2G_*` request handler receives a client request
+- **THEN** the handler validates session/request shape, converts protocol data to DG input data, calls an authoritative application service or runtime boundary, and replies
+- **AND** it does not directly execute action arbitration, mutate storage adapter internals, construct Arch entities, or build Unity presentation state
+
+#### Scenario: Runtime and sync are discoverable
+- **WHEN** a developer needs to inspect server tick, input queue, world delta construction, observer enumeration, or broadcast behavior
+- **THEN** those files are located under directories whose names identify runtime or sync responsibilities
+- **AND** they are not hidden inside generic infrastructure or Handler folders
+
+#### Scenario: Fantasy conventions survive migration
+- **WHEN** server files are moved into the new layout
+- **THEN** Fantasy message handlers still use source-generator-compatible classes
+- **AND** generated `.g.cs` files are not manually edited
+- **AND** async Fantasy code continues to use `FTask` where async behavior is required
+
+### Requirement: Server Layout Migration Verification
+The server layout migration SHALL prove that authoritative behavior, session observer behavior, and WorldDelta broadcast behavior remain unchanged by directory and file movement.
+
+#### Scenario: Server verification passes
+- **WHEN** the server authoritative verification project runs after migration
+- **THEN** player movement, blocked movement, debug spawn, debug move, debug remove, runtime effect debug, observer registration, and WorldDelta sync scenarios still pass
+- **AND** failures identify behavior regressions rather than missing file paths
+
+#### Scenario: Manual two-client sync still works
+- **WHEN** the user manually starts the server and two Unity clients after migration
+- **AND** client A moves, builds, drags, deletes, or applies an approved debug runtime effect
+- **THEN** client B observes the server-authoritative final state through snapshot/delta
+- **AND** no server behavior depends on the old physical source directory
+

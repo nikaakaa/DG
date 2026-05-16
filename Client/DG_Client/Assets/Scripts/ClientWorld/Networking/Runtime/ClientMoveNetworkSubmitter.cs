@@ -132,7 +132,7 @@ namespace DG.Map
         {
             if (!serverAuthoritative)
             {
-                completed?.Invoke(TryApplyLocalRuntimeEffect(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out long effectId, out string reason), reason, effectId);
+                completed?.Invoke(false, "server authoritative disabled", 0);
                 return;
             }
 
@@ -149,7 +149,7 @@ namespace DG.Map
         {
             if (!serverAuthoritative)
             {
-                completed?.Invoke(TryRemoveLocalRuntimeEffect(entityId, kind, new RuntimeEffectId(runtimeEffectId), out long removedEffectId, out string reason), reason, removedEffectId);
+                completed?.Invoke(false, "server authoritative disabled", 0);
                 return;
             }
 
@@ -542,151 +542,6 @@ namespace DG.Map
             }
 
             return true;
-        }
-
-        private bool TryApplyLocalRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out long effectId, out string reason)
-        {
-            effectId = 0;
-            if (!TryGetLocalWorldEntity(entityId, out GameWorld world, out _, out reason))
-            {
-                return false;
-            }
-
-            if (!TryCreateRuntimeEffectSpec(world, entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out RuntimeEffectSpec spec, out reason))
-            {
-                return false;
-            }
-
-            RuntimeEffectInstance instance = world.AddRuntimeEffect(spec);
-            effectId = instance.Id.Value;
-            reason = string.Empty;
-            return true;
-        }
-
-        private bool TryRemoveLocalRuntimeEffect(long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId, out long removedEffectId, out string reason)
-        {
-            removedEffectId = 0;
-            if (!TryGetLocalWorldEntity(entityId, out GameWorld world, out _, out reason))
-            {
-                return false;
-            }
-
-            RuntimeEffectId effectId = requestedEffectId.IsValid ? FindLocalRuntimeEffect(world, entityId, kind, requestedEffectId) : FindLocalRuntimeEffect(world, entityId, kind);
-            if (!effectId.IsValid)
-            {
-                reason = "runtime effect not found";
-                return false;
-            }
-
-            if (!world.RemoveRuntimeEffect(effectId))
-            {
-                reason = "runtime effect not found";
-                return false;
-            }
-
-            removedEffectId = effectId.Value;
-            reason = string.Empty;
-            return true;
-        }
-
-        private bool TryGetLocalWorldEntity(long entityId, out GameWorld world, out GameEntity entity, out string reason)
-        {
-            world = null;
-            entity = default;
-            if (runner == null || runner.Context == null)
-            {
-                reason = "runner unavailable";
-                return false;
-            }
-
-            world = runner.Context.ClientMapWorld.CoreWorld;
-            if (!world.TryGetEntity(entityId, out entity))
-            {
-                reason = "entity not found";
-                return false;
-            }
-
-            reason = string.Empty;
-            return true;
-        }
-
-        private static bool TryCreateRuntimeEffectSpec(GameWorld world, long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectSpec spec, out string reason)
-        {
-            if (kind == RuntimeEffectKind.TemporaryBlocking)
-            {
-                spec = RuntimeEffectSpec.Blocking(entityId, world.ServerTick, expireTick);
-                reason = string.Empty;
-                return true;
-            }
-
-            if (kind == RuntimeEffectKind.TemporaryAutoMove)
-            {
-                spec = RuntimeEffectSpec.AutoMove(entityId, autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks, world.ServerTick, expireTick);
-                reason = string.Empty;
-                return true;
-            }
-
-            if (kind == RuntimeEffectKind.TemporaryPushable)
-            {
-                spec = RuntimeEffectSpec.Pushable(entityId, world.ServerTick, expireTick);
-                reason = string.Empty;
-                return true;
-            }
-
-            if (kind == RuntimeEffectKind.TemporaryPort)
-            {
-                if (portMask == DirectionMask.None)
-                {
-                    spec = default;
-                    reason = "invalid port mask";
-                    return false;
-                }
-
-                spec = RuntimeEffectSpec.Port(entityId, portMask, world.ServerTick, expireTick);
-                reason = string.Empty;
-                return true;
-            }
-
-            if (kind == RuntimeEffectKind.TemporaryImmobile)
-            {
-                spec = RuntimeEffectSpec.Immobile(entityId, world.ServerTick, expireTick);
-                reason = string.Empty;
-                return true;
-            }
-
-            spec = default;
-            reason = "invalid runtime effect kind";
-            return false;
-        }
-
-        private static RuntimeEffectId FindLocalRuntimeEffect(GameWorld world, long entityId, RuntimeEffectKind kind)
-        {
-            IReadOnlyList<RuntimeEffectInstance> active = world.RuntimeEffects.ActiveAt(world.ServerTick);
-            for (int i = active.Count - 1; i >= 0; i--)
-            {
-                RuntimeEffectInstance effect = active[i];
-                if (effect.TargetEntityId == entityId && effect.Kind == kind)
-                {
-                    return effect.Id;
-                }
-            }
-
-            return default;
-        }
-
-        private static RuntimeEffectId FindLocalRuntimeEffect(GameWorld world, long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId)
-        {
-            IReadOnlyList<RuntimeEffectInstance> active = world.RuntimeEffects.ActiveAt(world.ServerTick);
-            for (int i = active.Count - 1; i >= 0; i--)
-            {
-                RuntimeEffectInstance effect = active[i];
-                if (effect.Id.Equals(requestedEffectId) && effect.TargetEntityId == entityId && effect.Kind == kind)
-                {
-                    return effect.Id;
-                }
-            }
-
-            return default;
         }
 
     }

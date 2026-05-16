@@ -46,10 +46,11 @@ Arch-backed storage SHALL support the authoritative component set and component-
 - **THEN** the operation reads or writes the Arch-backed component storage
 - **AND** the caller does not need Arch-specific APIs
 
-#### Scenario: Auto move query uses Arch backend
+#### Scenario: Auto push source query uses Arch backend
 - **WHEN** service-authoritative tick queries entities with `PositionComponent`, `DirectionComponent`, and `AutoMoveComponent`
 - **THEN** Arch-backed storage returns the same DG entity ids and component values as indexed storage for the same world state
-- **AND** the query result is exposed through DG `QueryAutoMove`
+- **AND** the query result is exposed through a DG auto push source query
+- **AND** `AutoMoveComponent` is treated as source timing data for configured push/action output, not as an independent movement adjudication path
 
 #### Scenario: Push-on-enter query uses Arch backend
 - **WHEN** service-authoritative tick queries entities with `PositionComponent`, `DirectionComponent`, and `PushOnEnterComponent`

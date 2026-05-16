@@ -4,36 +4,44 @@
 TBD - created by archiving change refactor-atomic-action-behavior-layer. Update Purpose after archive.
 ## Requirements
 ### Requirement: Atomic Action Unit Lifecycle
-系统 SHALL represent runtime behavior as action units with explicit lifecycle, cost tick, ready tick, arbitration, commit result, and retry state. A unit MUST NOT enter arbitration before its ready tick.
+
+系统 SHALL represent runtime behavior as action units with explicit context, lifecycle, cost tick, ready tick, targeting, execution output, arbitration, commit result, and finite deferred output state. A unit MUST NOT enter targeting or arbitration before its ready tick. Atomicity means one bounded action unit owns its result boundary; it does not mean the unit lacks source, target, or causality context.
 
 #### Scenario: Action waits for ready tick
 - **WHEN** an action unit is created with `createdTick = 10` and `costTicks = 2`
 - **THEN** its ready tick is 12
-- **AND** the rule execution system does not arbitrate it before tick 12
+- **AND** the rule execution system does not run targeting, execution output, or arbitration before tick 12
 
-#### Scenario: Ready action enters arbitration
+#### Scenario: Ready action enters targeting and arbitration
 - **WHEN** server tick reaches an action unit's ready tick
-- **THEN** the action unit enters the shared arbitration flow
-- **AND** arbitration reads current world state and final component results at that tick
+- **THEN** the action unit builds TargetData from its ActionContext and current world state
+- **AND** execution output and arbitration read final component results at that tick
 
 #### Scenario: Unit identifiers are separated
-- **WHEN** a player action derives a blocker action
+- **WHEN** an external request creates a runtime action unit
 - **THEN** the external request keeps its `OwnerActionId`
-- **AND** each runtime behavior unit has a distinct `ActionUnitId`
-- **AND** parent/derived relationships are represented without reusing one id for every unit
+- **AND** each runtime behavior unit has a distinct action/unit id
+- **AND** result ownership is represented through ActionContext rather than reusing one id for every derived or deferred unit
 
 ### Requirement: Unit-Internal Atomic Claims
-系统 SHALL treat `ActionClaim` as the atomic boundary inside one action unit. A unit succeeds only when all required claims for that unit can be planned and committed; partial movement of the same unit MUST NOT be committed as success.
+
+系统 SHALL treat required claims generated from one ExecutionOutput as the atomic success boundary inside one action unit. A unit succeeds only when all required claims for that unit can be arbitrated, planned, and committed under its success policy. Partial movement of the same unit MUST NOT be committed as success unless explicit partial success policy is present.
 
 #### Scenario: Port-connected body moves atomically
-- **WHEN** a port-connected body action unit is accepted
+- **WHEN** a port-connected body action unit is accepted under all-or-nothing policy
 - **THEN** planner creates claims or move members for every body member
-- **AND** commit succeeds only if every member move in that unit can be applied
+- **AND** commit succeeds only if every required member move in that unit can be applied
+
+#### Scenario: Multi target unit defaults to all-or-nothing
+- **WHEN** one action context targets multiple front entities and emits required move claims
+- **AND** any required claim is rejected or blocked
+- **THEN** the action unit does not report overall success
+- **AND** partial success is not inferred from the successful subset
 
 #### Scenario: Unit claim failure rejects the unit
-- **WHEN** any required claim in an action unit fails during planning or commit
-- **THEN** the action unit result is failed, rejected, or pending according to its policy
-- **AND** no partial success is reported for that unit
+- **WHEN** any required claim in an action unit fails during arbitration, planning, or commit
+- **THEN** the action unit result is failed, rejected, or deferred according to its policy
+- **AND** no partial success is reported for that unit unless explicitly configured
 
 ### Requirement: Derived Action Waiting And Retry
 系统 SHALL model blocker-derived behavior as a relationship between action units. When a parent action unit is blocked by a pushable blocker, it MAY derive a blocker action unit and enter waiting state. The parent MUST retry after the derived unit succeeds instead of being replaced by the derived unit.
@@ -144,19 +152,21 @@ TBD - created by archiving change refactor-atomic-action-behavior-layer. Update 
 - **AND** client code does not locally arbitrate action unit success
 
 ### Requirement: Atomic Action Verification
-系统 SHALL include automated validation for action unit lifecycle, split-tick derived behavior, port-connected body retry, bounded nested push propagation, and failure handling. Unity Player build MUST NOT be required.
+系统 SHALL include automated validation for action unit lifecycle, strategy registration, generated explicit strategy registration code, tag gate filtering, split-tick deferred behavior, port-connected body action units, bounded push propagation, same-tick composition, no old pending chain, and failure handling. Unity Player build MUST NOT be required.
 
 #### Scenario: Automated verification
 - **WHEN** automated validation runs
-- **THEN** it includes OpenSpec strict validation, Shared GameCore build, server authoritative verification, and Unity EditMode tests for atomic action units
-- **AND** tests cover ordinary push retry, nested push retry, nested push failure, port-connected body retry, body pushes body, and chain safety guards
+- **THEN** it includes OpenSpec strict validation, Shared GameCore build, server authoritative verification, and Unity EditMode tests for atomic action units and the Action Policy Pipeline
+- **AND** tests cover ordinary config-only behavior, attribute-declared strategy generation, generated registry injection, registered strategy behavior, multi-contact fanout, same-subject collapse, closed-loop feedback deferral, and chain safety guards
+- **AND** tests prove the runtime tick path does not use reflection scanning to discover strategy classes
 
 #### Scenario: Manual end-to-end verification
 - **WHEN** the user manually runs server-authoritative Play Mode with two clients
-- **THEN** split-tick ordinary push, nested push, port-connected body push, and body-to-body push converge to the same server final state on both clients
+- **THEN** configured ordinary behavior, generated-registered strategy behavior, split-tick push, port-connected body push, and feedback composition converge to the same server final state on both clients
+- **AND** the client does not locally decide strategy, claim arbitration, or final authoritative coordinates
 
 ### Requirement: Atomic Transaction Consumption Boundary
-系统 SHALL treat each server tick's ready action processing as a finite atomic transaction boundary. Within one transaction, a resolved action subject MUST consume at most one merged push input, and any downstream push output produced by that consumption MUST NOT be consumed again by the same subject inside the same transaction.
+系统 SHALL treat each server tick's ready action processing as a finite atomic transaction boundary. Within one transaction, a resolved action subject MUST consume at most one merged push input, and any downstream push output produced by that consumption MUST NOT be consumed again by the same subject inside the same transaction. Atomic transaction composition MUST be represented by current-tick action units, claims, contribution composition, and deferred output; it MUST NOT be represented by an unbounded same-tick solver or by the removed parent-child pending chain.
 
 #### Scenario: Same subject consumes once per tick
 - **WHEN** two ready action units in the same server tick both resolve push input into the same subject
@@ -169,6 +179,11 @@ TBD - created by archiving change refactor-atomic-action-behavior-layer. Update 
 - **THEN** the system does not consume that feedback again in the current transaction
 - **AND** any continuing output is represented as a structured deferred output no earlier than `tick + cost`
 - **AND** the current transaction remains finite
+
+#### Scenario: 不恢复旧 pending chain
+- **WHEN** atomic transaction composition needs to carry output into a later tick
+- **THEN** it uses deferred output or equivalent future ready action input
+- **AND** it does not create `PendingActionState`, `PendingActionUnit`, parent retry, or child completion records for push propagation
 
 ### Requirement: Emergent Motion Across Atomic Transactions
 系统 SHALL model continuous or infinite-appearing motion as repeated finite transactions across ticks. A closed-loop device MUST NOT require a single action or pending state to recursively solve the complete loop before committing a result.
@@ -233,7 +248,7 @@ TBD - created by archiving change refactor-atomic-action-behavior-layer. Update 
 - **AND** those policies require separate proposals if needed
 
 ### Requirement: Same-Tick Push Feedback Arbitration
-系统 SHALL arbitrate same-tick push feedback before it can create persistent opposite-direction loops on the same subject. This arbitration MUST happen within the action behavior layer and MUST NOT be implemented as queue dedupe alone.
+系统 SHALL arbitrate same-tick push feedback before it can create persistent opposite-direction loops on the same subject. This arbitration MUST happen within the action behavior layer through contribution composition and claim arbitration. It MUST NOT be implemented as queue dedupe alone, as a central action-name branch, as an unbounded whole-chain solver, or as a revival of the old pending chain.
 
 #### Scenario: 同 subject 反馈不形成双向 action 对
 - **WHEN** a feedback structure produces same-tick opposite-direction push contributions for the same resolved subject
@@ -249,4 +264,24 @@ TBD - created by archiving change refactor-atomic-action-behavior-layer. Update 
 - **WHEN** a long push structure spans multiple bodies or cycles
 - **THEN** same-tick composition only resolves contributions that are ready in the current tick
 - **AND** it does not solve the entire future chain inside one tick
+- **AND** it does not keep parent actions pending until every future child succeeds
+
+### Requirement: Atomic Action Context Ownership
+
+系统 SHALL keep source/result ownership inside ActionContext for atomic actions. Result attribution for success, block, bounce, noop, deferred output, direction change, and diagnostics MUST come from the same context and explicit policy data. The system MUST NOT use hidden parent/child waiting to rediscover which source should receive the result.
+
+#### Scenario: Self push result owner is source
+- **WHEN** AutoMove emits self push
+- **THEN** the action context records the AutoMove entity as source and result owner
+- **AND** blocked reversal or cadence commit targets that source according to configured commit policy
+
+#### Scenario: Deferred output does not keep hidden parent
+- **WHEN** an action emits structured deferred output for a future tick
+- **THEN** the future output has its own action context
+- **AND** it does not implicitly update the old source through hidden parent waiting
+
+#### Scenario: Context does not replace policy
+- **WHEN** context records source, target, direction, and owner
+- **THEN** blocked, bounce, push, partial, and commit behavior still comes from `ActionSpec` or explicit policy data
+- **AND** context fields are not interpreted as action-name-specific behavior
 

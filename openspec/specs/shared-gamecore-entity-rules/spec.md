@@ -289,17 +289,22 @@ Shared GameCore SHALL use `ActionSpec` as the behavior policy registry for autho
 - **AND** the rules layer does not choose `"player_push"` or `"connected_body_move"` by matching connected body state inside resolver code
 
 ### Requirement: System 层规则职责边界
-Shared GameCore SHALL organize movement rule code around system-layer responsibilities: action intake, action unit lifecycle, arbitration, planning, conflict/commit, pending retry, and result application. Component reads inside these systems are allowed as rule inputs, but system code MUST NOT depend on concrete entity names, demo-specific entity types, Unity runtime objects, Fantasy runtime objects, protocol generated types, Ability state, or RuntimeEffect state.
+Shared GameCore SHALL organize movement and behavior rule code around system-layer responsibilities: action intake, action unit lifecycle, tag/component gate, subject selection, target selection, strategy execution, claim arbitration, planning, deferred output, conflict/commit, and result application. Component and tag reads inside these systems are allowed as rule inputs, but system code MUST NOT depend on concrete entity names, ordinary action ids, gameplay-specific names, Unity runtime objects, Fantasy runtime objects, protocol generated types, Ability state, RuntimeEffect state, editor scanning APIs, or runtime reflection to choose ordinary behavior strategy.
 
 #### Scenario: 规则 system 读取 component 而不读取实体种类
-- **WHEN** player movement, push, auto movement, or mechanism push is evaluated
+- **WHEN** player movement, push, auto movement, mechanism push, configured wind push, or future ordinary behavior is evaluated
 - **THEN** the rule system may read final components such as `PositionComponent`, `BlockingComponent`, `PushableComponent`, `PlayerControlComponent`, `DirectionComponent`, `AutoMoveComponent`, `PushOnEnterComponent`, and `PortConnectorComponent`
-- **AND** the rule system does not branch on entity class names or demo-only entity type names to decide movement behavior
+- **AND** the rule system does not branch on entity class names, demo-only entity type names, or ordinary action id strings to decide behavior strategy
 - **AND** the rule system does not query Ability or RuntimeEffect state
 
+#### Scenario: tag 只作为事实输入
+- **WHEN** rules evaluate tags such as source, ability, state, immunity, or blocker tags
+- **THEN** those tags are used only as facts for explicit policy conditions or filters
+- **AND** tag combinations do not replace `ActionSpec`, strategy key, or reusable policy fields
+
 #### Scenario: 规则职责拆分后行为保持一致
-- **WHEN** the state-driven rule system processes the same world state and queued actions as before the refactor
-- **THEN** it produces equivalent accepted action units, rejected reasons, move plans, commit results, dirty changes, and owner action results for existing covered scenarios
+- **WHEN** the state-driven rule system processes the same world state and queued actions as before a pipeline refactor
+- **THEN** it produces equivalent accepted action units, rejected reasons, deferred outputs, move plans, commit results, dirty changes, and owner action results for existing covered scenarios
 
 ### Requirement: Legacy movement resolver 迁移边界
 Shared GameCore SHALL migrate production rule execution away from `Movement/Legacy/Systems.cs` before deleting or isolating that file. The server-authoritative path MUST use the state-driven action / action unit / arbitration / plan / commit pipeline as the rule truth, and legacy resolver APIs MUST NOT remain required by server-authoritative runtime construction after migration.
@@ -327,22 +332,36 @@ Shared GameCore rule execution code SHALL live under a directory that represents
 - **THEN** empty or obsolete `Movement/Legacy` folders do not remain as an apparent extension point
 
 ### Requirement: Rule Pipeline File Boundaries
-The rule pipeline SHALL keep action definitions, action unit lifecycle, arbitration, planning, conflict resolution, pending retry, and rule execution in separate source file boundaries while preserving the same runtime behavior.
+The rule pipeline SHALL keep action definitions, policy data models, request models, tag/component gates, subject selection, target selection, strategy registry, strategy modules, claim arbitration, planning, conflict resolution, deferred output enqueue, and commit in separate source file boundaries while preserving the same runtime behavior. No single central class SHALL own all ordinary behavior construction, blocked outcome execution, claim arbitration, and commit mutation.
 
-#### Scenario: Action definitions are separate from arbitration execution
+#### Scenario: Action definitions are separate from execution
 - **WHEN** a new `ActionSpec` default policy is reviewed
-- **THEN** its source, required components/tags, blocked components/tags, cost, blocked policy, merge policy, interrupt policy, plan rule, and commit rule are found in the action definition boundary
-- **AND** the arbiter does not contain per-kind switch inference logic
+- **THEN** its source, required tags, blocked tags, cost, strategy, blocked result policy, merge policy, interrupt policy, plan rule, and commit rule are found in the action definition or policy boundary
+- **AND** central arbitration execution is not the source of those policy values
+
+#### Scenario: Strategy modules are separate from central arbitration
+- **WHEN** a behavior needs a new reusable low-level capability
+- **THEN** the code adds or updates a strategy module and registry entry
+- **AND** the registry entry is produced from strategy metadata into explicit generated C# registration code
+- **AND** central arbitration continues to compare produced action units and claims
+
+#### Scenario: Generated registration is outside rule decisions
+- **WHEN** generated strategy registration code is reviewed
+- **THEN** it only maps typed strategy keys to strategy module construction or registration
+- **AND** it does not contain ordinary action id branches, world-state decisions, tag-condition evaluation, planning, or commit logic
+- **AND** rule systems consume the completed registry through dependency injection
 
 #### Scenario: Planning and commit remain distinct
-- **WHEN** a move action unit is accepted by arbitration
-- **THEN** planning produces a move plan before commit
+- **WHEN** accepted action claims are available
+- **THEN** planning turns them into move/spawn/remove/component/effect proposals
+- **AND** commit applies proposals atomically
 - **AND** conflict resolution remains responsible for same-tick atomic commit decisions
 
-#### Scenario: Pending retry is separate from commit
-- **WHEN** a derived action unit succeeds or fails
-- **THEN** pending retry state updates parent action unit status outside the conflict resolver
-- **AND** the conflict resolver does not create derived action units
+#### Scenario: Deferred output is separate from commit
+- **WHEN** an action emits deferred output
+- **THEN** deferred output enqueue is represented as structured future action input
+- **AND** commit does not own push propagation lifecycle
+- **AND** removed pending retry code is not used as a fallback
 
 ### Requirement: Port Graph Composition Boundary
 系统 SHALL treat port as an entity connection capability, not as an entity hierarchy. Runtime port connectivity MUST be resolved as graph connectivity and exposed to rules as a flat connected body view. Port connectivity MUST NOT automatically propagate member components across the connected body.
@@ -578,18 +597,21 @@ Shared GameCore SHALL keep atomic transaction and emergent motion rules in the s
 - **AND** neither client locally simulates extra loop output
 
 ### Requirement: Push Pending Boundary
-Shared GameCore SHALL remove push propagation from parent-child pending handoff semantics. Push continuation MUST be represented as deferred output that does not make the source action wait for downstream result success.
+Shared GameCore SHALL remove push propagation from parent-child pending handoff semantics. Push continuation MUST be represented as finite action unit output and deferred output that does not make the source action wait for downstream result success. The action policy pipeline MUST NOT recreate `PendingRuleStates`, `PendingActionState`, or `PendingActionUnit` as the default mechanism for push composition.
 
 #### Scenario: Push does not create pending child handoff
-- **WHEN** a push action is blocked by a pushable downstream subject
-- **THEN** the source action resolves its own finite transaction
-- **AND** any downstream continuation is recorded as deferred output
+- **WHEN** a source action is blocked and emits push output
+- **THEN** the output is a structured deferred action or equivalent future ready action input
 - **AND** the source action does not wait for the downstream action result through `PendingRuleStates`
 
+#### Scenario: 组合不能通过旧 pending chain 完成
+- **WHEN** same-tick composition, multi-contact fanout, closed-loop feedback, or long push propagation is evaluated
+- **THEN** it is represented through finite current-tick claims and bounded deferred output
+- **AND** it does not use parent retry or child completion from the removed pending chain
+
 #### Scenario: Future waiting action requires a separate proposal
-- **WHEN** a future action requires a parent action to wait for child action results
-- **THEN** it MUST be specified separately from push propagation
-- **AND** it MUST define finite child count, termination, cancellation, cycle, convergence, unsafe overlap, and owner result aggregation rules
+- **WHEN** a future feature truly needs a waiting action lifecycle
+- **THEN** it requires a separate OpenSpec change with explicit lifecycle, tests, and manual verification
 - **AND** it MUST NOT reuse the removed push pending chain as an implicit fallback
 
 ### Requirement: GameCore Runtime ID Boundary
@@ -671,4 +693,113 @@ Shared GameCore SHALL provide a way to observe hot path storage and query costs 
 - **THEN** it includes automated semantic regression tests
 - **AND** it includes before/after observation for the relevant hot path
 - **AND** compile success alone is not considered proof of migration safety
+
+### Requirement: Shared Targeting Runtime Boundary
+Shared GameCore SHALL own authoritative targeting runtime semantics as pure C# rule code. Targeting runtime code MUST NOT reference UnityEngine, Fantasy, protocol generated types, Unity presentation objects, or client-local mirror-only state.
+
+#### Scenario: Shared targeting has no runtime shell dependency
+- **WHEN** `Shared/DG.GameCore` is built after adding targeting runtime support
+- **THEN** targeting code does not reference `UnityEngine`, `MonoBehaviour`, `GameObject`, `Session`, Fantasy Handler types, or generated protocol message types
+- **AND** server and Unity client mirror code can both understand target data types without owning targeting authority on the client
+
+#### Scenario: client does not decide authoritative hits
+- **WHEN** Unity client displays an action result or animation
+- **THEN** it consumes server snapshot/delta and metadata
+- **AND** it does not locally decide which entities were hit by authoritative targeting
+
+### Requirement: Targeting Uses GameWorld Query Boundary
+Targeting selectors SHALL query entities, components, tags, positions, spatial occupancy, and connected-body metadata through stable `GameWorld` or rule-service APIs. They MUST NOT depend on concrete component store internals, dictionary order, storage adapter types, or future ECS implementation details.
+
+#### Scenario: selector spatial query uses stable API
+- **WHEN** a target selector scans one or more cells from a source entity
+- **THEN** it queries spatial occupancy through `GameWorld` or a stable query service
+- **AND** deterministic ordering is applied explicitly after query
+
+#### Scenario: selector classes remain behind targeting boundary
+- **WHEN** a new target algorithm is added as a selector class or extension
+- **THEN** rule modules access it through the targeting registry
+- **AND** server Hotfix code and Unity client mirror code do not instantiate selector implementation classes directly
+
+#### Scenario: storage migration preserves targeting semantics
+- **WHEN** `GameWorld` internal storage changes from dictionary-backed storage to indexed or ECS-like storage
+- **THEN** targeting output for the same authoritative world state remains semantically equivalent
+- **AND** tests assert target data and final rule results rather than internal storage layout
+
+### Requirement: Authoritative Action Pipeline Foundation
+
+Shared GameCore SHALL expose the authoritative action pipeline as explicit server-side data stages: `ActionContext -> TargetData -> ExecutionOutput -> Claim -> Arbitration -> Planning -> Commit`. Each stage MUST have a bounded responsibility, and server-authoritative behavior MUST NOT be decided by Unity client code, action-name string branches, entity-name branches, or hidden pending parent/child chains.
+
+#### Scenario: Stage ownership is explicit
+- **WHEN** a move-like action enters the shared rules pipeline
+- **THEN** context construction owns source/target/cost/causality facts
+- **AND** targeting owns read-only target data query
+- **AND** execution owns structured output candidates
+- **AND** claim arbitration owns conflict resolution
+- **AND** planning and commit own final world mutation safety
+
+#### Scenario: Client mirrors final result
+- **WHEN** server action stages produce committed world changes
+- **THEN** `ClientMapWorld` mirrors snapshot/delta results
+- **AND** client code does not compute authoritative TargetData, ExecutionOutput, claim winners, blocked result, or final commit
+
+#### Scenario: No hidden pending chain
+- **WHEN** an action emits blocked, deferred, or multi-target output
+- **THEN** continuation is represented through explicit action context and deferred output data
+- **AND** the shared rules pipeline does not rely on removed `PendingRuleStates` as the ordinary push path
+
+### Requirement: Front Target Movement Foundation
+
+Shared GameCore SHALL support a minimal authoritative front-target movement foundation. A configured action MAY query a finite set of entities or occupied cells in front of its source, convert those target data items into execution output, generate one or more claims, arbitrate them, and commit only accepted plans.
+
+#### Scenario: Move all front objects succeeds
+- **WHEN** an action targets all movable objects in front of the source
+- **AND** every required target movement claim can be accepted and committed
+- **THEN** all required target movements are committed by the server
+- **AND** observers receive final server delta rather than client-predicted positions
+
+#### Scenario: Move all front objects blocked
+- **WHEN** one required front target movement claim is blocked under default all-or-nothing policy
+- **THEN** the action does not report overall success
+- **AND** partial movement is not accepted unless explicit partial success policy is configured
+
+#### Scenario: Target fanout stays deterministic
+- **WHEN** multiple front targets are discovered
+- **THEN** their target data and generated claims are ordered deterministically
+- **AND** repeated runs with the same world state produce the same arbitration and commit result
+
+### Requirement: Shared GameCore Source Layout Semantics
+Shared GameCore SHALL organize source files by stable gameplay and runtime semantics rather than by incidental implementation history. The layout MUST keep pure domain data, configuration import, rule execution, world storage, spatial indexing, snapshot/delta contracts, runtime effects, and test-only helpers discoverable as separate responsibilities.
+
+#### Scenario: Developer finds the rule boundary
+- **WHEN** a developer needs to modify action intake, targeting, arbitration, execution strategy, planning, commit, connectivity, or deferred output behavior
+- **THEN** the relevant source files are located under a `Rules` subdirectory whose folder name identifies that responsibility
+- **AND** the developer does not need to inspect config provider, Unity, Fantasy, generated Luban, or storage adapter folders to find ordinary rule code
+
+#### Scenario: Domain and runtime shell stay separated
+- **WHEN** Shared GameCore source files are moved or split
+- **THEN** files under Shared GameCore still compile without `Fantasy`, `Session`, protocol generated types, `UnityEngine`, `MonoBehaviour`, or `GameObject`
+- **AND** the move does not create a new runtime-shell dependency
+
+#### Scenario: Generated configuration stays isolated
+- **WHEN** Luban generated C# files exist in Shared GameCore
+- **THEN** they remain under an explicit generated configuration subtree
+- **AND** rule modules consume runtime provider or registry abstractions instead of generated table classes
+
+### Requirement: Shared Rule File Split Preserves Behavior
+Shared GameCore file splitting SHALL preserve existing public rule behavior, storage boundary behavior, snapshot/delta semantics, and runtime effect final component semantics. Splitting a large file into semantic files MUST NOT introduce a new gameplay branch, new action policy, or new storage backend behavior.
+
+#### Scenario: Action pipeline split is semantic only
+- **WHEN** `ActionPipeline` responsibilities are split into targeting, claim, blocked outcome, strategy registration, and concrete strategy files
+- **THEN** existing action requests produce the same accepted claims, rejected claims, commits, deferred outputs, and result metadata for the same world state
+- **AND** action behavior is still selected by `ActionSpec` policy and registered strategies rather than action name strings
+
+#### Scenario: GameWorld remains the public boundary
+- **WHEN** world storage or query files are moved under a clearer source layout
+- **THEN** external rule modules, server Hotfix code, Unity mirror code, and protocol mapping code still use `GameWorld` public APIs
+- **AND** they do not directly reference storage adapter internals, component pool internals, or third-party ECS types
+
+#### Scenario: Automated semantic regression
+- **WHEN** Unity TestFramework EditMode tests run after the layout migration
+- **THEN** tests cover representative action targeting, strategy execution, claim arbitration, commit, runtime effect final component resolution, snapshot/delta, and spatial query behavior
+- **AND** those tests assert behavior and world state rather than the physical file path of implementation classes
 

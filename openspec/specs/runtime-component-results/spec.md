@@ -34,7 +34,7 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **THEN** the final `AutoMoveComponent` is removed
 
 ### Requirement: RuntimeEffectStore 生命周期边界
-系统 SHALL provide a runtime effect store that records runtime effect lifecycle state, source identity, target entity, expiry, and stack/source data. The runtime effect store MUST NOT directly mutate `GameWorld` component stores.
+系统 SHALL provide a runtime effect store that records runtime effect lifecycle state, source identity, target entity, expiry, and stack/source data. The runtime effect store MUST NOT directly mutate `GameWorld` component stores. Runtime effect store mutation MUST be reachable from ordinary production paths only through accepted commit proposals or equivalent commit-owned services; public `GameWorld` APIs MUST NOT allow ordinary action, client, debug, or test code to bypass commit for runtime effect add/remove.
 
 #### Scenario: Store records effect without writing world
 - **WHEN** a temporary blocking effect is applied to an entity
@@ -47,8 +47,18 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **THEN** the store marks or removes the runtime effect instance
 - **AND** final Component changes occur only after `ComponentStateResolver` resolves active sources
 
+#### Scenario: 普通路径不能绕过 commit 写 effect
+- **WHEN** action strategy、server debug service、Unity client submitter 或普通测试需要添加或移除 runtime effect
+- **THEN** 它们必须提交 `AddRuntimeEffect`、`RemoveRuntimeEffect` 或等价 commit-owned request
+- **AND** 它们不能直接调用 public `GameWorld.AddRuntimeEffect` 或 public `GameWorld.RemoveRuntimeEffect`
+
+#### Scenario: 测试入口也走 commit 边界
+- **WHEN** automated tests need to create runtime effect state
+- **THEN** tests use commit proposals, commit test helpers, or explicitly internal fixtures
+- **AND** tests do not normalize bypassing commit as the documented effect application path
+
 ### Requirement: ComponentStateResolver 合成边界
-系统 SHALL provide a `ComponentStateResolver` that reads static sources and active runtime sources, computes final Component results, and applies only changed final results to `GameWorld`. The first slice SHALL include `BlockingComponent`, `AutoMoveComponent`, `PushableComponent`, `PortConnectorComponent`, and movement permission results; it MUST NOT resolve `PositionComponent`, `DirectionComponent`, `PlayerControlComponent`, or runtime tick counters.
+系统 SHALL provide a `ComponentStateResolver` that reads static sources and active runtime sources, computes final Component results, and applies only changed final results to `GameWorld`. The first slice SHALL include `BlockingComponent`, `AutoMoveComponent`, `PushableComponent`, `PortConnectorComponent`, movement permission results, and source-based `WorldTag` results; it MUST NOT resolve `PositionComponent`, `DirectionComponent`, `PlayerControlComponent`, or runtime tick counters.
 
 #### Scenario: Included components are resolved
 - **WHEN** static and runtime sources are resolved for an entity
@@ -62,8 +72,13 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **AND** it does not resolve `PlayerControlComponent`
 - **AND** movement and direction changes remain owned by rule commit paths
 
+#### Scenario: Tag results are source resolved
+- **WHEN** static tags and runtime tag effects both contribute `WorldTag` values to an entity
+- **THEN** final `TagSetComponent` is computed from active tag sources
+- **AND** removing one runtime tag source does not remove a static tag or another runtime tag source
+
 ### Requirement: GameWorld 保存最终 Component 结果
-`GameWorld` SHALL remain the storage for final entity state, component stores, spatial index, dirty tracking, and snapshot/delta data. It MUST NOT become a free-form sink where each static or runtime source writes Component state independently.
+`GameWorld` SHALL remain the storage for final entity state, component stores, spatial index, dirty tracking, and snapshot/delta data. It MUST NOT become a free-form sink where each static or runtime source writes Component or tag state independently. First-slice component/tag final results MUST be applied by `ComponentStateResolver` or commit-owned final-result settlement, not by source-specific direct writes.
 
 #### Scenario: Resolver applies final result
 - **WHEN** resolving active sources changes an entity's final `PushableComponent`
@@ -74,6 +89,11 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **WHEN** a debug tool or future skill creates runtime data
 - **THEN** it creates a runtime effect source or world action
 - **AND** it does not directly add or remove first-slice components on `GameWorld`
+
+#### Scenario: Runtime tag remove does not edit final tag directly
+- **WHEN** a runtime tag effect or runtime tag proposal is removed
+- **THEN** commit removes the matching tag source
+- **AND** final `TagSetComponent` changes only after resolver recomputes active tag sources
 
 ### Requirement: Ability 禁止边界
 系统 SHALL NOT introduce Ability as a solution for Component lifecycle, runtime effect lifecycle, dynamic ports, or movement arbitration in the first runtime-component-results slice. AbilityKind MUST NOT map to ComponentKind, and ability grant/remove MUST NOT mutate final Component results.
@@ -143,3 +163,160 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **WHEN** a developer manually runs server and two Unity Play Mode clients
 - **THEN** the observer client sees server-synchronized final Component results
 - **AND** the client does not locally resolve runtime effects
+
+### Requirement: Runtime Source Reset Boundary
+系统 SHALL provide a commit-owned way to remove all runtime effect and runtime contribution sources for a target entity while preserving static archetype sources and non-effect-owned final state. This reset MUST restore first-slice final Component/tag results to the state implied by remaining static sources and surviving unrelated runtime sources.
+
+#### Scenario: Reset removes runtime sources only
+- **WHEN** an entity has static Blocking and runtime Pushable, runtime PortConnector, and runtime tag sources
+- **AND** reset runtime sources is committed for that entity
+- **THEN** runtime Pushable, runtime PortConnector, and runtime tag sources for that entity are removed
+- **AND** static Blocking remains in the final result
+
+#### Scenario: Reset does not rollback movement
+- **WHEN** an entity moved through normal action commit after receiving runtime effects
+- **AND** reset runtime sources is committed for that entity
+- **THEN** PositionComponent and DirectionComponent are not restored to spawn values by this reset
+- **AND** only first-slice runtime component/tag contributions are recalculated
+
+#### Scenario: Add remove order returns to static result
+- **WHEN** runtime effects A、B、C are added to one entity in one order
+- **AND** they are removed in a different order or cleared by runtime reset
+- **THEN** final first-slice Component/tag results equal the static source result
+- **AND** no removed runtime source continues to affect resolver output
+
+### Requirement: EffectSpec 静态定义
+系统 SHALL define `EffectSpec` as a Luban-backed static definition table for runtime effects that can contribute final Component/tag results. An `EffectSpec` MUST declare effect id, effect kind, target binding, duration policy, stack policy, remove policy, payload kind, and optional presentation cue id. Static effect definitions MUST NOT store runtime action ids, target ids, start ticks, expire ticks, or active stack state.
+
+#### Scenario: EffectSpec 不保存运行时状态
+- **WHEN** an effect definition grants temporary pushability for five ticks
+- **THEN** the `EffectSpec` declares pushable payload, timed duration policy, and stack policy
+- **AND** it does not store the concrete target entity, created tick, expire tick, or runtime effect instance id
+
+#### Scenario: EffectSpec 来自 Luban 独立表
+- **WHEN** first-slice effect configuration is loaded
+- **THEN** effect definitions are read from Luban-generated `effect_spec` data
+- **AND** the main runtime path does not rely on hand-written built-in effect specs as the authoritative configuration source
+
+#### Scenario: EffectSpec payload 受限于 first slice
+- **WHEN** first-slice effect specs are loaded
+- **THEN** they may describe Blocking, AutoMove, Pushable, PortConnector, MovementPermission, or Tag result payloads
+- **AND** they do not describe Position, Direction, PlayerControl, health, mass, or other Attribute/Stat mutation yet
+- **AND** Tag result payloads use existing `WorldTag`
+
+### Requirement: EffectApplication 运行时实例输入
+系统 SHALL create `EffectApplication` values from action execution output before runtime effect state is written. Each `EffectApplication` MUST carry source action context or equivalent source context, effect spec id, resolved target data, target entity/body/cell binding, start tick, expire tick or infinite duration marker, stack key, causality id, and resolved payload values.
+
+#### Scenario: Action 命中目标生成 EffectApplication
+- **WHEN** an action with `ApplyRuntimeEffect` execution hits two target entities
+- **THEN** execution produces one `EffectApplication` per resolved target
+- **AND** each application records the source action id, effect spec id, target entity id, start tick, expire tick, stack key, and causality id
+
+#### Scenario: EffectApplication 不直接写世界
+- **WHEN** execution creates an `EffectApplication`
+- **THEN** no final Component, tag, position, direction, or entity lifecycle state is written directly
+- **AND** the application must be accepted through commit before it can affect runtime effect state
+
+### Requirement: Effect Commit Boundary
+系统 SHALL apply runtime effects through commit proposals. `AddRuntimeEffect`, `RemoveRuntimeEffect`, `SetComponentResult`, `AddTag`, and `RemoveTag` proposals MUST be resolved by the commit layer in deterministic order. Strategy, policy, and effect application code MUST NOT directly mutate `GameWorld` final Component/tag stores. `SetComponentResult` MUST represent a runtime component contribution/source in the first slice and MUST NOT override the final component result directly.
+
+#### Scenario: AddRuntimeEffect writes store through commit
+- **WHEN** an accepted effect application grants temporary immobile state
+- **THEN** action execution emits an `AddRuntimeEffect` commit proposal
+- **AND** `CommitResolver` writes the runtime effect source into `RuntimeEffectStore`
+- **AND** final `MovementPermissionComponent` changes only after `ComponentStateResolver` resolves active sources
+
+#### Scenario: RemoveRuntimeEffect removes source through commit
+- **WHEN** a runtime effect is removed by explicit effect id or stack key
+- **THEN** execution emits a `RemoveRuntimeEffect` commit proposal
+- **AND** `CommitResolver` removes the matching runtime effect source
+- **AND** final Component/tag state is recomputed by the resolver
+
+#### Scenario: Remove one source keeps other sources
+- **WHEN** an entity has static Pushable contribution
+- **AND** two active runtime effects also contribute Pushable
+- **AND** one runtime effect is removed
+- **THEN** only that effect application's source is removed
+- **AND** the final Pushable result remains active because other sources still contribute it
+
+#### Scenario: Commit 不解释玩法名
+- **WHEN** two different effect ids both grant temporary pushability with the same payload
+- **THEN** commit applies them through the same proposal kind and payload data
+- **AND** commit does not branch on readable effect name or action name
+
+### Requirement: Effect Contribution Settlement
+系统 SHALL preserve effect component/tag contributions as independent sources and compute final results through `ComponentStateResolver` or an equivalent settlement layer. Adding a buff/effect MUST add its own contribution source, removing a buff/effect MUST remove only its own contribution source, and final component/tag state MUST be recalculated from the remaining sources.
+
+#### Scenario: Add and remove order is consistent
+- **WHEN** effect A and effect B both grant temporary blocking to the same entity
+- **AND** effect A is removed before effect B
+- **THEN** only effect A's contribution source is removed
+- **AND** final Blocking remains active until effect B is also removed or expired
+
+#### Scenario: Static source survives runtime source removal
+- **WHEN** an entity has static Blocking from its archetype
+- **AND** a runtime effect also grants Blocking
+- **AND** the runtime effect expires
+- **THEN** the final Blocking result remains active because the static source still contributes it
+
+#### Scenario: Settlement owns final state
+- **WHEN** active effect contributions change during a tick
+- **THEN** the settlement/resolver recomputes final component/tag result from active sources
+- **AND** no effect application writes the final component/tag result by itself
+
+### Requirement: Effect Duration And Expiry
+系统 SHALL support instant, timed tick, and infinite-until-remove duration policies for the first effect layer slice. Timed effects MUST expire by server tick, and expiry MUST remove only the runtime source contributed by that effect instance.
+
+#### Scenario: Timed effect expires
+- **WHEN** a temporary pushable effect starts at tick 10 with duration 5
+- **THEN** it is active for rule-visible resolution before tick 15
+- **AND** it is expired and removed as a runtime source at tick 15 or later according to the authoritative tick order
+- **AND** final pushability remains only if another static or runtime source still contributes it
+
+#### Scenario: Infinite effect waits for explicit remove
+- **WHEN** an infinite runtime port effect is applied
+- **THEN** it remains active across ticks
+- **AND** it is removed only by explicit remove policy or entity removal
+
+### Requirement: Effect Stack Policy
+系统 SHALL resolve effect stack policy deterministically before adding or refreshing runtime effect instances. The first slice MUST support replace by stack key, refresh duration, allow multiple, and reject duplicate behavior. Stack policy MUST NOT depend on dictionary order, client arrival order, or readable effect names.
+
+#### Scenario: Refresh duration keeps one source
+- **WHEN** the same source applies the same timed effect with the same stack key twice
+- **AND** the effect stack policy is refresh duration
+- **THEN** the runtime store contains one effective runtime source for that stack key
+- **AND** its expire tick is refreshed deterministically
+
+#### Scenario: Allow multiple preserves independent sources
+- **WHEN** two sources apply the same effect to one target
+- **AND** the effect stack policy is allow multiple
+- **THEN** both runtime sources remain active independently
+- **AND** removing one source does not remove the other source's final contribution
+
+### Requirement: Effect Resolver Boundary
+系统 SHALL keep final Component/tag resolution owned by `ComponentStateResolver` or an equivalent final-result resolver. Runtime effect data MAY contribute sources, but Rules, ActionArbiter, RulePlanner, and CommitResolver movement validation MUST read only final `GameWorld` Component/tag results when deciding movement, pushability, blocking, or permissions.
+
+#### Scenario: Runtime effect changes rules through final result
+- **WHEN** a runtime effect grants `PushableComponent` to an entity
+- **AND** a later push action evaluates that entity
+- **THEN** the push rule reads the final `PushableComponent`
+- **AND** the rule does not query `RuntimeEffectStore`, `EffectSpec`, `EffectApplication`, or `EffectKind`
+
+#### Scenario: Effect cannot move entity directly
+- **WHEN** an effect payload would imply movement or push behavior
+- **THEN** it must create or configure a future action/effect path rather than directly changing PositionComponent
+- **AND** actual movement still goes through action, claim, arbitration, planning, and commit
+
+### Requirement: Effect Application Verification
+系统 SHALL include automated Unity TestFramework EditMode coverage and Shared/server validation for effect application, commit, runtime store lifecycle, resolver final results, stack policy, duration expiry, and rule-layer isolation. Unity Player build MUST NOT be required.
+
+#### Scenario: Automated validation
+- **WHEN** automated validation runs
+- **THEN** it includes OpenSpec strict validation, Shared GameCore build, server authoritative verification, and Unity EditMode tests for applying, stacking, expiring, and removing first-slice effects
+- **AND** tests prove rules read final Component/tag results rather than effect runtime state
+
+#### Scenario: Manual end-to-end validation
+- **WHEN** the user manually runs server-authoritative Play Mode with two clients
+- **THEN** applying and expiring temporary pushable, immobile, auto move, port, or tag effects converges to the same server final state on both clients
+- **AND** the client does not locally decide effect hit, active state, expiry, or stack behavior
+

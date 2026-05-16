@@ -19,7 +19,7 @@ The Fantasy server SHALL create and tick one service-authoritative `GameWorld` b
 - **AND** it does not depend on Arch storage handles
 
 ### Requirement: Unified Authoritative Tick And Speed Model
-The service-authoritative runtime SHALL use server tick as the single settlement cadence. Player movement, auto movement, mechanism push, connected body movement, and debug-authoritative changes MUST resolve through server tick and DG world delta semantics. Logical movement speed SHALL be defined by action cost, ready tick, and authoritative commit, not by client frame rate.
+The service-authoritative runtime SHALL use server tick as the single settlement cadence. Player movement, auto push source output, mechanism push, connected body movement, and debug-authoritative changes MUST resolve through server tick and DG world delta semantics. Logical movement speed SHALL be defined by action cost, ready tick, and authoritative commit, not by client frame rate.
 
 #### Scenario: Player movement speed is server-authoritative
 - **WHEN** a player movement request is accepted
@@ -27,10 +27,11 @@ The service-authoritative runtime SHALL use server tick as the single settlement
 - **AND** the final coordinate changes only when the server tick commits that action
 - **AND** client frame rate does not decide the final coordinate
 
-#### Scenario: Auto movement speed is configured server-side
+#### Scenario: Auto push source cadence is configured server-side
 - **WHEN** an entity with `AutoMoveComponent` is evaluated
-- **THEN** service-authoritative tick uses the component and ActionSpec/cost policy to decide whether an auto move action is ready
-- **AND** the resulting WorldDelta records the authoritative server tick for the movement
+- **THEN** service-authoritative tick uses the component and ActionSpec/cost policy to decide whether a configured push/action output is ready
+- **AND** that output enters the same action arbitration and commit path as other push-like behavior
+- **AND** the resulting WorldDelta records the authoritative server tick for any committed state change
 
 #### Scenario: Mechanism push speed follows action policy
 - **WHEN** push-on-enter or another mechanism emits a movement action
@@ -41,6 +42,29 @@ The service-authoritative runtime SHALL use server tick as the single settlement
 - **WHEN** connected body movement commits successfully
 - **THEN** every moved member snapshot in the WorldDelta uses the same authoritative server tick
 - **AND** animation metadata identifies the same tick for client playback
+
+### Requirement: Parallel Candidate Compute Before Deterministic Commit
+The service-authoritative runtime SHALL separate large read-only scans from authoritative mutation. Parallel work MAY collect candidates from Arch-backed component queries and DG readonly spatial views, but all world mutation, action enqueue finalization, arbitration, component writes, dirty writes, result completion, delta construction, and Fantasy broadcast MUST remain in a deterministic commit phase.
+
+#### Scenario: Auto push source candidates are collected without mutation
+- **WHEN** service tick scans auto source entities in parallel
+- **THEN** workers may output candidate push/action outputs containing DG entity ids, direction, configured output action spec, cost, and ready tick data
+- **AND** workers must not write `GameWorld`, dirty state, move results, or network messages
+
+#### Scenario: Push-on-enter candidates are collected without mutation
+- **WHEN** service tick scans push-on-enter sources in parallel
+- **THEN** workers may output candidate mechanism actions
+- **AND** final action queue insertion and conflict ordering happen only in the deterministic commit phase
+
+#### Scenario: Parallel and serial candidate modes are equivalent
+- **WHEN** the same world state and input are processed with serial candidate scan and parallel candidate scan
+- **THEN** the candidate set after stable sorting is equivalent
+- **AND** committed WorldDelta results are equivalent
+
+#### Scenario: Commit order is stable
+- **WHEN** multiple candidates are collected in the same server tick
+- **THEN** commit phase orders them by stable DG keys such as server tick, ready tick, priority, source entity id, and action sequence
+- **AND** thread scheduling order does not affect authoritative results
 
 ### Requirement: Arch Backend Does Not Change Network Authority
 Switching the service world storage to Arch SHALL NOT change JoinWorld, observer, WorldSnapshot, WorldDelta, movement response, or failure response authority semantics.
