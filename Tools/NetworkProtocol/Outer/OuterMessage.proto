@@ -35,6 +35,9 @@ message C2G_MoveRequest // IRequest,G2C_MoveResponse
 	int32 TargetX = 2;
 	int32 TargetY = 3;
 	int64 ClientTick = 4;
+	int64 ClientInputId = 5;
+	int64 BeatTick = 6;
+	int32 Direction = 7;
 }
 message G2C_MoveResponse // IResponse
 {
@@ -45,6 +48,40 @@ message G2C_MoveResponse // IResponse
 	int32 MoveErrorCode = 5;
 	string Reason = 6;
 	int64 ClientTick = 7;
+	int64 ClientInputId = 8;
+	int64 BeatTick = 9;
+	int32 InputStatus = 10;
+	int32 Direction = 11;
+}
+message C2G_PlayerInputRequest // IRequest,G2C_PlayerInputResponse
+{
+	int64 EntityId = 1;
+	int64 ClientInputId = 2;
+	int64 BeatTick = 3;
+	int32 Direction = 4;
+	int64 ClientTick = 5;
+	int32 InputKind = 6;
+	int32 InputSourceKind = 7;
+	int32 RhythmJudge = 8;
+	int32 TargetHintKind = 9;
+	int64 TargetEntityId = 10;
+	int32 TargetX = 11;
+	int32 TargetY = 12;
+	int64 SampleTimeMs = 13;
+}
+message G2C_PlayerInputResponse // IResponse
+{
+	bool Success = 1;
+	int64 EntityId = 2;
+	int32 FinalX = 3;
+	int32 FinalY = 4;
+	int32 MoveErrorCode = 5;
+	string Reason = 6;
+	int64 ClientTick = 7;
+	int64 ClientInputId = 8;
+	int64 BeatTick = 9;
+	int32 InputStatus = 10;
+	int32 Direction = 11;
 }
 message C2G_RegisterMoveObserverRequest // IRequest,G2C_RegisterMoveObserverResponse
 {
@@ -86,6 +123,7 @@ message G2C_WorldEntityState
 	bool CanMove = 16;
 	bool CanBePushed = 17;
 	int32 AutoMoveIntervalTicks = 18;
+	bool RotatePivot = 19;
 }
 message G2C_WorldDeltaAnimationMetadata
 {
@@ -94,6 +132,17 @@ message G2C_WorldDeltaAnimationMetadata
 	int32 MotionKind = 3;
 	string StyleKey = 4;
 	int32 Direction = 5;
+	int64 PivotEntityId = 6;
+	int32 PivotX = 7;
+	int32 PivotY = 8;
+	int32 FromX = 9;
+	int32 FromY = 10;
+	int32 ToX = 11;
+	int32 ToY = 12;
+	int32 RotateDirection = 13;
+	bool Bounce = 14;
+	int32 ImpactX = 15;
+	int32 ImpactY = 16;
 }
 message G2C_WorldSnapshotNotify // IMessage
 {
@@ -116,6 +165,7 @@ message C2G_DebugSpawnEntityRequest // IRequest,G2C_DebugSpawnEntityResponse
 	int32 Direction = 5;
 	int64 PlayerId = 6;
 	int32 AutoMoveIntervalTicks = 7;
+	bool RotatePivot = 8;
 }
 message G2C_DebugSpawnEntityResponse // IResponse
 {

@@ -4,7 +4,7 @@ namespace DG.GameCore
 {
 public interface IActionStrategy
 {
-    ActionPrimitive Primitive { get; }
+    ActionPrimitive Primitive => 0;
     ActionStrategyId StrategyId { get; }
     void Process(ActionStrategyContext context);
 }
@@ -12,19 +12,11 @@ public interface IActionStrategy
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = false)]
 public sealed class ActionStrategyAttribute : Attribute
 {
-    public ActionStrategyAttribute(ActionPrimitive primitive)
-    {
-        Primitive = primitive;
-        StrategyKey = new ActionStrategyId(primitive).Value;
-    }
-
-    public ActionStrategyAttribute(string strategyKey, ActionPrimitive primitive)
+    public ActionStrategyAttribute(string strategyKey)
     {
         StrategyKey = string.IsNullOrWhiteSpace(strategyKey) ? throw new ArgumentException("Strategy key is empty.", nameof(strategyKey)) : strategyKey;
-        Primitive = primitive;
     }
 
     public string StrategyKey { get; }
-    public ActionPrimitive Primitive { get; }
 }
 }

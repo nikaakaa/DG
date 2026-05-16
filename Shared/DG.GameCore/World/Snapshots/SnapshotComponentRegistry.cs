@@ -21,6 +21,7 @@ public sealed class EntitySnapshotBuilder
     public bool PlayerControlled { get; set; }
     public bool Pushable { get; set; }
     public DirectionMask PortLocalPorts { get; set; }
+    public bool RotatePivot { get; set; }
     public bool HasMovementPermission { get; set; }
     public bool CanMove { get; set; } = true;
     public bool CanBePushed { get; set; } = true;
@@ -28,20 +29,70 @@ public sealed class EntitySnapshotBuilder
 
     public EntitySnapshot ToSnapshot()
     {
-        return new EntitySnapshot(EntityId, ConfigId, ArchetypeId, EntityTarget, X, Y, Direction, HasCollider, Blocking, Bouncable, AutoMove, AutoMoveIntervalTicks, PlayerControlled, Pushable, PortLocalPorts, HasMovementPermission, CanMove, CanBePushed, ServerTick);
+        return new EntitySnapshot(EntityId, ConfigId, ArchetypeId, EntityTarget, X, Y, Direction, HasCollider, Blocking, Bouncable, AutoMove, AutoMoveIntervalTicks, PlayerControlled, Pushable, PortLocalPorts, RotatePivot, HasMovementPermission, CanMove, CanBePushed, ServerTick);
     }
 }
 
 public interface IEntitySnapshotProjector
 {
-    ComponentId ComponentId { get; }
+    ComponentId ComponentId => new(PayloadId.Value);
+    SnapshotPayloadId PayloadId { get; }
     void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder);
 }
 
 public interface IEntitySnapshotApplier
 {
-    ComponentId ComponentId { get; }
+    ComponentId ComponentId => new(PayloadId.Value);
+    SnapshotPayloadId PayloadId { get; }
     void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot);
+}
+
+public readonly struct SnapshotPayloadId : IEquatable<SnapshotPayloadId>
+{
+    public SnapshotPayloadId(string value)
+        : this(RuntimeKeyUtility.StableRuntimeKey(value), value)
+    {
+    }
+
+    public SnapshotPayloadId(ComponentId componentId)
+        : this(componentId.RuntimeKey, componentId.Value)
+    {
+    }
+
+    public SnapshotPayloadId(int runtimeKey, string debugName)
+    {
+        RuntimeKey = runtimeKey;
+        Value = debugName ?? string.Empty;
+    }
+
+    public string Value { get; }
+    public int RuntimeKey { get; }
+    public bool IsValid => RuntimeKey != 0;
+
+    public bool Equals(SnapshotPayloadId other)
+    {
+        return RuntimeKey == other.RuntimeKey;
+    }
+
+    public override bool Equals(object obj)
+    {
+        return obj is SnapshotPayloadId other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        return RuntimeKey;
+    }
+
+    public override string ToString()
+    {
+        return Value;
+    }
+
+    public static implicit operator SnapshotPayloadId(string value)
+    {
+        return new SnapshotPayloadId(value);
+    }
 }
 
 public sealed class SnapshotComponentRegistry
@@ -63,14 +114,14 @@ public sealed class SnapshotComponentRegistry
             throw new ArgumentNullException(nameof(applier));
         }
 
-        if (!projector.ComponentId.Equals(applier.ComponentId))
+        if (!projector.PayloadId.Equals(applier.PayloadId))
         {
-            throw new InvalidOperationException("Snapshot projector/applier id mismatch: " + projector.ComponentId + " / " + applier.ComponentId);
+            throw new InvalidOperationException("Snapshot projector/applier id mismatch: " + projector.PayloadId + " / " + applier.PayloadId);
         }
 
-        if (projectors.Any(item => item.ComponentId.Equals(projector.ComponentId)) || appliers.Any(item => item.ComponentId.Equals(applier.ComponentId)))
+        if (projectors.Any(item => item.PayloadId.Equals(projector.PayloadId)) || appliers.Any(item => item.PayloadId.Equals(applier.PayloadId)))
         {
-            throw new InvalidOperationException("Duplicate snapshot component id: " + projector.ComponentId);
+            throw new InvalidOperationException("Duplicate snapshot payload id: " + projector.PayloadId);
         }
 
         projectors.Add(projector);
@@ -88,7 +139,7 @@ public sealed class SnapshotComponentRegistry
             ServerTick = serverTick
         };
 
-        foreach (IEntitySnapshotProjector projector in projectors.OrderBy(item => item.ComponentId.RuntimeKey))
+        foreach (IEntitySnapshotProjector projector in projectors.OrderBy(item => item.PayloadId.RuntimeKey))
         {
             projector.Project(world, entity, builder);
         }
@@ -98,7 +149,7 @@ public sealed class SnapshotComponentRegistry
 
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot)
     {
-        foreach (IEntitySnapshotApplier applier in appliers.OrderBy(item => item.ComponentId.RuntimeKey))
+        foreach (IEntitySnapshotApplier applier in appliers.OrderBy(item => item.PayloadId.RuntimeKey))
         {
             applier.Apply(world, entity, snapshot);
         }
@@ -117,6 +168,7 @@ public sealed class SnapshotComponentRegistry
         registry.Register(new PushOnEnterSnapshotProjection(), new PushOnEnterSnapshotProjection());
         registry.Register(new PushableSnapshotProjection(), new PushableSnapshotProjection());
         registry.Register(new PortConnectorSnapshotProjection(), new PortConnectorSnapshotProjection());
+        registry.Register(new RotatePivotSnapshotProjection(), new RotatePivotSnapshotProjection());
         registry.Register(new MovementPermissionSnapshotProjection(), new MovementPermissionSnapshotProjection());
         return registry;
     }
@@ -124,7 +176,7 @@ public sealed class SnapshotComponentRegistry
 
 public sealed class PositionSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.Position);
+    public SnapshotPayloadId PayloadId => "position";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder)
     {
         if (world.TryGetComponent(entity, out PositionComponent position))
@@ -139,14 +191,14 @@ public sealed class PositionSnapshotProjection : IEntitySnapshotProjector, IEnti
 
 public sealed class DirectionSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.Direction);
+    public SnapshotPayloadId PayloadId => "direction";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.Direction = world.TryGetComponent(entity, out DirectionComponent direction) ? direction.Direction : Direction.None;
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => world.SetComponent(entity, new DirectionComponent(snapshot.Direction));
 }
 
 public sealed class ColliderSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.Collider);
+    public SnapshotPayloadId PayloadId => "collider";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.HasCollider = world.HasComponent<ColliderComponent>(entity);
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => ApplyPresence(world, entity, snapshot.HasCollider, new ColliderComponent());
     internal static void ApplyPresence<TComponent>(GameWorld world, GameEntity entity, bool desired, TComponent component) where TComponent : struct
@@ -163,21 +215,21 @@ public sealed class ColliderSnapshotProjection : IEntitySnapshotProjector, IEnti
 
 public sealed class BlockingSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.Blocking);
+    public SnapshotPayloadId PayloadId => "blocking";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.Blocking = world.HasComponent<BlockingComponent>(entity);
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => ColliderSnapshotProjection.ApplyPresence(world, entity, snapshot.Blocking, new BlockingComponent());
 }
 
 public sealed class BouncableSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.Bouncable);
+    public SnapshotPayloadId PayloadId => "bouncable";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.Bouncable = world.HasComponent<BouncableComponent>(entity);
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => ColliderSnapshotProjection.ApplyPresence(world, entity, snapshot.Bouncable, new BouncableComponent());
 }
 
 public sealed class AutoMoveSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.AutoMove);
+    public SnapshotPayloadId PayloadId => "auto_move";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder)
     {
         builder.AutoMove = world.TryGetComponent(entity, out AutoMoveComponent autoMove);
@@ -200,21 +252,21 @@ public sealed class AutoMoveSnapshotProjection : IEntitySnapshotProjector, IEnti
 
 public sealed class PlayerControlSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.PlayerControl);
+    public SnapshotPayloadId PayloadId => "player_control";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.PlayerControlled = world.HasComponent<PlayerControlComponent>(entity);
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => ColliderSnapshotProjection.ApplyPresence(world, entity, snapshot.PlayerControlled, new PlayerControlComponent(entity.EntityId));
 }
 
 public sealed class PushableSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.Pushable);
+    public SnapshotPayloadId PayloadId => "pushable";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.Pushable = world.HasComponent<PushableComponent>(entity);
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => ColliderSnapshotProjection.ApplyPresence(world, entity, snapshot.Pushable, new PushableComponent());
 }
 
 public sealed class PushOnEnterSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.PushOnEnter);
+    public SnapshotPayloadId PayloadId => "push_on_enter";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder)
     {
     }
@@ -226,7 +278,7 @@ public sealed class PushOnEnterSnapshotProjection : IEntitySnapshotProjector, IE
 
 public sealed class PortConnectorSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new(ComponentKind.PortConnector);
+    public SnapshotPayloadId PayloadId => "port_connector";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.PortLocalPorts = world.TryGetComponent(entity, out PortConnectorComponent portConnector) ? portConnector.LocalPorts : DirectionMask.None;
     public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot)
     {
@@ -240,9 +292,16 @@ public sealed class PortConnectorSnapshotProjection : IEntitySnapshotProjector, 
     }
 }
 
+public sealed class RotatePivotSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
+{
+    public SnapshotPayloadId PayloadId => "rotate_pivot";
+    public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder) => builder.RotatePivot = world.HasComponent<RotatePivotComponent>(entity);
+    public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot) => ColliderSnapshotProjection.ApplyPresence(world, entity, snapshot.RotatePivot, new RotatePivotComponent());
+}
+
 public sealed class MovementPermissionSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
 {
-    public ComponentId ComponentId => new("MovementPermission");
+    public SnapshotPayloadId PayloadId => "movement_permission";
     public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder)
     {
         builder.HasMovementPermission = world.TryGetComponent(entity, out MovementPermissionComponent permission);

@@ -1,7 +1,6 @@
 [
   {
     "spec_id": "player_move",
-    "primitive": 1,
     "source": 1,
     "priority": 2,
     "source_tag": "SourcePlayer",
@@ -12,7 +11,6 @@
       "StateStunned",
       "StateRooted"
     ],
-    "target_rule": 1,
     "targeting_id": "legacy_target_coord_one_step",
     "handoff_policy": 1,
     "blocked_result_policy_id": "push_or_block",
@@ -25,18 +23,17 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "move"
   },
   {
     "spec_id": "auto_move",
-    "primitive": 1,
     "source": 2,
     "priority": 4,
     "source_tag": "SourceAuto",
     "ability_tag": "AbilityAutoMove",
     "required_tags": [],
     "blocked_tags": [],
-    "target_rule": 4,
     "targeting_id": "legacy_direction_component_cell",
     "handoff_policy": 1,
     "blocked_result_policy_id": "bounce_or_block",
@@ -52,11 +49,11 @@
       1,
       2
     ],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "move"
   },
   {
     "spec_id": "mechanism_push",
-    "primitive": 1,
     "source": 3,
     "priority": 3,
     "source_tag": "SourceMechanism",
@@ -65,7 +62,6 @@
     "blocked_tags": [
       "ImmuneMechanismPush"
     ],
-    "target_rule": 3,
     "targeting_id": "legacy_direction_cell",
     "handoff_policy": 1,
     "blocked_result_policy_id": "immune_push_or_block",
@@ -78,18 +74,17 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 3,
+    "strategy_id": "move"
   },
   {
     "spec_id": "debug_move",
-    "primitive": 1,
     "source": 4,
     "priority": 1,
     "source_tag": "SourceDebug",
     "ability_tag": "AbilityMove",
     "required_tags": [],
     "blocked_tags": [],
-    "target_rule": 2,
     "targeting_id": "legacy_target_coord_any",
     "handoff_policy": 0,
     "blocked_result_policy_id": "reject_only",
@@ -102,18 +97,17 @@
     "subject_policy": 1,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "move"
   },
   {
     "spec_id": "debug_spawn",
-    "primitive": 2,
     "source": 4,
     "priority": 1,
     "source_tag": "SourceDebug",
     "ability_tag": "",
     "required_tags": [],
     "blocked_tags": [],
-    "target_rule": 2,
     "targeting_id": "legacy_target_coord_any",
     "handoff_policy": 0,
     "blocked_result_policy_id": "reject_only",
@@ -126,18 +120,17 @@
     "subject_policy": 1,
     "plan_rule": 2,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "spawn"
   },
   {
     "spec_id": "debug_remove",
-    "primitive": 3,
     "source": 4,
     "priority": 1,
     "source_tag": "SourceDebug",
     "ability_tag": "",
     "required_tags": [],
     "blocked_tags": [],
-    "target_rule": 0,
     "targeting_id": "legacy_none",
     "handoff_policy": 0,
     "blocked_result_policy_id": "reject_only",
@@ -150,11 +143,11 @@
     "subject_policy": 1,
     "plan_rule": 3,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "remove"
   },
   {
     "spec_id": "player_push",
-    "primitive": 1,
     "source": 1,
     "priority": 2,
     "source_tag": "SourcePlayer",
@@ -163,7 +156,6 @@
     "blocked_tags": [
       "StateStunned"
     ],
-    "target_rule": 3,
     "targeting_id": "legacy_direction_cell",
     "handoff_policy": 1,
     "blocked_result_policy_id": "push_or_block",
@@ -176,11 +168,11 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "move"
   },
   {
     "spec_id": "configured_wind_push",
-    "primitive": 1,
     "source": 3,
     "priority": 3,
     "source_tag": "SourceMechanism",
@@ -189,7 +181,6 @@
     "blocked_tags": [
       "ImmuneMechanismPush"
     ],
-    "target_rule": 3,
     "targeting_id": "legacy_direction_cell",
     "handoff_policy": 1,
     "blocked_result_policy_id": "immune_push_or_block",
@@ -202,18 +193,17 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "move"
   },
   {
     "spec_id": "connected_body_move",
-    "primitive": 1,
     "source": 3,
     "priority": 3,
     "source_tag": "SourceMechanism",
     "ability_tag": "AbilityMechanismPush",
     "required_tags": [],
     "blocked_tags": [],
-    "target_rule": 3,
     "targeting_id": "legacy_direction_cell",
     "handoff_policy": 1,
     "blocked_result_policy_id": "push_or_block",
@@ -226,6 +216,7 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1
+    "default_cost_ticks": 1,
+    "strategy_id": "move"
   }
 ]

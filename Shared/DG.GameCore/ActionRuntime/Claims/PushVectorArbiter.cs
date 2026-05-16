@@ -21,6 +21,11 @@ public readonly struct PushVector
 public readonly struct PushVectorContribution
 {
     public PushVectorContribution(string subjectKey, Direction direction, long readyTick, ActionSpecId specId, long actionId, long entityId, IReadOnlyList<long> causalitySamples, int contributionCount)
+        : this(subjectKey, direction, readyTick, specId, actionId, entityId, causalitySamples, contributionCount, Array.Empty<PushOriginContext>())
+    {
+    }
+
+    public PushVectorContribution(string subjectKey, Direction direction, long readyTick, ActionSpecId specId, long actionId, long entityId, IReadOnlyList<long> causalitySamples, int contributionCount, IReadOnlyList<PushOriginContext> originContexts)
     {
         SubjectKey = subjectKey ?? string.Empty;
         Direction = direction;
@@ -30,6 +35,7 @@ public readonly struct PushVectorContribution
         EntityId = entityId;
         CausalitySamples = causalitySamples == null ? Array.Empty<long>() : causalitySamples.ToArray();
         ContributionCount = Math.Max(1, contributionCount);
+        OriginContexts = originContexts == null ? Array.Empty<PushOriginContext>() : originContexts.ToArray();
     }
 
     public string SubjectKey { get; }
@@ -40,11 +46,17 @@ public readonly struct PushVectorContribution
     public long EntityId { get; }
     public IReadOnlyList<long> CausalitySamples { get; }
     public int ContributionCount { get; }
+    public IReadOnlyList<PushOriginContext> OriginContexts { get; }
 }
 
 public sealed class PushVectorMetadata
 {
     public PushVectorMetadata(string subjectKey, long readyTick, PushVector netVector, int totalContributionCount, IReadOnlyDictionary<Direction, int> perDirectionContributionCount, int energy, IReadOnlyList<long> causalitySamples, IReadOnlyList<Direction> path)
+        : this(subjectKey, readyTick, netVector, totalContributionCount, perDirectionContributionCount, energy, causalitySamples, path, Array.Empty<PushOriginContext>())
+    {
+    }
+
+    public PushVectorMetadata(string subjectKey, long readyTick, PushVector netVector, int totalContributionCount, IReadOnlyDictionary<Direction, int> perDirectionContributionCount, int energy, IReadOnlyList<long> causalitySamples, IReadOnlyList<Direction> path, IReadOnlyList<PushOriginContext> originContexts)
     {
         SubjectKey = subjectKey ?? string.Empty;
         ReadyTick = readyTick;
@@ -54,6 +66,7 @@ public sealed class PushVectorMetadata
         Energy = energy;
         CausalitySamples = causalitySamples;
         Path = path;
+        OriginContexts = originContexts == null ? Array.Empty<PushOriginContext>() : originContexts.ToArray();
     }
 
     public string SubjectKey { get; }
@@ -64,6 +77,7 @@ public sealed class PushVectorMetadata
     public int Energy { get; }
     public IReadOnlyList<long> CausalitySamples { get; }
     public IReadOnlyList<Direction> Path { get; }
+    public IReadOnlyList<PushOriginContext> OriginContexts { get; }
 }
 
 public sealed class PushVectorCompositionResult
@@ -178,8 +192,7 @@ public sealed class PushVectorArbiter
     private bool IsPushContribution(ActionSpec spec, ActionRequest request)
     {
         BlockedResultPolicy policy = registry.GetBlockedResultPolicy(spec.BlockedResultPolicyId);
-        return spec.Primitive == ActionPrimitive.Move &&
-            spec.TargetRule == ActionTargetRule.DirectionFromRequest &&
+        return spec.Targeting.SelectorId.Equals(new TargetSelectorId("direction_cell")) &&
             HasDeriveActionBranch(policy) &&
             request.Target.Direction != Direction.None;
     }
@@ -213,7 +226,7 @@ public sealed class PushVectorArbiter
             subjectKey = string.Join("|", body.Entities.Select(item => item.EntityId).OrderBy(id => id));
         }
 
-        contribution = new PushVectorContribution(subjectKey, request.Target.Direction, request.ReadyTick, request.SpecId, request.ActionId, request.EntityId, request.DeferredCausalitySamples, request.DeferredContributionCount);
+        contribution = new PushVectorContribution(subjectKey, request.Target.Direction, request.ReadyTick, request.SpecId, request.ActionId, request.EntityId, request.DeferredCausalitySamples, request.DeferredContributionCount, request.PushOriginContexts);
         return true;
     }
 
@@ -227,6 +240,7 @@ public sealed class PushVectorArbiter
             [Direction.Down] = 0
         };
         var causality = new List<long>();
+        var originContexts = new List<PushOriginContext>();
         int x = 0;
         int y = 0;
         int total = 0;
@@ -262,10 +276,19 @@ public sealed class PushVectorArbiter
             {
                 y -= count;
             }
+
+            for (int contextIndex = 0; contextIndex < contribution.OriginContexts.Count && originContexts.Count < 8; contextIndex++)
+            {
+                PushOriginContext context = contribution.OriginContexts[contextIndex];
+                if (!originContexts.Contains(context))
+                {
+                    originContexts.Add(context);
+                }
+            }
         }
 
         var vector = new PushVector(x, y);
-        return new PushVectorMetadata(group[0].SubjectKey, group[0].ReadyTick, vector, total, perDirection, 0, causality, BuildPath(vector));
+        return new PushVectorMetadata(group[0].SubjectKey, group[0].ReadyTick, vector, total, perDirection, 0, causality, BuildPath(vector), originContexts);
     }
 
     private static IReadOnlyList<Direction> BuildPath(PushVector vector)
@@ -295,7 +318,7 @@ public sealed class PushVectorArbiter
     private static ActionRequest CloneWithDirection(ActionRequest request, Direction direction)
     {
         var target = new ActionTarget(request.Target.TargetEntityId, null, direction);
-        return new ActionRequest(request.ActionId, request.SpecId, request.Priority, request.Source, request.EntityId, target, request.RuntimeParams, request.CreatedTick, request.ReadyTick, request.ClientTick, request.OwnerActionId, request.DerivedFromUnitId, request.DeferredContributionCount, request.DeferredCausalitySamples, request.SubjectEntityIds);
+        return new ActionRequest(request.ActionId, request.SpecId, request.Priority, request.Source, request.EntityId, target, request.RuntimeParams, request.CreatedTick, request.ReadyTick, request.ClientTick, request.OwnerActionId, request.DerivedFromUnitId, request.DeferredContributionCount, request.DeferredCausalitySamples, request.SubjectEntityIds, request.PushOriginContexts);
     }
 }
 }

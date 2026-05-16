@@ -58,7 +58,7 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **AND** tests do not normalize bypassing commit as the documented effect application path
 
 ### Requirement: ComponentStateResolver 合成边界
-系统 SHALL provide a `ComponentStateResolver` that reads static sources and active runtime sources, computes final Component results, and applies only changed final results to `GameWorld`. The first slice SHALL include `BlockingComponent`, `AutoMoveComponent`, `PushableComponent`, `PortConnectorComponent`, movement permission results, and source-based `WorldTag` results; it MUST NOT resolve `PositionComponent`, `DirectionComponent`, `PlayerControlComponent`, or runtime tick counters.
+系统 SHALL provide a `ComponentStateResolver` that reads static sources and active runtime sources, computes final Component results, and applies only changed final results to `GameWorld`. The resolver orchestration SHALL support registered component result resolvers keyed by stable result ids or equivalent contribution payload identifiers. The first slice SHALL include `BlockingComponent`, `AutoMoveComponent`, `PushableComponent`, `PortConnectorComponent`, movement permission results, and source-based `WorldTag` results; it MUST NOT resolve `PositionComponent`, `DirectionComponent`, `PlayerControlComponent`, or runtime tick counters. New runtime component result types MUST be added by resolver modules, payload mapping, config/provider data, and tests rather than by editing a central result-kind switch.
 
 #### Scenario: Included components are resolved
 - **WHEN** static and runtime sources are resolved for an entity
@@ -76,6 +76,12 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **WHEN** static tags and runtime tag effects both contribute `WorldTag` values to an entity
 - **THEN** final `TagSetComponent` is computed from active tag sources
 - **AND** removing one runtime tag source does not remove a static tag or another runtime tag source
+
+#### Scenario: 新 runtime component result 不修改 resolver 主流程
+- **WHEN** a new runtime component result type is introduced
+- **THEN** the developer adds source payload mapping, a result resolver module, registration metadata, config/provider data, and Unity TestFramework EditMode tests
+- **AND** `ComponentStateResolver` collection and orchestration code does not gain a new result-specific branch
+- **AND** unknown result ids fail clearly before final component mutation
 
 ### Requirement: GameWorld 保存最终 Component 结果
 `GameWorld` SHALL remain the storage for final entity state, component stores, spatial index, dirty tracking, and snapshot/delta data. It MUST NOT become a free-form sink where each static or runtime source writes Component or tag state independently. First-slice component/tag final results MUST be applied by `ComponentStateResolver` or commit-owned final-result settlement, not by source-specific direct writes.
@@ -186,7 +192,7 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **AND** no removed runtime source continues to affect resolver output
 
 ### Requirement: EffectSpec 静态定义
-系统 SHALL define `EffectSpec` as a Luban-backed static definition table for runtime effects that can contribute final Component/tag results. An `EffectSpec` MUST declare effect id, effect kind, target binding, duration policy, stack policy, remove policy, payload kind, and optional presentation cue id. Static effect definitions MUST NOT store runtime action ids, target ids, start ticks, expire ticks, or active stack state.
+系统 SHALL define `EffectSpec` as a Luban-backed static definition table for runtime effects that can contribute final Component/tag results. An `EffectSpec` MUST declare effect id, effect kind or result payload id, target binding, duration policy, stack policy, remove policy, payload data, and optional presentation cue id. Static effect definitions MUST NOT store runtime action ids, target ids, start ticks, expire ticks, or active stack state. Effect payload import SHALL resolve authoring names into registered component result ids before authoritative rules consume them.
 
 #### Scenario: EffectSpec 不保存运行时状态
 - **WHEN** an effect definition grants temporary pushability for five ticks
@@ -198,11 +204,11 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **THEN** effect definitions are read from Luban-generated `effect_spec` data
 - **AND** the main runtime path does not rely on hand-written built-in effect specs as the authoritative configuration source
 
-#### Scenario: EffectSpec payload 受限于 first slice
-- **WHEN** first-slice effect specs are loaded
-- **THEN** they may describe Blocking, AutoMove, Pushable, PortConnector, MovementPermission, or Tag result payloads
-- **AND** they do not describe Position, Direction, PlayerControl, health, mass, or other Attribute/Stat mutation yet
-- **AND** Tag result payloads use existing `WorldTag`
+#### Scenario: EffectSpec payload 受注册表约束
+- **WHEN** effect specs are loaded
+- **THEN** every payload id resolves to a registered component result resolver or explicit tag result resolver
+- **AND** unknown payload ids fail clearly during provider/registry construction
+- **AND** effects do not describe Position, Direction, PlayerControl, health, mass, or other Attribute/Stat mutation unless a separate proposal adds those result resolvers
 
 ### Requirement: EffectApplication 运行时实例输入
 系统 SHALL create `EffectApplication` values from action execution output before runtime effect state is written. Each `EffectApplication` MUST carry source action context or equivalent source context, effect spec id, resolved target data, target entity/body/cell binding, start tick, expire tick or infinite duration marker, stack key, causality id, and resolved payload values.
@@ -294,7 +300,7 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **AND** removing one source does not remove the other source's final contribution
 
 ### Requirement: Effect Resolver Boundary
-系统 SHALL keep final Component/tag resolution owned by `ComponentStateResolver` or an equivalent final-result resolver. Runtime effect data MAY contribute sources, but Rules, ActionArbiter, RulePlanner, and CommitResolver movement validation MUST read only final `GameWorld` Component/tag results when deciding movement, pushability, blocking, or permissions.
+系统 SHALL keep final Component/tag resolution owned by `ComponentStateResolver` or an equivalent final-result resolver. Runtime effect data MAY contribute sources, but Rules, ActionArbiter, RulePlanner, and CommitResolver movement validation MUST read only final `GameWorld` Component/tag results when deciding movement, pushability, blocking, or permissions. New resolver modules SHALL plug into the final-result resolver registry and MUST NOT require rule modules to inspect runtime effect state.
 
 #### Scenario: Runtime effect changes rules through final result
 - **WHEN** a runtime effect grants `PushableComponent` to an entity
@@ -307,16 +313,27 @@ TBD - created by archiving change refactor-static-runtime-component-results. Upd
 - **THEN** it must create or configure a future action/effect path rather than directly changing PositionComponent
 - **AND** actual movement still goes through action, claim, arbitration, planning, and commit
 
+#### Scenario: Resolver output is composable
+- **WHEN** static sources and multiple runtime sources contribute the same registered result id
+- **THEN** the registered resolver computes one deterministic final component result
+- **AND** removing one runtime source leaves the final result active when another source still contributes it
+
 ### Requirement: Effect Application Verification
-系统 SHALL include automated Unity TestFramework EditMode coverage and Shared/server validation for effect application, commit, runtime store lifecycle, resolver final results, stack policy, duration expiry, and rule-layer isolation. Unity Player build MUST NOT be required.
+系统 SHALL include automated Unity TestFramework EditMode coverage and Shared/server validation for effect application, commit, runtime store lifecycle, resolver final results, stack policy, duration expiry, registered resolver extension, and rule-layer isolation. Unity Player build MUST NOT be required.
 
 #### Scenario: Automated validation
 - **WHEN** automated validation runs
 - **THEN** it includes OpenSpec strict validation, Shared GameCore build, server authoritative verification, and Unity EditMode tests for applying, stacking, expiring, and removing first-slice effects
 - **AND** tests prove rules read final Component/tag results rather than effect runtime state
 
+#### Scenario: Registered resolver validation
+- **WHEN** a test-only component result resolver is registered
+- **THEN** an effect or runtime source can contribute that result through config/provider data
+- **AND** final state settlement occurs without modifying central resolver orchestration
+- **AND** unknown resolver ids fail before final state mutation
+
 #### Scenario: Manual end-to-end validation
 - **WHEN** the user manually runs server-authoritative Play Mode with two clients
-- **THEN** applying and expiring temporary pushable, immobile, auto move, port, or tag effects converges to the same server final state on both clients
-- **AND** the client does not locally decide effect hit, active state, expiry, or stack behavior
+- **THEN** applying and expiring temporary pushable, immobile, auto move, port, tag, or test registered component effects converges to the same server final state on both clients
+- **AND** the client does not locally decide effect hit, active state, expiry, stack behavior, or final component result
 

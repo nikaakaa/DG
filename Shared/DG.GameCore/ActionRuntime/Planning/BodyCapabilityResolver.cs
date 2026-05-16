@@ -5,13 +5,14 @@ namespace DG.GameCore
 {
 public readonly struct ExternalPushContact
 {
-    public ExternalPushContact(long blockerEntityId, long sourceEntityId, GridCoord fromCoord, GridCoord toCoord, long claimActionId)
+    public ExternalPushContact(long blockerEntityId, long sourceEntityId, GridCoord fromCoord, GridCoord toCoord, long claimActionId, Direction pushDirection = Direction.None)
     {
         BlockerEntityId = blockerEntityId;
         SourceEntityId = sourceEntityId;
         FromCoord = fromCoord;
         ToCoord = toCoord;
         ClaimActionId = claimActionId;
+        PushDirection = pushDirection;
     }
 
     public long BlockerEntityId { get; }
@@ -19,6 +20,7 @@ public readonly struct ExternalPushContact
     public GridCoord FromCoord { get; }
     public GridCoord ToCoord { get; }
     public long ClaimActionId { get; }
+    public Direction PushDirection { get; }
 }
 
 public sealed class BodyCapabilityResolver

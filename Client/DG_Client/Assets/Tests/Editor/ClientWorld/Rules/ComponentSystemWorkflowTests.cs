@@ -2,27 +2,31 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Xml.Linq;
 using DG.GameCore;
 using DG.Map;
 using NUnit.Framework;
 using UnityEngine;
 using RuntimeComponentKind = DG.GameCore.ComponentKind;
-using LubanComponentKind = cfg.gamecore.ComponentKind;
 
 namespace DG.EditorTests
 {
     public sealed class ComponentSystemWorkflowTests
     {
         [Test]
-        public void ComponentKindSchema_RuntimeAndGeneratedEnumsDoNotDrift()
+        public void FormalLubanSchema_UsesComponentIdsInsteadOfComponentKindEnum()
         {
-            IReadOnlyDictionary<string, int> schemaValues = ReadComponentKindSchema();
-            IReadOnlyDictionary<string, int> runtimeValues = EnumValues<RuntimeComponentKind>();
-            IReadOnlyDictionary<string, int> lubanValues = EnumValues<LubanComponentKind>();
+            string root = RepositoryRoot();
+            string schema = File.ReadAllText(Path.Combine(root, "Config", "Luban", "Defines", "gamecore.xml"));
+            string generated = File.ReadAllText(Path.Combine(root, "Config", "Luban", "Generated", "json", "gamecore_tbentityarchetype.json"));
+            string streaming = File.ReadAllText(Path.Combine(Application.streamingAssetsPath, "GameConfig", "gamecore_tbentityarchetype.json"));
 
-            CollectionAssert.AreEquivalent(schemaValues, runtimeValues);
-            CollectionAssert.AreEquivalent(schemaValues, lubanValues);
+            Assert.IsFalse(schema.Contains("enum name=\"ComponentKind\""));
+            Assert.IsFalse(schema.Contains("type=\"(list#sep=,),ComponentKind\""));
+            Assert.IsTrue(schema.Contains("component_ids"));
+            Assert.IsFalse(generated.Contains("\"components\""));
+            Assert.IsFalse(streaming.Contains("\"components\""));
+            Assert.IsTrue(generated.Contains("\"component_ids\""));
+            Assert.IsTrue(streaming.Contains("\"component_ids\""));
         }
 
         [Test]
@@ -186,26 +190,15 @@ namespace DG.EditorTests
             Assert.AreEqual(DirectionMask.Left | DirectionMask.Right, lubanPort.LocalPorts);
             Assert.IsTrue(luban.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig conveyorOutput));
             Assert.AreEqual(new ActionSpecId("mechanism_push"), conveyorOutput.OutputSpecId);
+            Assert.AreEqual(3, conveyorOutput.OutputCostTicks);
             Assert.IsTrue(luban.TryGetPushOnEnter(DefaultWorldConfig.WindFieldConfigId, out PushOnEnterConfig windOutput));
             Assert.AreEqual(new ActionSpecId("configured_wind_push"), windOutput.OutputSpecId);
+            Assert.AreEqual(2, windOutput.OutputCostTicks);
         }
 
-        private static IReadOnlyDictionary<string, int> ReadComponentKindSchema()
+        private static string RepositoryRoot()
         {
-            string xmlPath = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "..", "Config", "Luban", "Defines", "gamecore.xml"));
-            XDocument document = XDocument.Load(xmlPath);
-            XElement enumElement = document.Root.Element("enum");
-            return enumElement.Elements("var")
-                .ToDictionary(
-                    item => item.Attribute("name").Value,
-                    item => int.Parse(item.Attribute("value").Value));
-        }
-
-        private static IReadOnlyDictionary<string, int> EnumValues<TEnum>() where TEnum : Enum
-        {
-            return Enum.GetValues(typeof(TEnum))
-                .Cast<TEnum>()
-                .ToDictionary(value => value.ToString(), value => Convert.ToInt32(value));
+            return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", ".."));
         }
 
         private static string[] NormalizeSpawns(IReadOnlyList<EntitySpawnSpec> spawns)

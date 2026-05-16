@@ -3,109 +3,109 @@
     "config_id": 1,
     "archetype_id": 1,
     "entity_target": 1,
-    "components": [
-      1,
-      3,
-      4,
-      7
-    ],
     "tags": [
       "Entity.Player"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Collider",
+      "Blocking",
+      "PlayerControl"
+    ]
   },
   {
     "config_id": 1001,
     "archetype_id": 2,
     "entity_target": 2,
-    "components": [
-      1,
-      2,
-      3,
-      4,
-      5,
-      6
-    ],
     "tags": [
       "Entity.Ball",
       "Movement.Bouncable"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Direction",
+      "Collider",
+      "Blocking",
+      "Bouncable",
+      "AutoMove"
+    ]
   },
   {
     "config_id": 1002,
     "archetype_id": 3,
     "entity_target": 3,
-    "components": [
-      1,
-      3,
-      4
-    ],
     "tags": [
       "Entity.Blocker"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Collider",
+      "Blocking"
+    ]
   },
   {
     "config_id": 1003,
     "archetype_id": 5,
     "entity_target": 3,
-    "components": [
-      1,
-      3,
-      4,
-      9
-    ],
     "tags": [
       "Entity.PushableBlocker"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Collider",
+      "Blocking",
+      "Pushable"
+    ]
   },
   {
     "config_id": 1004,
     "archetype_id": 6,
     "entity_target": 3,
-    "components": [
-      1,
-      2,
-      3,
-      4,
-      9,
-      10
-    ],
     "tags": [
       "Entity.PortConnectorBlocker"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Direction",
+      "Collider",
+      "Blocking",
+      "Pushable",
+      "PortConnector"
+    ]
   },
   {
     "config_id": 2001,
     "archetype_id": 4,
     "entity_target": 3,
-    "components": [
-      1,
-      2,
-      3,
-      8
-    ],
     "tags": [
       "Tile.Conveyor"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Direction",
+      "Collider",
+      "PushOnEnter"
+    ]
   },
   {
     "config_id": 2002,
     "archetype_id": 7,
     "entity_target": 3,
-    "components": [
-      1,
-      2,
-      3,
-      8
-    ],
     "tags": [
       "Tile.WindField"
     ],
-    "default_auto_move_interval_ticks": 1
+    "default_auto_move_interval_ticks": 1,
+    "component_ids": [
+      "Position",
+      "Direction",
+      "Collider",
+      "PushOnEnter"
+    ]
   }
 ]

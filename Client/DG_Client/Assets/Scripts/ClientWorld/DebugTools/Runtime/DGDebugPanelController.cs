@@ -21,9 +21,10 @@ namespace DG.Map
         Ball = 1,
         Conveyor = 2,
         PortConnector = 3,
-        Select = 4,
-        Drag = 5,
-        Delete = 6
+        RotatePivot = 4,
+        Select = 5,
+        Drag = 6,
+        Delete = 7
     }
 
     public sealed class DGDebugPanelController : MonoBehaviour
@@ -46,6 +47,7 @@ namespace DG.Map
         private Button ballButton;
         private Button conveyorButton;
         private Button portConnectorButton;
+        private Button rotatePivotButton;
         private Button rotateButton;
         private Button dragButton;
         private Button deleteButton;
@@ -69,7 +71,7 @@ namespace DG.Map
         private Vector2 dragStartMouse;
         private Vector2 dragStartAnchored;
         private readonly DebugLayoutSelectionSet selection = new();
-        private DebugStructureBlockDocument loadedStructureBlock;
+        private readonly DebugRuntimeLayoutManager layoutManager = new();
         private DebugLayoutToolState toolState;
 
         public DGDebugPanelMode Mode => mode;
@@ -80,6 +82,10 @@ namespace DG.Map
         public long SelectedEntityId => selectedEntityId;
         public int SelectionCount => selection.Count;
         public DebugLayoutToolState ToolState => toolState;
+        public string CurrentLayoutPath => layoutManager.CurrentLayoutPath;
+        public string SaveTargetName => layoutManager.SaveTargetName;
+        public string LastSavedPath => layoutManager.LastSavedPath;
+        public string LastLayoutOperationResult => layoutManager.LastLayoutOperationResult;
 
         private void Awake()
         {
@@ -94,6 +100,7 @@ namespace DG.Map
             BindPrefabParts();
             hoverView = CreateSquareView("DebugHover", new Color(1f, 1f, 1f, 0.25f), 40, 1f);
             ghostView = CreateSquareView("DebugGhost", new Color(1f, 1f, 1f, 0.35f), 41, 0.7f);
+            RefreshLayoutFiles();
             Rebuild();
             SetVisible(true);
         }
@@ -219,34 +226,91 @@ namespace DG.Map
 
         public bool SaveSelectionToDefault()
         {
+            return SaveSelectionAs(layoutManager.SaveTargetName);
+        }
+
+        public bool SaveSelectionAs(string name)
+        {
             ClientMapWorld world = runner != null && runner.Context != null ? runner.Context.ClientMapWorld : null;
-            bool saved = DebugLayoutTooling.TrySaveSelection(selection, world, "debug-selection", DebugLayoutPaths.DefaultFilePath(), out string reason);
-            lastResult = saved ? "saved " + DebugLayoutPaths.DefaultFilePath() : "save failed: " + reason;
+            bool saved = layoutManager.SaveAs(selection, world, name, ClientGameConfigProviderFactory.Create());
+            if (saved)
+            {
+                toolState = DebugLayoutToolState.StructureGhostPlacement;
+            }
+
+            lastResult = layoutManager.LastLayoutOperationResult;
             Rebuild();
             return saved;
         }
 
+        public bool OverwriteCurrentLayout()
+        {
+            ClientMapWorld world = runner != null && runner.Context != null ? runner.Context.ClientMapWorld : null;
+            bool saved = layoutManager.OverwriteCurrent(selection, world, ClientGameConfigProviderFactory.Create());
+            lastResult = layoutManager.LastLayoutOperationResult;
+            Rebuild();
+            return saved;
+        }
+
+        public bool RenameCurrentLayout(string name)
+        {
+            bool renamed = layoutManager.RenameCurrent(name, ClientGameConfigProviderFactory.Create());
+            lastResult = layoutManager.LastLayoutOperationResult;
+            Rebuild();
+            return renamed;
+        }
+
+        public bool DeleteCurrentLayout()
+        {
+            bool deleted = layoutManager.DeleteCurrent(ClientGameConfigProviderFactory.Create());
+            if (deleted)
+            {
+                toolState = DebugLayoutToolState.SingleCellTool;
+            }
+
+            lastResult = layoutManager.LastLayoutOperationResult;
+            Rebuild();
+            return deleted;
+        }
+
+        public void RefreshLayoutFiles()
+        {
+            layoutManager.Refresh(ClientGameConfigProviderFactory.Create());
+            if (layoutManager.LoadedStructureBlock == null && toolState == DebugLayoutToolState.StructureGhostPlacement)
+            {
+                toolState = DebugLayoutToolState.SingleCellTool;
+            }
+
+            lastResult = layoutManager.LastLayoutOperationResult;
+            Rebuild();
+        }
+
         public bool LoadStructureBlockFromDefault()
         {
-            bool loaded = DebugLayoutTooling.TryLoadStructureBlock(DebugLayoutPaths.DefaultFilePath(), ClientGameConfigProviderFactory.Create(), out loadedStructureBlock, out string reason);
+            return LoadStructureBlock(DebugLayoutPaths.DefaultFilePath());
+        }
+
+        public bool LoadStructureBlock(string path)
+        {
+            bool loaded = layoutManager.Load(path, ClientGameConfigProviderFactory.Create());
             if (loaded)
             {
                 toolState = DebugLayoutToolState.StructureGhostPlacement;
             }
 
-            lastResult = loaded ? "loaded structure: " + loadedStructureBlock.Name : "load failed: " + reason;
+            lastResult = layoutManager.LastLayoutOperationResult;
             Rebuild();
             return loaded;
         }
 
         public IReadOnlyList<DebugStructureSpawnRequest> PreviewLoadedStructure(Vector2Int anchor)
         {
-            if (loadedStructureBlock == null)
+            if (layoutManager.LoadedStructureBlock == null)
             {
                 return Array.Empty<DebugStructureSpawnRequest>();
             }
 
-            return DebugStructureBlockStorage.CreateSpawnRequests(loadedStructureBlock, anchor.x, anchor.y);
+            return DebugStructureBlockStorage.CreateSpawnRequests(layoutManager.LoadedStructureBlock, anchor.x, anchor.y);
         }
 
         public void CopySelectionTo(Vector2Int targetAnchor)
@@ -415,11 +479,12 @@ namespace DG.Map
             string lastReason = string.Empty;
             foreach (DebugStructureSpawnRequest request in requests)
             {
-                networkSubmitter.DebugSpawn(0, request.ConfigId, new Vector2Int(request.X, request.Y), request.Direction, request.PlayerId, request.AutoMoveIntervalTicks, (success, reason, entityId) =>
+                networkSubmitter.DebugSpawn(0, request.ConfigId, new Vector2Int(request.X, request.Y), request.Direction, request.PlayerId, request.AutoMoveIntervalTicks, request.RotatePivot, (success, reason, entityId) =>
                 {
                     if (success)
                     {
                         successCount++;
+                        ApplyStructureRuntimeEffects(entityId, request);
                     }
                     else
                     {
@@ -431,6 +496,74 @@ namespace DG.Map
                     Rebuild();
                 });
             }
+        }
+
+        private void ApplyStructureRuntimeEffects(long entityId, DebugStructureSpawnRequest request)
+        {
+            if (entityId == 0 || !request.HasRuntimeEffects || networkSubmitter == null)
+            {
+                return;
+            }
+
+            if (request.RuntimeBlocking)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryBlocking, 1, DirectionMask.None);
+            }
+
+            if (request.RuntimeAutoMove)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryAutoMove, request.AutoMoveIntervalTicks, DirectionMask.None);
+            }
+
+            if (request.RuntimePushable)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPushable, 1, DirectionMask.None);
+            }
+
+            if (request.RuntimePortLocalPorts != DirectionMask.None)
+            {
+                ApplyRuntimePortEffectsToEntity(entityId, request.RuntimePortLocalPorts);
+            }
+
+            if (request.RuntimeImmobile)
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryImmobile, 1, DirectionMask.None);
+            }
+        }
+
+        private void ApplyRuntimePortEffectsToEntity(long entityId, DirectionMask ports)
+        {
+            if (ports.Contains(Direction.Left))
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPort, 1, DirectionMask.Left);
+            }
+
+            if (ports.Contains(Direction.Right))
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPort, 1, DirectionMask.Right);
+            }
+
+            if (ports.Contains(Direction.Up))
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPort, 1, DirectionMask.Up);
+            }
+
+            if (ports.Contains(Direction.Down))
+            {
+                ApplyRuntimeEffectToEntity(entityId, RuntimeEffectKind.TemporaryPort, 1, DirectionMask.Down);
+            }
+        }
+
+        private void ApplyRuntimeEffectToEntity(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask)
+        {
+            networkSubmitter.DebugApplyRuntimeEffect(entityId, kind, autoMoveIntervalTicks, portMask, 0, (success, reason, _) =>
+            {
+                if (!success)
+                {
+                    lastResult = "runtime effect failed: " + reason;
+                    Rebuild();
+                }
+            });
         }
 
         public bool TryPickCell(Vector3 screenPosition, out Vector2Int coord)
@@ -480,6 +613,7 @@ namespace DG.Map
             ballButton = FindChild<Button>("Ball_Btn");
             conveyorButton = FindChild<Button>("Conveyor_Btn");
             portConnectorButton = FindChild<Button>("PortConnector_Btn");
+            rotatePivotButton = FindChild<Button>("RotatePivot_Btn");
             rotateButton = FindChild<Button>("Rotate_Btn");
             dragButton = FindChild<Button>("Drag_Btn");
             deleteButton = FindChild<Button>("Delete_Btn");
@@ -510,6 +644,7 @@ namespace DG.Map
             BindButton(ballButton, () => SelectTool(DGDebugPanelTool.Ball));
             BindButton(conveyorButton, () => SelectTool(DGDebugPanelTool.Conveyor));
             BindButton(portConnectorButton, () => SelectTool(DGDebugPanelTool.PortConnector));
+            BindButton(rotatePivotButton, () => SelectTool(DGDebugPanelTool.RotatePivot));
             BindButton(rotateButton, RotateDirection);
             BindButton(dragButton, () => SelectTool(DGDebugPanelTool.Drag));
             BindButton(deleteButton, () => SelectTool(DGDebugPanelTool.Delete));
@@ -593,13 +728,17 @@ namespace DG.Map
             }
             if (Input.GetKeyDown(KeyCode.Alpha5))
             {
-                SelectTool(DGDebugPanelTool.Select);
+                SelectTool(DGDebugPanelTool.RotatePivot);
             }
             if (Input.GetKeyDown(KeyCode.Alpha6))
             {
-                SelectTool(DGDebugPanelTool.Drag);
+                SelectTool(DGDebugPanelTool.Select);
             }
             if (Input.GetKeyDown(KeyCode.Alpha7))
+            {
+                SelectTool(DGDebugPanelTool.Drag);
+            }
+            if (Input.GetKeyDown(KeyCode.Alpha8))
             {
                 SelectTool(DGDebugPanelTool.Delete);
             }
@@ -675,7 +814,7 @@ namespace DG.Map
                 int configId = GetConfigId(currentTool);
                 Direction direction = currentTool == DGDebugPanelTool.Blocker ? Direction.None : buildDirection;
                 int interval = currentTool == DGDebugPanelTool.Ball ? 1 : 1;
-                networkSubmitter.DebugSpawn(0, configId, hoveredCoord, direction, 0, interval, (success, reason, entityId) =>
+                networkSubmitter.DebugSpawn(0, configId, hoveredCoord, direction, 0, interval, currentTool == DGDebugPanelTool.RotatePivot, (success, reason, entityId) =>
                 {
                     lastResult = success ? "spawned " + entityId : "spawn failed: " + reason;
                     Rebuild();
@@ -787,6 +926,7 @@ namespace DG.Map
                 AddButton("2 Ball", () => SelectTool(DGDebugPanelTool.Ball));
                 AddButton("3 Conveyor", () => SelectTool(DGDebugPanelTool.Conveyor));
                 AddButton("4 Port Connector", () => SelectTool(DGDebugPanelTool.PortConnector));
+                AddButton("5 Rotate Pivot", () => SelectTool(DGDebugPanelTool.RotatePivot));
                 AddButton("Rotate R: " + buildDirection, RotateDirection);
             }
             AddHeader("Luban EntityArchetypes");
@@ -811,9 +951,9 @@ namespace DG.Map
         {
             if (manageActionsRoot == null)
             {
-                AddButton("5 Select", () => SelectTool(DGDebugPanelTool.Select));
-                AddButton("6 Drag / Move", () => SelectTool(DGDebugPanelTool.Drag));
-                AddButton("7 Delete", () => SelectTool(DGDebugPanelTool.Delete));
+                AddButton("6 Select", () => SelectTool(DGDebugPanelTool.Select));
+                AddButton("7 Drag / Move", () => SelectTool(DGDebugPanelTool.Drag));
+                AddButton("8 Delete", () => SelectTool(DGDebugPanelTool.Delete));
                 AddButton("Add ImmuneMechanismPush", () => ApplyTag(WorldTag.ImmuneMechanismPush, true));
                 AddButton("Remove ImmuneMechanismPush", () => ApplyTag(WorldTag.ImmuneMechanismPush, false));
                 AddButton("Add BlockPlayerMove", () => ApplyTag(WorldTag.BlockPlayerMove, true));
@@ -821,14 +961,11 @@ namespace DG.Map
             }
             else
             {
-                AddButton("5 Select", () => SelectTool(DGDebugPanelTool.Select));
+                AddButton("6 Select", () => SelectTool(DGDebugPanelTool.Select));
             }
             AddHeader("Structure Block");
-            AddText("Path: Assets/DebugLayouts/" + DebugLayoutPaths.DefaultFileName);
             AddButton("Add Selected To Structure", () => AddSelectedEntityToSelection());
             AddButton("Clear Structure Selection", ClearSelection);
-            AddButton("Save Structure", () => SaveSelectionToDefault());
-            AddButton("Load Structure", () => LoadStructureBlockFromDefault());
             if (hasHover)
             {
                 AddButton("Copy Selection Here", () => CopySelectionTo(hoveredCoord));
@@ -836,9 +973,9 @@ namespace DG.Map
                 AddButton("Move Selection Here", () => MoveSelectionTo(hoveredCoord));
             }
 
-            if (hasHover && loadedStructureBlock != null)
+            if (hasHover && layoutManager.LoadedStructureBlock != null)
             {
-                IReadOnlyList<DebugStructureGhostCell> cells = PortDebugVisualizationUtility.BuildGhostCells(loadedStructureBlock, hoveredCoord);
+                IReadOnlyList<DebugStructureGhostCell> cells = PortDebugVisualizationUtility.BuildGhostCells(layoutManager.LoadedStructureBlock, hoveredCoord);
                 int boundaryPorts = 0;
                 for (int i = 0; i < cells.Count; i++)
                 {
@@ -847,6 +984,7 @@ namespace DG.Map
 
                 AddText("Ghost cells:" + cells.Count + " boundary ports:" + boundaryPorts);
             }
+            BuildLayoutManagerPanel();
             AddHeader("World Snapshots");
 
             if (runner == null)
@@ -864,7 +1002,47 @@ namespace DG.Map
             {
                 DirectionMask worldPorts = PortDebugVisualizationUtility.GetWorldPorts(snapshot);
                 string port = snapshot.PortLocalPorts == DirectionMask.None ? "-" : snapshot.PortLocalPorts + " world:" + worldPorts;
-                AddText(snapshot.EntityId + " config:" + snapshot.ConfigId + " (" + snapshot.X + "," + snapshot.Y + ") dir:" + snapshot.Direction + " port:" + port);
+                AddText(snapshot.EntityId + " config:" + snapshot.ConfigId + " (" + snapshot.X + "," + snapshot.Y + ") dir:" + snapshot.Direction + " pivot:" + snapshot.RotatePivot + " port:" + port);
+            }
+        }
+
+        private void BuildLayoutManagerPanel()
+        {
+            AddHeader("Layouts");
+            AddInputField("SaveTargetInput", layoutManager.SaveTargetName, value =>
+            {
+                layoutManager.SetSaveTargetName(value);
+                lastResult = "save target: " + layoutManager.SaveTargetName;
+                Rebuild();
+            });
+            AddText("Save target: " + layoutManager.SaveTargetName);
+            AddText("Current loaded: " + DebugLayoutPaths.RelativePath(layoutManager.CurrentLayoutPath));
+            AddText("Last saved: " + DebugLayoutPaths.RelativePath(layoutManager.LastSavedPath));
+            AddText("Selection: " + selection.Count + "   Result: " + layoutManager.LastLayoutOperationResult);
+            AddButton("另存为输入名: " + layoutManager.SaveTargetName, () => SaveSelectionAs(layoutManager.SaveTargetName));
+            AddButton("覆盖当前加载", () => OverwriteCurrentLayout());
+            AddButton("重命名当前加载为输入名", () => RenameCurrentLayout(layoutManager.SaveTargetName));
+            AddButton("删除当前加载", () => DeleteCurrentLayout());
+            AddButton("刷新布局列表", RefreshLayoutFiles);
+
+            IReadOnlyList<DebugLayoutFileMetadata> files = layoutManager.LayoutFiles;
+            if (files.Count == 0)
+            {
+                AddText("No layout files.");
+                return;
+            }
+
+            for (int i = 0; i < files.Count; i++)
+            {
+                DebugLayoutFileMetadata file = files[i];
+                string mark = string.Equals(file.Path, layoutManager.CurrentLayoutPath, StringComparison.OrdinalIgnoreCase) ? "* " : string.Empty;
+                string status = file.Valid ? "ok" : "bad";
+                string label = mark + file.ShortName + "  count:" + file.EntryCount + "  " + file.LastWriteTime.ToString("MM-dd HH:mm") + "  " + status;
+                AddButton(label, () => LoadStructureBlock(file.Path));
+                if (!file.Valid)
+                {
+                    AddText("  " + file.Reason);
+                }
             }
         }
 
@@ -931,6 +1109,30 @@ namespace DG.Map
             label.color = Color.white;
         }
 
+        private void AddInputField(string name, string value, UnityEngine.Events.UnityAction<string> action)
+        {
+            GameObject row = CreateRow(name);
+            Image image = row.AddComponent<Image>();
+            image.color = new Color(0.08f, 0.1f, 0.13f, 0.95f);
+            TMP_InputField input = row.AddComponent<TMP_InputField>();
+            input.targetGraphic = image;
+
+            GameObject textObject = new GameObject("Text");
+            textObject.transform.SetParent(row.transform, false);
+            var textRect = textObject.AddComponent<RectTransform>();
+            textRect.anchorMin = Vector2.zero;
+            textRect.anchorMax = Vector2.one;
+            textRect.offsetMin = new Vector2(10, 2);
+            textRect.offsetMax = new Vector2(-10, -2);
+            TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
+            text.fontSize = 14;
+            text.color = Color.white;
+            text.alignment = TextAlignmentOptions.MidlineLeft;
+            input.textComponent = text;
+            input.text = value ?? string.Empty;
+            input.onEndEdit.AddListener(action);
+        }
+
         private TextMeshProUGUI CreateText(string text, int fontSize, FontStyles style)
         {
             GameObject row = CreateRow("Text_" + text);
@@ -993,7 +1195,8 @@ namespace DG.Map
             return tool == DGDebugPanelTool.Blocker ||
                 tool == DGDebugPanelTool.Ball ||
                 tool == DGDebugPanelTool.Conveyor ||
-                tool == DGDebugPanelTool.PortConnector;
+                tool == DGDebugPanelTool.PortConnector ||
+                tool == DGDebugPanelTool.RotatePivot;
         }
 
         private static int GetConfigId(DGDebugPanelTool tool)
@@ -1003,6 +1206,7 @@ namespace DG.Map
                 DGDebugPanelTool.Ball => DefaultWorldConfig.BallConfigId,
                 DGDebugPanelTool.Conveyor => DefaultWorldConfig.ConveyorConfigId,
                 DGDebugPanelTool.PortConnector => DefaultWorldConfig.PortConnectorBlockerConfigId,
+                DGDebugPanelTool.RotatePivot => DefaultWorldConfig.PushableBlockerConfigId,
                 _ => DefaultWorldConfig.BlockerConfigId
             };
         }
@@ -1014,6 +1218,7 @@ namespace DG.Map
                 DGDebugPanelTool.Ball => new Color(1f, 0.88f, 0.18f, alpha),
                 DGDebugPanelTool.Conveyor => new Color(0.35f, 1f, 0.45f, alpha),
                 DGDebugPanelTool.PortConnector => new Color(0.5f, 0.65f, 1f, alpha),
+                DGDebugPanelTool.RotatePivot => new Color(1f, 0.55f, 0.95f, alpha),
                 DGDebugPanelTool.Delete => new Color(1f, 0.2f, 0.2f, alpha),
                 DGDebugPanelTool.Select => new Color(0.95f, 1f, 0.45f, alpha),
                 DGDebugPanelTool.Drag => new Color(0.6f, 0.8f, 1f, alpha),

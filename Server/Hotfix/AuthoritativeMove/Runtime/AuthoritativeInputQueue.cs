@@ -1,23 +1,51 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Fantasy.Async;
 using DG.GameCore;
 
 namespace Fantasy;
 
+public enum AuthoritativePlayerInputStatus
+{
+    Buffered = 1,
+    Replaced = 2,
+    Consumed = 3,
+    Expired = 4,
+    Rejected = 5,
+    Resolved = 6
+}
+
 public sealed class AuthoritativeMoveInput
 {
     private readonly FTask<MoveResult> completion;
 
-    public AuthoritativeMoveInput(long entityId, GridCoord targetCoord, long clientTick)
+    public AuthoritativeMoveInput(long entityId, long beatTick, Direction direction, long clientInputId, long clientTick, long submitSequence)
+        : this(InputIntent.PlayerMove(entityId, direction, beatTick, clientInputId, clientTick, 0), submitSequence)
     {
-        EntityId = entityId;
-        TargetCoord = targetCoord;
-        ClientTick = clientTick;
+    }
+
+    public AuthoritativeMoveInput(InputIntent intent, long submitSequence)
+    {
+        Intent = intent;
+        EntityId = intent.ActorEntityId;
+        BeatTick = intent.BeatTick;
+        Direction = intent.Direction;
+        ClientInputId = intent.ClientInputId;
+        ClientTick = intent.ClientTick;
+        SubmitSequence = submitSequence;
+        Status = AuthoritativePlayerInputStatus.Buffered;
         completion = FTask<MoveResult>.Create(false);
     }
 
+    public InputIntent Intent { get; }
     public long EntityId { get; }
-    public GridCoord TargetCoord { get; }
+    public long BeatTick { get; }
+    public Direction Direction { get; }
+    public long ClientInputId { get; }
     public long ClientTick { get; }
+    public long SubmitSequence { get; }
+    public AuthoritativePlayerInputStatus Status { get; private set; }
     public bool IsCompleted => completion.IsCompleted;
 
     public FTask<MoveResult> WaitAsync()
@@ -25,11 +53,20 @@ public sealed class AuthoritativeMoveInput
         return completion;
     }
 
-    public void Complete(MoveResult result)
+    public void Complete(AuthoritativePlayerInputStatus status, MoveResult result)
     {
         if (!completion.IsCompleted)
         {
+            Status = status;
             completion.SetResult(result);
+        }
+    }
+
+    public void MarkConsumed()
+    {
+        if (!completion.IsCompleted)
+        {
+            Status = AuthoritativePlayerInputStatus.Consumed;
         }
     }
 }
@@ -63,8 +100,10 @@ public sealed class AuthoritativeDebugActionInput
 
 public sealed class AuthoritativeInputQueue
 {
-    private readonly Queue<AuthoritativeMoveInput> moveInputs = new();
+    private readonly Dictionary<PlayerInputKey, AuthoritativeMoveInput> moveInputs = new();
     private readonly Dictionary<long, AuthoritativeDebugActionInput> debugInputs = new();
+    private readonly HashSet<long> consumedClientInputIds = new();
+    private long nextSubmitSequence = 1;
 
     public AuthoritativeInputQueue() : this(ActionSpecRegistry.Default)
     {
@@ -80,34 +119,77 @@ public sealed class AuthoritativeInputQueue
 
     public AuthoritativeMoveInput EnqueueMove(long entityId, GridCoord targetCoord, long clientTick)
     {
-        var input = new AuthoritativeMoveInput(entityId, targetCoord, clientTick);
-        moveInputs.Enqueue(input);
+        return EnqueueMove(entityId, long.MaxValue, DirectionFromTarget(default, targetCoord), 0, clientTick, 0);
+    }
+
+    public AuthoritativeMoveInput EnqueueMove(long entityId, long beatTick, Direction direction, long clientInputId, long clientTick, long currentTick)
+        => EnqueueIntent(InputIntent.PlayerMove(entityId, direction, beatTick, clientInputId, clientTick, currentTick), currentTick);
+
+    public AuthoritativeMoveInput EnqueueIntent(InputIntent intent, long currentTick)
+    {
+        var input = new AuthoritativeMoveInput(intent, nextSubmitSequence++);
+        if (intent.BeatTick < currentTick)
+        {
+            input.Complete(AuthoritativePlayerInputStatus.Expired, new MoveResult(false, intent.ActorEntityId, default, intent.Direction, MoveErrorCode.UnknownEntity, "input expired", false, default, intent.ClientTick));
+            return input;
+        }
+
+        if (intent.ClientInputId != 0 && consumedClientInputIds.Contains(intent.ClientInputId))
+        {
+            input.Complete(AuthoritativePlayerInputStatus.Rejected, new MoveResult(false, intent.ActorEntityId, default, intent.Direction, MoveErrorCode.UnknownEntity, "duplicate input", false, default, intent.ClientTick));
+            return input;
+        }
+
+        var key = new PlayerInputKey(intent.BeatTick, intent.ActorEntityId, intent.Channel, intent.InputKind);
+        if (moveInputs.TryGetValue(key, out AuthoritativeMoveInput? previous))
+        {
+            previous.Complete(AuthoritativePlayerInputStatus.Replaced, new MoveResult(false, previous.EntityId, default, previous.Direction, MoveErrorCode.UnknownEntity, "input replaced", false, default, previous.ClientTick));
+        }
+
+        moveInputs[key] = input;
         return input;
     }
 
-    public IReadOnlyList<AuthoritativeMoveInput> DrainMoves()
+    public IReadOnlyList<AuthoritativeMoveInput> DrainMoves(long beatTick)
     {
         if (moveInputs.Count == 0)
         {
             return Array.Empty<AuthoritativeMoveInput>();
         }
 
-        var inputs = new List<AuthoritativeMoveInput>(moveInputs.Count);
-        while (moveInputs.Count > 0)
+        var inputs = new List<AuthoritativeMoveInput>();
+        foreach (KeyValuePair<PlayerInputKey, AuthoritativeMoveInput> pair in moveInputs.ToArray())
         {
-            inputs.Add(moveInputs.Dequeue());
+            if (pair.Key.BeatTick != beatTick && pair.Key.BeatTick != long.MaxValue)
+            {
+                continue;
+            }
+
+            moveInputs.Remove(pair.Key);
+            pair.Value.MarkConsumed();
+            if (pair.Value.ClientInputId != 0)
+            {
+                consumedClientInputIds.Add(pair.Value.ClientInputId);
+            }
+
+            inputs.Add(pair.Value);
         }
 
-        return inputs;
+        return inputs
+            .OrderBy(input => input.BeatTick)
+            .ThenBy(input => input.EntityId)
+            .ThenBy(input => input.SubmitSequence)
+            .ToArray();
     }
 
     public void FailPending(string reason)
     {
-        while (moveInputs.Count > 0)
+        foreach (AuthoritativeMoveInput input in moveInputs.Values)
         {
-            AuthoritativeMoveInput input = moveInputs.Dequeue();
-            input.Complete(new MoveResult(false, input.EntityId, default, Direction.None, MoveErrorCode.UnknownEntity, reason, false, default, input.ClientTick));
+            input.Complete(AuthoritativePlayerInputStatus.Rejected, new MoveResult(false, input.EntityId, default, input.Direction, MoveErrorCode.UnknownEntity, reason, false, default, input.ClientTick));
         }
+
+        moveInputs.Clear();
 
         foreach (AuthoritativeDebugActionInput input in debugInputs.Values)
         {
@@ -118,8 +200,11 @@ public sealed class AuthoritativeInputQueue
     }
 
     public AuthoritativeDebugActionInput EnqueueDebugSpawn(long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks)
+        => EnqueueDebugSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, false);
+
+    public AuthoritativeDebugActionInput EnqueueDebugSpawn(long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot)
     {
-        WorldAction action = ActionQueue.EnqueueDebugSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks);
+        WorldAction action = ActionQueue.EnqueueDebugSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, rotatePivot);
         var input = new AuthoritativeDebugActionInput(action);
         debugInputs[action.ActionId] = input;
         return input;
@@ -159,5 +244,66 @@ public sealed class AuthoritativeInputQueue
         }
 
         return result;
+    }
+
+    private static Direction DirectionFromTarget(GridCoord current, GridCoord target)
+    {
+        int dx = target.X - current.X;
+        int dy = target.Y - current.Y;
+        if (dx == -1 && dy == 0)
+        {
+            return Direction.Left;
+        }
+
+        if (dx == 1 && dy == 0)
+        {
+            return Direction.Right;
+        }
+
+        if (dx == 0 && dy == 1)
+        {
+            return Direction.Up;
+        }
+
+        if (dx == 0 && dy == -1)
+        {
+            return Direction.Down;
+        }
+
+        return Direction.None;
+    }
+
+    private readonly struct PlayerInputKey : IEquatable<PlayerInputKey>
+    {
+        public PlayerInputKey(long beatTick, long entityId, string channel, InputKind inputKind)
+        {
+            BeatTick = beatTick;
+            EntityId = entityId;
+            Channel = channel ?? string.Empty;
+            InputKind = inputKind;
+        }
+
+        public long BeatTick { get; }
+        public long EntityId { get; }
+        public string Channel { get; }
+        public InputKind InputKind { get; }
+
+        public bool Equals(PlayerInputKey other)
+        {
+            return BeatTick == other.BeatTick &&
+                EntityId == other.EntityId &&
+                Channel == other.Channel &&
+                InputKind == other.InputKind;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is PlayerInputKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(BeatTick, EntityId, Channel, InputKind);
+        }
     }
 }

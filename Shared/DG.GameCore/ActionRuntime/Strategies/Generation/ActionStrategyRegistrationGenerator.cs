@@ -7,13 +7,16 @@ namespace DG.GameCore
 public readonly struct ActionStrategyRegistrationDescriptor
 {
     public ActionStrategyRegistrationDescriptor(ActionPrimitive primitive, string strategyKey, string typeName)
+        : this(strategyKey, typeName)
     {
-        Primitive = primitive;
-        StrategyKey = string.IsNullOrWhiteSpace(strategyKey) ? primitive.ToString() : strategyKey;
+    }
+
+    public ActionStrategyRegistrationDescriptor(string strategyKey, string typeName)
+    {
+        StrategyKey = string.IsNullOrWhiteSpace(strategyKey) ? throw new ArgumentException("Strategy key is empty.", nameof(strategyKey)) : strategyKey;
         TypeName = string.IsNullOrWhiteSpace(typeName) ? throw new ArgumentException("Strategy type name is empty.", nameof(typeName)) : typeName.Replace('+', '.');
     }
 
-    public ActionPrimitive Primitive { get; }
     public string StrategyKey { get; }
     public string TypeName { get; }
 }

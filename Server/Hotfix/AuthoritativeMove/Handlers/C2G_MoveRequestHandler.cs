@@ -10,7 +10,19 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
 {
     protected override async FTask Run(Session session, C2G_MoveRequest request, G2C_MoveResponse response, Action reply)
     {
-        if (!AuthoritativeMoveWorldProvider.Players.TryAuthorizeMove(session, request.EntityId, out long boundEntityId, out MoveErrorCode authErrorCode, out string authReason))
+        bool hasBefore = TryGetCoord(request.EntityId, out GridCoord beforeCoord);
+        Direction direction = ResolveDirection(beforeCoord, new GridCoord(request.TargetX, request.TargetY));
+        long beatTick = request.BeatTick > 0 ? request.BeatTick : AuthoritativeMoveWorldProvider.World.ServerTick + 1;
+        InputIntent intent = InputIntent.PlayerMove(
+            request.EntityId,
+            direction,
+            beatTick,
+            request.ClientInputId,
+            request.ClientTick,
+            AuthoritativeMoveWorldProvider.World.ServerTick);
+        var authorization = new PlayerIntentAuthorization<Session>(AuthoritativeMoveWorldProvider.Players);
+        InputIntentAuthorizationResult authorizationResult = authorization.Authorize(session, intent, out long boundEntityId);
+        if (!authorizationResult.Accepted)
         {
             GridCoord boundCoord = default;
             bool hasBoundCoord = TryGetCoord(boundEntityId, out boundCoord);
@@ -18,9 +30,13 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
             response.EntityId = request.EntityId;
             response.FinalX = boundCoord.X;
             response.FinalY = boundCoord.Y;
-            response.MoveErrorCode = (int)authErrorCode;
-            response.Reason = authReason;
+            response.MoveErrorCode = (int)authorizationResult.ErrorCode;
+            response.Reason = authorizationResult.Reason;
             response.ClientTick = request.ClientTick;
+            response.ClientInputId = request.ClientInputId;
+            response.BeatTick = request.BeatTick;
+            response.InputStatus = (int)AuthoritativePlayerInputStatus.Rejected;
+            response.Direction = (int)Direction.None;
             Log.Info(
                 "[C2G_MoveRequestHandler] rejected auth requestEntity:{0} boundEntity:{1} moveErrorCode:{2} reason:{3} hasBound:{4} bound:({5},{6}) clientTick:{7}",
                 request.EntityId,
@@ -36,22 +52,22 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
             return;
         }
 
-        bool hasBefore = TryGetCoord(request.EntityId, out GridCoord beforeCoord);
-
         Log.Info(
-            "[C2G_MoveRequestHandler] request entity:{0} target:({1},{2}) clientTick:{3} hasBefore:{4} before:({5},{6})",
+            "[C2G_MoveRequestHandler] request entity:{0} target:({1},{2}) beat:{3} direction:{4} input:{5} clientTick:{6} hasBefore:{7} before:({8},{9})",
             request.EntityId,
             request.TargetX,
             request.TargetY,
+            beatTick,
+            direction,
+            request.ClientInputId,
             request.ClientTick,
             hasBefore,
             beforeCoord.X,
             beforeCoord.Y);
 
-        AuthoritativeMoveInput input = AuthoritativeMoveWorldProvider.InputQueue.EnqueueMove(
-            request.EntityId,
-            new GridCoord(request.TargetX, request.TargetY),
-            request.ClientTick);
+        AuthoritativeMoveInput input = AuthoritativeMoveWorldProvider.InputQueue.EnqueueIntent(
+            intent,
+            AuthoritativeMoveWorldProvider.World.ServerTick);
         DG.GameCore.MoveResult result = await input.WaitAsync();
         bool hasAfter = TryGetCoord(request.EntityId, out GridCoord afterCoord);
         AuthoritativeMoveWorldProvider.Observers.RefreshOwner(request.EntityId, session);
@@ -63,10 +79,17 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
         response.MoveErrorCode = (int)result.ErrorCode;
         response.Reason = result.Reason;
         response.ClientTick = request.ClientTick;
+        response.ClientInputId = request.ClientInputId;
+        response.BeatTick = input.BeatTick;
+        response.InputStatus = (int)input.Status;
+        response.Direction = (int)input.Direction;
 
         Log.Info(
-            "[C2G_MoveRequestHandler] response entity:{0} success:{1} final:({2},{3}) moveErrorCode:{4} reason:{5} clientTick:{6} hasAfter:{7} after:({8},{9})",
+            "[C2G_MoveRequestHandler] response entity:{0} status:{1} beat:{2} direction:{3} success:{4} final:({5},{6}) moveErrorCode:{7} reason:{8} clientTick:{9} hasAfter:{10} after:({11},{12})",
             response.EntityId,
+            input.Status,
+            input.BeatTick,
+            input.Direction,
             response.Success,
             response.FinalX,
             response.FinalY,
@@ -98,5 +121,32 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
 
         coord = default;
         return false;
+    }
+
+    private static Direction ResolveDirection(GridCoord current, GridCoord target)
+    {
+        int dx = target.X - current.X;
+        int dy = target.Y - current.Y;
+        if (dx == -1 && dy == 0)
+        {
+            return Direction.Left;
+        }
+
+        if (dx == 1 && dy == 0)
+        {
+            return Direction.Right;
+        }
+
+        if (dx == 0 && dy == 1)
+        {
+            return Direction.Up;
+        }
+
+        if (dx == 0 && dy == -1)
+        {
+            return Direction.Down;
+        }
+
+        return Direction.None;
     }
 }

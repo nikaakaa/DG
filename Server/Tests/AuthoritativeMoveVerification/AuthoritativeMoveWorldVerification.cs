@@ -61,6 +61,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyInputIntentLayer(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyAuthoritativeTickSyncDiagnostics(out reason))
         {
             return false;
@@ -87,6 +92,11 @@ public static class AuthoritativeMoveWorldVerification
         }
 
         if (!VerifyPortConnectedPush(out reason))
+        {
+            return false;
+        }
+
+        if (!VerifyRotatePivotPushResponse(out reason))
         {
             return false;
         }
@@ -567,7 +577,7 @@ public static class AuthoritativeMoveWorldVerification
 
         if (!luban.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig conveyorOutput) ||
             !conveyorOutput.OutputSpecId.Equals(new ActionSpecId("mechanism_push")) ||
-            conveyorOutput.OutputCostTicks != 1)
+            conveyorOutput.OutputCostTicks != 3)
         {
             reason = "formal conveyor push on enter config invalid";
             return false;
@@ -1056,15 +1066,20 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        AuthoritativeMoveInput illegal = queue.EnqueueMove(1, new GridCoord(3, 0), 102);
+        AuthoritativeMoveInput illegal = queue.EnqueueMove(1, 2, Direction.None, 9002, 102, world.ServerTick);
         WorldDelta illegalDelta = runner.Tick();
         MoveResult illegalResult = illegal.WaitAsync().GetResult();
         if (illegalResult.Success ||
-            illegalResult.ErrorCode != MoveErrorCode.TooFar ||
+            illegalResult.ErrorCode != MoveErrorCode.InvalidDirection ||
             illegalDelta.ChangedEntities.Count != 0 ||
             illegalDelta.RemovedEntityIds.Count != 0)
         {
-            reason = "illegal queued move created dirty delta";
+            reason = "invalid direction queued move created dirty delta";
+            return false;
+        }
+
+        if (!VerifyAuthoritativeBeatInputBuffer(out reason))
+        {
             return false;
         }
 
@@ -1096,11 +1111,166 @@ public static class AuthoritativeMoveWorldVerification
             1);
         pushRunner.Tick();
         pushRunner.Tick();
+        if (pushWorld.TryGetEntity(21, out GameEntity tooEarlyPlayer) &&
+            pushWorld.TryGetComponent(tooEarlyPlayer, out PositionComponent tooEarlyPosition) &&
+            tooEarlyPosition.Coord != new GridCoord(0, 0))
+        {
+            reason = "push on enter ignored configured cost ticks";
+            return false;
+        }
+
+        pushRunner.Tick();
         if (!pushWorld.TryGetEntity(21, out GameEntity pushedPlayer) ||
             !pushWorld.TryGetComponent(pushedPlayer, out PositionComponent pushedPosition) ||
             pushedPosition.Coord != new GridCoord(1, 0))
         {
             reason = "tick runner did not execute push on enter";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyAuthoritativeBeatInputBuffer(out string reason)
+    {
+        var queue = new AuthoritativeInputQueue();
+        AuthoritativeMoveInput first = queue.EnqueueMove(10, 5, Direction.Left, 1, 100, 4);
+        AuthoritativeMoveInput second = queue.EnqueueMove(10, 5, Direction.Right, 2, 101, 4);
+        if (!first.IsCompleted ||
+            first.Status != AuthoritativePlayerInputStatus.Replaced ||
+            second.IsCompleted ||
+            queue.PendingMoveCount != 1)
+        {
+            reason = "same beat input replacement failed";
+            return false;
+        }
+
+        AuthoritativeMoveInput otherEntity = queue.EnqueueMove(11, 5, Direction.Up, 3, 102, 4);
+        IReadOnlyList<AuthoritativeMoveInput> futureDrain = queue.DrainMoves(4);
+        if (futureDrain.Count != 0 || queue.PendingMoveCount != 2)
+        {
+            reason = "future beat input drained early";
+            return false;
+        }
+
+        IReadOnlyList<AuthoritativeMoveInput> drained = queue.DrainMoves(5);
+        if (drained.Count != 2 ||
+            drained[0].EntityId != 10 ||
+            drained[0].Direction != Direction.Right ||
+            drained[1].EntityId != 11 ||
+            second.Status != AuthoritativePlayerInputStatus.Consumed ||
+            otherEntity.Status != AuthoritativePlayerInputStatus.Consumed ||
+            queue.DrainMoves(5).Count != 0)
+        {
+            reason = "beat drain did not return final inputs once";
+            return false;
+        }
+
+        AuthoritativeMoveInput expired = queue.EnqueueMove(12, 4, Direction.Down, 4, 103, 5);
+        if (!expired.IsCompleted ||
+            expired.Status != AuthoritativePlayerInputStatus.Expired ||
+            queue.PendingMoveCount != 0)
+        {
+            reason = "expired beat input entered queue";
+            return false;
+        }
+
+        var world = new GameWorld();
+        world.AddEntity(DefaultWorldConfig.PlayerSpawn(20, 20, new GridCoord(3, 3)));
+        world.FlushDelta();
+        var runner = new AuthoritativeWorldTickRunner(
+            world,
+            queue,
+            new AuthoritativeWorldSyncSystem(world),
+            1);
+        AuthoritativeMoveInput right = queue.EnqueueMove(20, 1, Direction.Right, 5, 104, world.ServerTick);
+        runner.Tick();
+        MoveResult result = right.WaitAsync().GetResult();
+        if (!result.Success ||
+            result.FinalCoord != new GridCoord(4, 3) ||
+            right.Status != AuthoritativePlayerInputStatus.Resolved)
+        {
+            reason = "direction input was not resolved from authoritative coord";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyInputIntentLayer(out string reason)
+    {
+        var queue = new AuthoritativeInputQueue();
+        InputIntent firstIntent = InputIntent.PlayerMove(10, Direction.Left, 5, 7001, 100, 4);
+        InputIntent secondIntent = InputIntent.PlayerMove(10, Direction.Right, 5, 7002, 101, 4);
+        AuthoritativeMoveInput first = queue.EnqueueIntent(firstIntent, 4);
+        AuthoritativeMoveInput second = queue.EnqueueIntent(secondIntent, 4);
+        if (!first.IsCompleted ||
+            first.Status != AuthoritativePlayerInputStatus.Replaced ||
+            second.IsCompleted ||
+            queue.PendingMoveCount != 1)
+        {
+            reason = "input intent replacement failed";
+            return false;
+        }
+
+        AuthoritativeMoveInput otherActor = queue.EnqueueIntent(InputIntent.PlayerMove(11, Direction.Up, 5, 7003, 102, 4), 4);
+        IReadOnlyList<AuthoritativeMoveInput> drained = queue.DrainMoves(5);
+        if (drained.Count != 2 ||
+            drained[0].Intent.InputKind != InputKind.Move ||
+            drained[0].Direction != Direction.Right ||
+            drained[1].EntityId != 11 ||
+            otherActor.Status != AuthoritativePlayerInputStatus.Consumed)
+        {
+            reason = "input intent drain did not preserve actor boundaries";
+            return false;
+        }
+
+        AuthoritativeMoveInput duplicate = queue.EnqueueIntent(InputIntent.PlayerMove(12, Direction.Down, 6, 7002, 103, 5), 5);
+        if (!duplicate.IsCompleted || duplicate.Status != AuthoritativePlayerInputStatus.Rejected)
+        {
+            reason = "duplicate input intent was not rejected";
+            return false;
+        }
+
+        var world = new GameWorld();
+        var manager = new MultiplayerEntityManager<object>(world);
+        var sessionA = new object();
+        var sessionB = new object();
+        manager.Join(sessionA, out PlayerEntitySnapshot playerA);
+        manager.Join(sessionB, out PlayerEntitySnapshot playerB);
+        var authorization = new PlayerIntentAuthorization<object>(manager);
+        InputIntent allowed = InputIntent.PlayerMove(playerA.EntityId, Direction.Right, 1, 7101, 1, world.ServerTick);
+        InputIntent denied = InputIntent.PlayerMove(playerB.EntityId, Direction.Right, 1, 7102, 1, world.ServerTick);
+        if (!authorization.Authorize(sessionA, allowed, out long boundA).Accepted ||
+            boundA != playerA.EntityId ||
+            authorization.Authorize(sessionA, denied, out _).Accepted)
+        {
+            reason = "input intent authorization boundary failed";
+            return false;
+        }
+
+        var blockedWorld = new GameWorld();
+        blockedWorld.AddEntity(DefaultWorldConfig.PlayerSpawn(20, 20, new GridCoord(0, 0)));
+        blockedWorld.AddEntity(DefaultWorldConfig.BlockerSpawn(21, new GridCoord(1, 0)));
+        blockedWorld.FlushDelta();
+        blockedWorld.NextTick();
+        var blockedQueue = new AuthoritativeInputQueue();
+        var runner = new AuthoritativeWorldTickRunner(
+            blockedWorld,
+            blockedQueue,
+            new AuthoritativeWorldSyncSystem(blockedWorld),
+            1);
+        AuthoritativeMoveInput blocked = blockedQueue.EnqueueIntent(InputIntent.PlayerMove(20, Direction.Right, blockedWorld.ServerTick + 1, 7103, 1, blockedWorld.ServerTick), blockedWorld.ServerTick);
+        runner.Tick();
+        MoveResult blockedResult = blocked.WaitAsync().GetResult();
+        if (blockedResult.Success ||
+            blockedResult.ErrorCode == MoveErrorCode.None ||
+            blocked.Status != AuthoritativePlayerInputStatus.Resolved ||
+            !HasPosition(blockedWorld, 20, new GridCoord(0, 0)))
+        {
+            reason = "authorized input intent did not leave rule failure to action pipeline";
             return false;
         }
 
@@ -1686,6 +1856,153 @@ public static class AuthoritativeMoveWorldVerification
 
         if (!VerifyConveyorPushesPortGroupThroughPlanner(out reason))
         {
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyRotatePivotPushResponse(out string reason)
+    {
+        var world = new GameWorld();
+        AddPort(world, 80000100, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(world, 80000101, new GridCoord(1, 0), DirectionMask.All);
+        if (world.TryGetEntity(80000101, out GameEntity memberDirectionEntity))
+        {
+            world.SetDirection(memberDirectionEntity, Direction.Right);
+        }
+
+        SetRotatePivot(world, 80000100);
+        world.NextTick();
+        StateDrivenRuleExecutionResult rotate = new StateDrivenRuleExecutionSystem().Tick(world, new[] { WorldMove(1, 80000101, Direction.Down) }, world.ServerTick);
+        if (!rotate.ActionResults.TryGetValue(1, out MoveResult rotateResult) ||
+            !rotateResult.Success ||
+            !HasPosition(world, 80000100, new GridCoord(0, 0)) ||
+            !HasPosition(world, 80000101, new GridCoord(0, -1)) ||
+            !HasDirection(world, 80000101, Direction.Down))
+        {
+            reason = "rotate pivot body did not rotate from single push";
+            return false;
+        }
+
+        if (rotate.AnimationMetadata.Count != 2 ||
+            !rotate.AnimationMetadata.Any(metadata => metadata.EntityId == 80000100 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivot && metadata.StyleKey == "rotate_pivot" && metadata.FromCoord.Equals(new GridCoord(0, 0)) && metadata.ToCoord.Equals(new GridCoord(0, 0)) && metadata.RotateDirection == RotatePivotDirection.Clockwise) ||
+            !rotate.AnimationMetadata.Any(metadata => metadata.EntityId == 80000101 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivot && metadata.StyleKey == "rotate_pivot" && metadata.PivotEntityId == 80000100 && metadata.PivotCoord.Equals(new GridCoord(0, 0)) && metadata.FromCoord.Equals(new GridCoord(1, 0)) && metadata.ToCoord.Equals(new GridCoord(0, -1)) && !metadata.Bounce))
+        {
+            reason = "rotate pivot success metadata incomplete:" + string.Join(",", rotate.AnimationMetadata.Select(MetadataKey));
+            return false;
+        }
+
+        var cancelWorld = new GameWorld();
+        AddPort(cancelWorld, 80000110, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(cancelWorld, 80000111, new GridCoord(1, 0), DirectionMask.All);
+        AddPort(cancelWorld, 80000112, new GridCoord(-1, 0), DirectionMask.All);
+        SetRotatePivot(cancelWorld, 80000110);
+        cancelWorld.NextTick();
+        StateDrivenRuleExecutionResult cancelled = new StateDrivenRuleExecutionSystem().Tick(cancelWorld, new[]
+        {
+            WorldMove(2, 80000111, Direction.Down),
+            WorldMove(3, 80000112, Direction.Down)
+        }, cancelWorld.ServerTick);
+        if (!cancelled.ActionResults.TryGetValue(2, out MoveResult firstCancel) ||
+            !cancelled.ActionResults.TryGetValue(3, out MoveResult secondCancel) ||
+            firstCancel.Success ||
+            secondCancel.Success ||
+            cancelled.DeferredActions.Count != 0 ||
+            !HasPosition(cancelWorld, 80000111, new GridCoord(1, 0)) ||
+            !HasPosition(cancelWorld, 80000112, new GridCoord(-1, 0)))
+        {
+            reason = "opposite rotate pivot torque did not cancel";
+            return false;
+        }
+
+        var blockedWorld = new GameWorld();
+        AddPort(blockedWorld, 80000120, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(blockedWorld, 80000121, new GridCoord(1, 0), DirectionMask.All);
+        AddPort(blockedWorld, 80000122, new GridCoord(-1, 0), DirectionMask.All);
+        SetRotatePivot(blockedWorld, 80000120);
+        blockedWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(80000123, new GridCoord(0, -1)));
+        blockedWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(80000124, new GridCoord(0, 1)));
+        blockedWorld.NextTick();
+        StateDrivenRuleExecutionResult blocked = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, new[] { WorldMove(4, 80000121, Direction.Down) }, blockedWorld.ServerTick);
+        if (!blocked.ActionResults.TryGetValue(4, out MoveResult blockedResult) ||
+            !blockedResult.Success)
+        {
+            reason = "rotate pivot blocked result failed";
+            return false;
+        }
+
+        if (blocked.DeferredActions.Count != 2 ||
+            !blocked.DeferredActions.Any(action => action.EntityId == 80000123) ||
+            !blocked.DeferredActions.Any(action => action.EntityId == 80000124))
+        {
+            reason = "rotate pivot deferred mismatch count:" + blocked.DeferredActions.Count + " ids:" + string.Join(",", blocked.DeferredActions.Select(action => action.EntityId));
+            return false;
+        }
+
+        if (!HasPosition(blockedWorld, 80000121, new GridCoord(1, 0)) ||
+            !HasPosition(blockedWorld, 80000122, new GridCoord(-1, 0)))
+        {
+            reason = "rotate pivot self moved while blocked";
+            return false;
+        }
+
+        DeferredAction lowerImpact = blocked.DeferredActions.Single(action => action.EntityId == 80000123);
+        DeferredAction upperImpact = blocked.DeferredActions.Single(action => action.EntityId == 80000124);
+        if (lowerImpact.Direction != Direction.Left ||
+            upperImpact.Direction != Direction.Right)
+        {
+            reason = "rotate pivot blocker directions were lower:" + lowerImpact.Direction + " upper:" + upperImpact.Direction;
+            return false;
+        }
+
+        if (blocked.DeferredActions.Any(action => action.OriginContexts.Count != 1) ||
+            blocked.DeferredActions.Any(action => action.OriginContexts[0].Kind != PushOriginKind.RotatePivotImpact))
+        {
+            reason = "rotate pivot impact context missing counts:" + string.Join(",", blocked.DeferredActions.Select(action => action.EntityId + ":" + action.OriginContexts.Count));
+            return false;
+        }
+
+        if (blocked.AnimationMetadata.Count != 5 ||
+            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000120 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivotBounce && metadata.Bounce && metadata.StyleKey == "rotate_pivot_bounce") ||
+            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000121 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivotBounce && metadata.Bounce && metadata.ImpactCoord.Equals(new GridCoord(0, -1))) ||
+            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000122 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivotBounce && metadata.Bounce && metadata.ImpactCoord.Equals(new GridCoord(0, 1))) ||
+            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000123 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.StyleKey == "rotate_pivot_impact" && metadata.Direction == Direction.Left) ||
+            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000124 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.StyleKey == "rotate_pivot_impact" && metadata.Direction == Direction.Right))
+        {
+            reason = "rotate pivot blocked metadata incomplete:" + string.Join(",", blocked.AnimationMetadata.Select(MetadataKey));
+            return false;
+        }
+
+        var handoffWorld = new GameWorld();
+        AddPort(handoffWorld, 80000130, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(handoffWorld, 80000131, new GridCoord(1, 0), DirectionMask.All);
+        SetRotatePivot(handoffWorld, 80000130);
+        AddPort(handoffWorld, 80000132, new GridCoord(0, -1), DirectionMask.Right);
+        AddPort(handoffWorld, 80000133, new GridCoord(1, -1), DirectionMask.Left);
+        handoffWorld.NextTick();
+        StateDrivenRuleExecutionResult handoff = new StateDrivenRuleExecutionSystem().Tick(handoffWorld, new[] { WorldMove(5, 80000131, Direction.Down) }, handoffWorld.ServerTick);
+        if (handoff.DeferredActions.Count != 1 ||
+            !handoff.DeferredActions[0].SubjectEntityIds.Contains(80000132) ||
+            !handoff.DeferredActions[0].SubjectEntityIds.Contains(80000133))
+        {
+            reason = "rotate pivot external connected body blocker did not hand off as whole subject";
+            return false;
+        }
+
+        var runtimePivotWorld = new GameWorld();
+        AddPort(runtimePivotWorld, 80000140, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(runtimePivotWorld, 80000141, new GridCoord(1, 0), DirectionMask.All);
+        var runtimePivotSpec = new EffectSpec("runtime_pivot_verification", EffectKind.RotatePivot, EffectTargetBinding.TargetEntity, EffectDurationPolicy.InfiniteUntilRemove, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOnly, 0, 1, DirectionMask.None, true, true, WorldTag.None);
+        AddVerificationEffect(runtimePivotWorld, runtimePivotSpec, 80000140, 0, "pivot");
+        runtimePivotWorld.NextTick();
+        StateDrivenRuleExecutionResult runtimePivot = new StateDrivenRuleExecutionSystem().Tick(runtimePivotWorld, new[] { WorldMove(6, 80000141, Direction.Down) }, runtimePivotWorld.ServerTick);
+        if (!runtimePivot.ActionResults.TryGetValue(6, out MoveResult runtimePivotResult) ||
+            !runtimePivotResult.Success ||
+            !HasPosition(runtimePivotWorld, 80000141, new GridCoord(0, -1)))
+        {
+            reason = "runtime effect rotate pivot did not enter rotate response";
             return false;
         }
 
@@ -2483,7 +2800,6 @@ public static class AuthoritativeMoveWorldVerification
 
     private sealed class VerificationRuntimeEffectStrategy : IActionStrategy
     {
-        public ActionPrimitive Primitive => ActionPrimitive.ApplyRuntimeEffect;
         public ActionStrategyId StrategyId => "runtime_effect";
 
         public void Process(ActionStrategyContext context)
@@ -2680,4 +2996,42 @@ public static class AuthoritativeMoveWorldVerification
             0,
             0);
     }
+
+    private static WorldAction WorldMove(long actionId, long entityId, Direction direction)
+    {
+        return new WorldAction(actionId, WorldActionPriority.Mechanism, "mechanism_push", entityId, null, direction, 0, 0, 0, 1);
+    }
+
+    private static void AddPort(GameWorld world, long entityId, GridCoord coord, DirectionMask ports)
+    {
+        world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(entityId, coord, Direction.Right));
+        if (world.TryGetEntity(entityId, out GameEntity entity))
+        {
+            world.SetComponent(entity, new PortConnectorComponent(ports));
+        }
+    }
+
+    private static void SetRotatePivot(GameWorld world, long entityId)
+    {
+        if (world.TryGetEntity(entityId, out GameEntity entity))
+        {
+            world.SetComponent(entity, new RotatePivotComponent());
+            world.CaptureStaticComponentSources(entity);
+        }
+    }
+
+    private static bool HasPosition(GameWorld world, long entityId, GridCoord expected)
+    {
+        return world.TryGetEntity(entityId, out GameEntity entity) &&
+            world.TryGetComponent(entity, out PositionComponent position) &&
+            position.Coord == expected;
+    }
+
+    private static bool HasDirection(GameWorld world, long entityId, Direction expected)
+    {
+        return world.TryGetEntity(entityId, out GameEntity entity) &&
+            world.TryGetComponent(entity, out DirectionComponent direction) &&
+            direction.Direction == expected;
+    }
+
 }

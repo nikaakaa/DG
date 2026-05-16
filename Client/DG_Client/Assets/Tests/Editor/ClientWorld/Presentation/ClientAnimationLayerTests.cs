@@ -210,6 +210,200 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void RotatePivotMetadataGeneratesMemberEventsIncludingPivot()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(101, 0, 0, Direction.Right));
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(102, 0, 1, Direction.Up));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            ClientMoveNetworkRuntime.ApplyWorldDelta(40, new[]
+            {
+                State(101, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, false, pushable: true),
+                State(102, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 1, 0, false, pushable: true)
+            }, new List<long>(), new[]
+            {
+                RotateMetadata(101, 40, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(0, 0), RotatePivotDirection.Clockwise, false),
+                RotateMetadata(102, 40, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, false)
+            });
+
+            Assert.IsTrue(runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent pivotEvent));
+            Assert.IsTrue(runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent memberEvent));
+            Assert.AreEqual(ClientAnimationMotionKind.RotatePivot, pivotEvent.MotionKind);
+            Assert.AreEqual(ClientAnimationMotionKind.RotatePivot, memberEvent.MotionKind);
+            Assert.AreEqual(new Vector2Int(0, 0), pivotEvent.FromCoord);
+            Assert.AreEqual(new Vector2Int(0, 0), pivotEvent.ToCoord);
+            Assert.AreEqual(new Vector2Int(0, 1), memberEvent.FromCoord);
+            Assert.AreEqual(new Vector2Int(1, 0), memberEvent.ToCoord);
+            Assert.AreEqual(RotatePivotDirection.Clockwise, memberEvent.RotateDirection);
+            Assert.IsFalse(runner.Context.AnimationLayer.TryDequeue(out _));
+        }
+
+        [Test]
+        public void BlockedRotateMetadataGeneratesBounceAndImpactEvents()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(111, 0, 0, Direction.Right));
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(112, 0, 1, Direction.Up));
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(113, 1, 0, Direction.None));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            ClientMoveNetworkRuntime.ApplyWorldDelta(41, new[]
+            {
+                State(111, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, false, pushable: true),
+                State(112, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 1, false, pushable: true),
+                State(113, DefaultWorldConfig.PushableBlockerConfigId, DefaultWorldConfig.PushableBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 1, 0, false, pushable: true)
+            }, new List<long>(), new[]
+            {
+                RotateMetadata(111, 111, 41, WorldDeltaMotionKind.RotatePivotBounce, "rotate_pivot_bounce", new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(0, 0), RotatePivotDirection.Clockwise, true),
+                RotateMetadata(112, 111, 41, WorldDeltaMotionKind.RotatePivotBounce, "rotate_pivot_bounce", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, true),
+                RotateMetadata(113, 111, 41, WorldDeltaMotionKind.MechanismPush, "rotate_pivot_impact", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, false, Direction.Right)
+            });
+
+            var events = new List<ClientAnimationEvent>();
+            while (runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent animationEvent))
+            {
+                events.Add(animationEvent);
+            }
+
+            Assert.AreEqual(3, events.Count);
+            Assert.AreEqual(2, events.Count(item => item.MotionKind == ClientAnimationMotionKind.RotatePivotBounce && item.Bounce));
+            Assert.IsTrue(events.Any(item => item.EntityId == 113 && item.MotionKind == ClientAnimationMotionKind.MechanismPush && item.StyleId == "rotate_pivot_impact" && item.ImpulseDirection == Direction.Right));
+        }
+
+        [Test]
+        public void RotatePivotPlaybackUsesArcAndBounceReturnsToSnapshot()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(121, 0, 1, Direction.Up));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            GameObject visualObject = new GameObject("Visuals");
+            var visuals = visualObject.AddComponent<ClientWorldVisuals>();
+            SetPrivateField(visuals, "runner", runner);
+            InvokePrivate(visuals, "Awake");
+
+            ClientMoveNetworkRuntime.ApplyWorldDelta(42, new[]
+            {
+                State(121, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 1, 0, false, pushable: true, portLocalPorts: (int)DirectionMask.Up)
+            }, new List<long>(), new[]
+            {
+                RotateMetadata(121, 121, 42, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, false)
+            });
+            InvokePrivate(visuals, "LateUpdate");
+            SetActiveAnimationProgress(visuals, 121, 0.5f);
+            InvokePrivate(visuals, "LateUpdate");
+            Transform view = visualObject.transform.Find("Entities/Entity_121");
+            Assert.IsNotNull(view);
+            Assert.Greater(view.localPosition.x, 0.5f);
+            Assert.Greater(view.localPosition.y, 0.5f);
+            Assert.Less(view.localPosition.y, 1.5f);
+
+            ClientMoveNetworkRuntime.ApplyWorldDelta(43, new[]
+            {
+                State(121, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 1, false, pushable: true, portLocalPorts: (int)DirectionMask.Up)
+            }, new List<long>(), new[]
+            {
+                RotateMetadata(121, 121, 43, WorldDeltaMotionKind.RotatePivotBounce, "rotate_pivot_bounce", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, true)
+            });
+            InvokePrivate(visuals, "LateUpdate");
+            SetActiveAnimationProgress(visuals, 121, 0.5f);
+            InvokePrivate(visuals, "LateUpdate");
+            Assert.Greater(view.localPosition.x, 0.5f);
+            Assert.Less(view.localPosition.y, 1.5f);
+
+            SetActiveAnimationProgress(visuals, 121, 1f);
+            InvokePrivate(visuals, "LateUpdate");
+            Assert.AreEqual(new Vector3(0.5f, 1.5f, -0.1f), view.localPosition);
+        }
+
+        [Test]
+        public void RotatePivotPlaybackKeepsConnectedBodyRigidAndLinesFollowViews()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(131, 0, 0, Direction.Right, DirectionMask.Up | DirectionMask.Right));
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(132, 0, 1, Direction.Right, DirectionMask.Down));
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(133, 1, 0, Direction.Right, DirectionMask.Left));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            GameObject visualObject = new GameObject("Visuals");
+            var visuals = visualObject.AddComponent<ClientWorldVisuals>();
+            SetPrivateField(visuals, "runner", runner);
+            InvokePrivate(visuals, "Awake");
+
+            ClientMoveNetworkRuntime.ApplyWorldDelta(44, new[]
+            {
+                State(131, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, 0, false, pushable: true, portLocalPorts: (int)(DirectionMask.Right | DirectionMask.Down)),
+                State(132, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 1, 0, false, pushable: true, portLocalPorts: (int)DirectionMask.Left),
+                State(133, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 0, -1, false, pushable: true, portLocalPorts: (int)DirectionMask.Up)
+            }, new List<long>(), new[]
+            {
+                RotateMetadata(131, 131, 44, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(0, 0), new Vector2Int(0, 0), RotatePivotDirection.Clockwise, false),
+                RotateMetadata(132, 131, 44, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, false),
+                RotateMetadata(133, 131, 44, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(1, 0), new Vector2Int(0, -1), RotatePivotDirection.Clockwise, false)
+            });
+            InvokePrivate(visuals, "LateUpdate");
+            SetActiveAnimationProgress(visuals, 132, 0.5f);
+            SetActiveAnimationProgress(visuals, 133, 0.5f);
+            InvokePrivate(visuals, "LateUpdate");
+
+            Transform entityRoot = visualObject.transform.Find("Entities");
+            Transform pivot = entityRoot.Find("Entity_131");
+            Transform upper = entityRoot.Find("Entity_132");
+            Transform right = entityRoot.Find("Entity_133");
+            Assert.IsNotNull(pivot);
+            Assert.IsNotNull(upper);
+            Assert.IsNotNull(right);
+            Assert.AreEqual(entityRoot, pivot.parent);
+            Assert.AreEqual(entityRoot, upper.parent);
+            Assert.AreEqual(entityRoot, right.parent);
+            float pivotAngle = SignedAngle(pivot.localRotation.eulerAngles.z);
+            Assert.Greater(Mathf.Abs(pivotAngle), 0.0001f);
+            Assert.That(SignedAngle(upper.localRotation.eulerAngles.z), Is.EqualTo(pivotAngle).Within(0.0001f));
+            Assert.That(SignedAngle(right.localRotation.eulerAngles.z), Is.EqualTo(pivotAngle).Within(0.0001f));
+            AssertRotatedOffset(pivot.localPosition, upper.localPosition, new Vector3(0f, 1f, 0f), pivotAngle);
+            AssertRotatedOffset(pivot.localPosition, right.localPosition, new Vector3(1f, 0f, 0f), pivotAngle);
+            Assert.That(Vector3.Distance(upper.localPosition, right.localPosition), Is.EqualTo(Mathf.Sqrt(2f)).Within(0.0001f));
+
+            Transform lineRoot = visualObject.transform.Find("PortConnections");
+            Assert.IsNotNull(lineRoot);
+            LineRenderer line = lineRoot.GetComponentInChildren<LineRenderer>();
+            Assert.IsNotNull(line);
+            Vector3 lineStart = line.GetPosition(0);
+            Vector3 lineEnd = line.GetPosition(1);
+            Assert.IsTrue(ApproximatelyAny(lineStart, pivot.localPosition, upper.localPosition, right.localPosition));
+            Assert.IsTrue(ApproximatelyAny(lineEnd, pivot.localPosition, upper.localPosition, right.localPosition));
+        }
+
+        [Test]
+        public void RotatePivotPlaybackUsesCurrentViewPositionAsArcStart()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.ApplySnapshot(StateSnapshot(141, 0, 1, Direction.Up));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            GameObject visualObject = new GameObject("Visuals");
+            var visuals = visualObject.AddComponent<ClientWorldVisuals>();
+            SetPrivateField(visuals, "runner", runner);
+            InvokePrivate(visuals, "Awake");
+            InvokePrivate(visuals, "LateUpdate");
+            Transform view = visualObject.transform.Find("Entities/Entity_141");
+            view.localPosition = new Vector3(0.8f, 1.2f, -0.1f);
+
+            ClientMoveNetworkRuntime.ApplyWorldDelta(45, new[]
+            {
+                State(141, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, 1, 0, false, pushable: true)
+            }, new List<long>(), new[]
+            {
+                RotateMetadata(141, 141, 45, WorldDeltaMotionKind.RotatePivot, "rotate_pivot", new Vector2Int(0, 0), new Vector2Int(0, 1), new Vector2Int(1, 0), RotatePivotDirection.Clockwise, false)
+            });
+            InvokePrivate(visuals, "LateUpdate");
+            SetActiveAnimationProgress(visuals, 141, 0.5f);
+            InvokePrivate(visuals, "LateUpdate");
+
+            Vector3 pivot = new Vector3(0.5f, 0.5f, -0.1f);
+            float angle = SignedAngle(view.localRotation.eulerAngles.z);
+            AssertRotatedOffset(pivot, view.localPosition, new Vector3(0.3f, 0.7f, 0f), angle);
+        }
+
+        [Test]
         public void AutoMoveAndDebugDragUseDifferentStyles()
         {
             ClientWorldRunner runner = CreateRunner();
@@ -523,14 +717,20 @@ namespace DG.EditorTests
             ClientAnimationStyleProvider provider = ClientAnimationStyleProvider.Fallback();
             Assert.IsTrue(provider.TryGet("mechanism_push", out ClientAnimationStyle style));
             Assert.AreEqual("mechanism_push", style.StyleId);
+            Assert.IsTrue(provider.TryGet("rotate_pivot", out ClientAnimationStyle rotateStyle));
+            Assert.IsTrue(provider.TryGet("rotate_pivot_bounce", out ClientAnimationStyle bounceStyle));
+            Assert.IsTrue(provider.TryGet("rotate_pivot_impact", out ClientAnimationStyle impactStyle));
+            Assert.AreEqual(0.54f, rotateStyle.DurationSeconds);
+            Assert.AreEqual(0.54f, bounceStyle.DurationSeconds);
+            Assert.AreEqual(0.54f, impactStyle.DurationSeconds);
 
             ActionSpec playerMove = ActionSpecRegistry.Default.Get("player_move");
             ActionSpec mechanismPush = ActionSpecRegistry.Default.Get("mechanism_push");
 
             Assert.AreEqual("player_move", playerMove.SpecId.Value);
             Assert.AreEqual("mechanism_push", mechanismPush.SpecId.Value);
-            Assert.AreEqual(ActionPrimitive.Move, playerMove.Primitive);
-            Assert.AreEqual(ActionPrimitive.Move, mechanismPush.Primitive);
+            Assert.AreEqual(new ActionStrategyId("move"), playerMove.StrategyId);
+            Assert.AreEqual(new ActionStrategyId("move"), mechanismPush.StrategyId);
         }
 
         [Test]
@@ -545,6 +745,9 @@ namespace DG.EditorTests
             CollectionAssert.AreEquivalent(StyleIds(source), StyleIds(streaming));
             Assert.IsTrue(StyleIds(streaming).Contains("unknown"));
             Assert.IsTrue(StyleIds(streaming).Contains("mechanism_push"));
+            Assert.AreEqual(0.54f, StyleDuration(source, "rotate_pivot"));
+            Assert.AreEqual(0.54f, StyleDuration(generated, "rotate_pivot_bounce"));
+            Assert.AreEqual(0.54f, StyleDuration(streaming, "rotate_pivot_impact"));
         }
 
         private static ClientWorldRunner CreateRunner()
@@ -591,6 +794,70 @@ namespace DG.EditorTests
             };
         }
 
+        private static G2C_WorldDeltaAnimationMetadata RotateMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Vector2Int pivotCoord, Vector2Int fromCoord, Vector2Int toCoord, RotatePivotDirection rotateDirection, bool bounce, Direction direction = Direction.None)
+            => RotateMetadata(entityId, 101, serverTick, motionKind, styleKey, pivotCoord, fromCoord, toCoord, rotateDirection, bounce, direction);
+
+        private static G2C_WorldDeltaAnimationMetadata RotateMetadata(long entityId, long pivotEntityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Vector2Int pivotCoord, Vector2Int fromCoord, Vector2Int toCoord, RotatePivotDirection rotateDirection, bool bounce, Direction direction = Direction.None)
+        {
+            return new G2C_WorldDeltaAnimationMetadata
+            {
+                EntityId = entityId,
+                ServerTick = serverTick,
+                MotionKind = (int)motionKind,
+                StyleKey = styleKey,
+                Direction = (int)direction,
+                PivotEntityId = pivotEntityId,
+                PivotX = pivotCoord.x,
+                PivotY = pivotCoord.y,
+                FromX = fromCoord.x,
+                FromY = fromCoord.y,
+                ToX = toCoord.x,
+                ToY = toCoord.y,
+                RotateDirection = (int)rotateDirection,
+                Bounce = bounce,
+                ImpactX = toCoord.x,
+                ImpactY = toCoord.y
+            };
+        }
+
+        private static EntitySnapshot StateSnapshot(long entityId, int x, int y, Direction direction)
+            => StateSnapshot(entityId, x, y, direction, DirectionMask.None);
+
+        private static EntitySnapshot StateSnapshot(long entityId, int x, int y, Direction direction, DirectionMask ports)
+        {
+            return new EntitySnapshot(entityId, DefaultWorldConfig.PortConnectorBlockerConfigId, DefaultWorldConfig.PortConnectorBlockerArchetypeId, DefaultWorldConfig.BlockerTarget, x, y, direction, true, true, false, false, 1, false, true, ports, false, true, true, 1);
+        }
+
+        private static bool ApproximatelyAny(Vector3 value, params Vector3[] candidates)
+        {
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                Vector3 candidate = candidates[i];
+                candidate.z = value.z;
+                if (Vector3.Distance(value, candidate) < 0.0001f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void AssertRotatedOffset(Vector3 pivot, Vector3 target, Vector3 originalOffset, float angleDegrees)
+        {
+            float radians = angleDegrees * Mathf.Deg2Rad;
+            float sin = Mathf.Sin(radians);
+            float cos = Mathf.Cos(radians);
+            Vector3 expectedOffset = new Vector3(originalOffset.x * cos - originalOffset.y * sin, originalOffset.x * sin + originalOffset.y * cos, 0f);
+            Vector3 actualOffset = target - pivot;
+            actualOffset.z = 0f;
+            Assert.That(actualOffset.x, Is.EqualTo(expectedOffset.x).Within(0.0001f));
+            Assert.That(actualOffset.y, Is.EqualTo(expectedOffset.y).Within(0.0001f));
+        }
+
+        private static float SignedAngle(float angle)
+            => angle > 180f ? angle - 360f : angle;
+
         private static void SetPrivateField(object target, string fieldName, object value)
         {
             target.GetType()
@@ -614,12 +881,30 @@ namespace DG.EditorTests
 
         private static void SetActiveAnimationElapsed(ClientWorldVisuals visuals, long entityId, float elapsed)
         {
+            SetActiveAnimationElapsed(GetActiveAnimation(visuals, entityId), elapsed);
+        }
+
+        private static void SetActiveAnimationProgress(ClientWorldVisuals visuals, long entityId, float normalized)
+        {
+            object animation = GetActiveAnimation(visuals, entityId);
+            float duration = (float)animation.GetType()
+                .GetProperty("DurationSeconds")
+                .GetValue(animation);
+            SetActiveAnimationElapsed(animation, duration * Mathf.Clamp01(normalized));
+        }
+
+        private static object GetActiveAnimation(ClientWorldVisuals visuals, long entityId)
+        {
             object animations = visuals.GetType()
                 .GetField("activeAnimations", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
                 .GetValue(visuals);
-            object animation = animations.GetType()
+            return animations.GetType()
                 .GetProperty("Item")
                 .GetValue(animations, new object[] { entityId });
+        }
+
+        private static void SetActiveAnimationElapsed(object animation, float elapsed)
+        {
             animation.GetType()
                 .GetField("elapsed", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
                 .SetValue(animation, elapsed);
@@ -646,6 +931,11 @@ namespace DG.EditorTests
         private static string[] StyleIds(JArray array)
         {
             return array.Select(item => (string)item["style_id"]).OrderBy(id => id).ToArray();
+        }
+
+        private static float StyleDuration(JArray array, string styleId)
+        {
+            return array.Single(item => (string)item["style_id"] == styleId)["duration_seconds"].Value<float>();
         }
     }
 }

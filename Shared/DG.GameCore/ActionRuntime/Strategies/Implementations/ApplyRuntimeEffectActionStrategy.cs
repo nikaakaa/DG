@@ -2,10 +2,9 @@ using System.Collections.Generic;
 
 namespace DG.GameCore
 {
-[ActionStrategy("runtime_effect", ActionPrimitive.ApplyRuntimeEffect)]
+[ActionStrategy("runtime_effect")]
 public sealed class ApplyRuntimeEffectActionStrategy : IActionStrategy
 {
-    public ActionPrimitive Primitive => ActionPrimitive.ApplyRuntimeEffect;
     public ActionStrategyId StrategyId => "runtime_effect";
 
     public void Process(ActionStrategyContext context)

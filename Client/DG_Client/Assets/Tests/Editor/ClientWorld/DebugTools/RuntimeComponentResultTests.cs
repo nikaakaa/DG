@@ -267,10 +267,13 @@ namespace DG.EditorTests
 
             Assert.IsTrue(provider.TryGetEffectSpec("temporary_pushable", out EffectSpec pushable));
             Assert.AreEqual(EffectKind.Pushable, pushable.Kind);
-            Assert.AreEqual(EffectDurationPolicy.TimedTicks, pushable.DurationPolicy);
-            Assert.AreEqual(EffectStackPolicy.AllowMultiple, pushable.StackPolicy);
+            Assert.AreEqual(EffectDurationPolicy.InfiniteUntilRemove, pushable.DurationPolicy);
+            Assert.AreEqual(EffectRemovePolicy.ExplicitOnly, pushable.RemovePolicy);
+            Assert.AreEqual(EffectStackPolicy.RefreshDuration, pushable.StackPolicy);
             Assert.IsTrue(provider.TryGetEffectSpec("temporary_tag_super_armor", out EffectSpec tag));
             Assert.AreEqual(WorldTag.StateSuperArmor, tag.Tag);
+            Assert.IsTrue(provider.TryGetEffectSpec("temporary_rotate_pivot", out EffectSpec pivot));
+            Assert.AreEqual(EffectKind.RotatePivot, pivot.Kind);
         }
 
         [Test]
@@ -287,7 +290,7 @@ namespace DG.EditorTests
             Assert.AreEqual(new EffectSpecId("temporary_pushable"), application.Spec.SpecId);
             Assert.AreEqual(2, application.TargetEntityId);
             Assert.AreEqual(7, application.StartTick);
-            Assert.AreEqual(12, application.ExpireTick);
+            Assert.AreEqual(0, application.ExpireTick);
             Assert.AreEqual("source-target", application.StackKey);
             Assert.AreEqual(RuntimeEffectKind.TemporaryPushable, application.ToRuntimeSpec().Kind);
         }
@@ -308,6 +311,24 @@ namespace DG.EditorTests
             Assert.IsTrue(results.Single().Accepted);
             Assert.IsTrue(world.HasComponent<PushableComponent>(entity));
             Assert.AreEqual(1, world.RuntimeEffects.Count);
+        }
+
+        [Test]
+        public void EffectApplication_ExpireOverrideKeepsDebugPushableUntilManualRemove()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(121, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(121, out GameEntity entity));
+            var provider = LubanGameConfigProvider.FromDirectory(GameConfigDirectory());
+            Assert.IsTrue(provider.TryGetEffectSpec("temporary_pushable", out EffectSpec spec));
+            var context = new ActionContext(121, 121, "debug_pushable", WorldActionPriority.Debug, new ActionSourceContext(ActionSourceKind.Debug, 121, 0, WorldTag.SourceDebug), 121, 121, 121, 121, new ActionTarget(121, null, Direction.None), Direction.None, 0, 0, 1, 0, 121);
+            var application = new EffectApplication(context, spec, ActionTargetData.Self(121, default, Direction.None), 0, "debug:121:3", 0);
+
+            new CommitResolver().Resolve(world, new[] { CommitProposal.AddRuntimeEffect(WorldActionPriority.Debug, 121, application, 0) });
+            world.ExpireRuntimeEffects(100);
+
+            Assert.IsTrue(world.HasComponent<PushableComponent>(entity));
+            Assert.AreEqual(1, world.RuntimeEffects.ActiveAt(100).Count);
         }
 
         [Test]
@@ -368,6 +389,31 @@ namespace DG.EditorTests
             Assert.IsFalse(world.HasComponent<AutoMoveComponent>(entity));
             Assert.IsFalse(world.HasComponent<MovementPermissionComponent>(entity));
             Assert.IsFalse(world.HasTag(entity, WorldTag.StateSuperArmor));
+        }
+
+        [Test]
+        public void RuntimeRotatePivotSource_MergesWithStaticAndRuntimeSources()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(240, new GridCoord(0, 0))));
+            Assert.IsTrue(world.TryGetEntity(240, out GameEntity runtimeOnly));
+            RuntimeEffectInstance first = AddEffect(world, EffectSpecFor(RuntimeEffectKind.TemporaryRotatePivot, "pivot_a", 1), 240, 0, "pivot_a");
+            RuntimeEffectInstance second = AddEffect(world, EffectSpecFor(RuntimeEffectKind.TemporaryRotatePivot, "pivot_b", 1), 240, 0, "pivot_b");
+
+            Assert.IsTrue(world.HasComponent<RotatePivotComponent>(runtimeOnly));
+            Assert.IsTrue(RemoveEffect(world, 240, first.Id));
+            Assert.IsTrue(world.HasComponent<RotatePivotComponent>(runtimeOnly));
+            Assert.IsTrue(RemoveEffect(world, 240, second.Id));
+            Assert.IsFalse(world.HasComponent<RotatePivotComponent>(runtimeOnly));
+
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(241, new GridCoord(1, 0))));
+            Assert.IsTrue(world.TryGetEntity(241, out GameEntity staticEntity));
+            world.SetComponent(staticEntity, new RotatePivotComponent());
+            world.CaptureStaticComponentSources(staticEntity);
+            RuntimeEffectInstance runtime = AddEffect(world, EffectSpecFor(RuntimeEffectKind.TemporaryRotatePivot, "pivot_static", 1), 241, 0, "pivot_static");
+
+            Assert.IsTrue(RemoveEffect(world, 241, runtime.Id));
+            Assert.IsTrue(world.HasComponent<RotatePivotComponent>(staticEntity));
         }
 
         [Test]
@@ -450,6 +496,7 @@ namespace DG.EditorTests
                 RuntimeEffectKind.TemporaryAutoMove => new EffectSpec(id, EffectKind.AutoMove, EffectTargetBinding.TargetEntity, EffectDurationPolicy.InfiniteUntilRemove, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOnly, 0, autoMoveIntervalTicks, DirectionMask.None, true, true, WorldTag.None),
                 RuntimeEffectKind.TemporaryPort => new EffectSpec(id, EffectKind.PortConnector, EffectTargetBinding.TargetEntity, EffectDurationPolicy.InfiniteUntilRemove, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOnly, 0, 1, portMask, true, true, WorldTag.None),
                 RuntimeEffectKind.TemporaryImmobile => new EffectSpec(id, EffectKind.MovementPermission, EffectTargetBinding.TargetEntity, EffectDurationPolicy.InfiniteUntilRemove, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOnly, 0, 1, DirectionMask.None, false, false, WorldTag.None),
+                RuntimeEffectKind.TemporaryRotatePivot => new EffectSpec(id, EffectKind.RotatePivot, EffectTargetBinding.TargetEntity, EffectDurationPolicy.InfiniteUntilRemove, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOnly, 0, 1, DirectionMask.None, true, true, WorldTag.None),
                 _ => throw new InvalidOperationException("unsupported test effect kind")
             };
         }
@@ -469,6 +516,7 @@ namespace DG.EditorTests
 
         private sealed class TestCommitHandler : ICommitProposalHandler
         {
+            public CommitProposalId ProposalId => new(CommitProposalKind.AddTag);
             public CommitProposalKind Kind => CommitProposalKind.AddTag;
 
             public CommitProposalResult Apply(GameWorld world, CommitProposal proposal, CommitResolveContext context)

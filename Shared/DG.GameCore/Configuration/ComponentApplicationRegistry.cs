@@ -83,7 +83,8 @@ public sealed class ComponentApplicationRegistry
                 {
                     world.AddStaticComponentSource(ComponentSourceContribution.PortConnector(entity.EntityId, ComponentSourceKey.Static(entity.EntityId), ports));
                 }
-            }
+            },
+            [new ComponentId(ComponentKind.RotatePivot)] = (world, _, entity, _, _) => world.AddStaticComponentSource(ComponentSourceContribution.RotatePivot(entity.EntityId, ComponentSourceKey.Static(entity.EntityId)))
         });
     }
 }

@@ -7,15 +7,21 @@ namespace DG.GameCore
 public readonly struct ActionRuntimeParams
 {
     public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
-        : this(configId, playerId, autoMoveIntervalTicks, default, string.Empty, costTicks, causalityId, dedupeKey)
+        : this(configId, playerId, autoMoveIntervalTicks, false, default, string.Empty, costTicks, causalityId, dedupeKey)
     {
     }
 
     public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, EffectSpecId effectSpecId, string stackKey, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
+        : this(configId, playerId, autoMoveIntervalTicks, false, effectSpecId, stackKey, costTicks, causalityId, dedupeKey)
+    {
+    }
+
+    public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, bool rotatePivot, EffectSpecId effectSpecId, string stackKey, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
     {
         ConfigId = configId;
         PlayerId = playerId;
         AutoMoveIntervalTicks = autoMoveIntervalTicks;
+        RotatePivot = rotatePivot;
         EffectSpecId = effectSpecId;
         StackKey = stackKey ?? string.Empty;
         CostTicks = Math.Max(1, costTicks);
@@ -26,6 +32,7 @@ public readonly struct ActionRuntimeParams
     public int ConfigId { get; }
     public long PlayerId { get; }
     public int AutoMoveIntervalTicks { get; }
+    public bool RotatePivot { get; }
     public EffectSpecId EffectSpecId { get; }
     public string StackKey { get; }
     public int CostTicks { get; }
@@ -34,7 +41,7 @@ public readonly struct ActionRuntimeParams
 
     public static ActionRuntimeParams FromWorldAction(WorldAction action)
     {
-        return new ActionRuntimeParams(action.ConfigId, action.PlayerId, action.AutoMoveIntervalTicks, action.CostTicks, action.CausalityId, action.DedupeKey);
+        return new ActionRuntimeParams(action.ConfigId, action.PlayerId, action.AutoMoveIntervalTicks, action.RotatePivot, default, string.Empty, action.CostTicks, action.CausalityId, action.DedupeKey);
     }
 }
 
@@ -176,6 +183,11 @@ public readonly struct ActionRequest
     }
 
     public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId, int deferredContributionCount, IReadOnlyList<long> deferredCausalitySamples, IReadOnlyList<long> subjectEntityIds)
+        : this(actionId, specId, priority, source, entityId, target, runtimeParams, createdTick, readyTick, clientTick, ownerActionId, derivedFromUnitId, deferredContributionCount, deferredCausalitySamples, subjectEntityIds, Array.Empty<PushOriginContext>())
+    {
+    }
+
+    public ActionRequest(long actionId, ActionSpecId specId, WorldActionPriority priority, ActionSourceContext source, long entityId, ActionTarget target, ActionRuntimeParams runtimeParams, long createdTick, long readyTick, long clientTick, long ownerActionId, long derivedFromUnitId, int deferredContributionCount, IReadOnlyList<long> deferredCausalitySamples, IReadOnlyList<long> subjectEntityIds, IReadOnlyList<PushOriginContext> pushOriginContexts)
     {
         ActionId = actionId;
         OwnerActionId = ownerActionId == 0 ? actionId : ownerActionId;
@@ -192,6 +204,7 @@ public readonly struct ActionRequest
         DeferredContributionCount = Math.Max(1, deferredContributionCount);
         DeferredCausalitySamples = deferredCausalitySamples == null ? Array.Empty<long>() : deferredCausalitySamples.ToArray();
         SubjectEntityIds = subjectEntityIds == null || subjectEntityIds.Count == 0 ? Array.Empty<long>() : subjectEntityIds.ToArray();
+        PushOriginContexts = pushOriginContexts == null ? Array.Empty<PushOriginContext>() : pushOriginContexts.ToArray();
     }
 
     public long ActionId { get; }
@@ -209,6 +222,7 @@ public readonly struct ActionRequest
     public int DeferredContributionCount { get; }
     public IReadOnlyList<long> DeferredCausalitySamples { get; }
     public IReadOnlyList<long> SubjectEntityIds { get; }
+    public IReadOnlyList<PushOriginContext> PushOriginContexts { get; }
 
     public bool TryCreateContext(ActionSpec spec, out ActionContext context, out string reason)
     {

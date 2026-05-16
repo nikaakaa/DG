@@ -1,9 +1,8 @@
 namespace DG.GameCore
 {
-[ActionStrategy("spawn", ActionPrimitive.Spawn)]
+[ActionStrategy("spawn")]
 public sealed class SpawnActionStrategy : IActionStrategy
 {
-    public ActionPrimitive Primitive => ActionPrimitive.Spawn;
     public ActionStrategyId StrategyId => "spawn";
 
     public void Process(ActionStrategyContext context)
@@ -16,7 +15,7 @@ public sealed class SpawnActionStrategy : IActionStrategy
             return;
         }
 
-        context.Proposals.Add(CommitProposal.Create(request.Priority, request.ActionId, request.EntityId, request.RuntimeParams.ConfigId, request.Target.TargetCoord.Value, request.Target.Direction, request.RuntimeParams.PlayerId, request.RuntimeParams.AutoMoveIntervalTicks, context.ServerTick));
+        context.Proposals.Add(CommitProposal.Create(request.Priority, request.ActionId, request.EntityId, request.RuntimeParams.ConfigId, request.Target.TargetCoord.Value, request.Target.Direction, request.RuntimeParams.PlayerId, request.RuntimeParams.AutoMoveIntervalTicks, request.RuntimeParams.RotatePivot, context.ServerTick));
         context.ActionResults[request.ActionId] = new MoveResult(true, request.EntityId, request.Target.TargetCoord.Value, request.Target.Direction, MoveErrorCode.None, string.Empty, false, default, request.ClientTick);
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace DG.GameCore
 {
@@ -13,6 +14,7 @@ public sealed class StateDrivenRuleExecutionSystem
     private readonly ActionRequestAdapter actionAdapter;
     private readonly ActionArbiter actionArbiter;
     private readonly PushVectorArbiter pushVectorArbiter;
+    private readonly RotatePivotResponseProcessor rotatePivotResponseProcessor;
 
     public StateDrivenRuleExecutionSystem() : this(ActionSpecRegistry.Default)
     {
@@ -37,6 +39,7 @@ public sealed class StateDrivenRuleExecutionSystem
         actionAdapter = new ActionRequestAdapter(actionSpecs);
         actionArbiter = new ActionArbiter(actionSpecs);
         pushVectorArbiter = new PushVectorArbiter(actionSpecs);
+        rotatePivotResponseProcessor = new RotatePivotResponseProcessor(actionSpecs);
     }
 
     public StateDrivenRuleExecutionResult Tick(GameWorld world, IReadOnlyList<WorldAction> actions, long serverTick)
@@ -54,20 +57,26 @@ public sealed class StateDrivenRuleExecutionSystem
             RouteRequest(world, request, proposals, moveRequests, actionResults, reasons, serverTick);
         }
 
-        PushVectorCompositionResult pushComposition = pushVectorArbiter.Compose(world, moveRequests);
+        RotatePivotResponseResult rotateResponse = rotatePivotResponseProcessor.Process(world, moveRequests, serverTick);
+        MergeRotatePivotResult(rotateResponse, actionResults, reasons, deferredActions);
+        PushVectorCompositionResult pushComposition = pushVectorArbiter.Compose(world, rotateResponse.RemainingRequests);
         ApplyPushComposition(world, pushComposition, actionResults, reasons);
         ActionArbitrationResult arbitration = actionArbiter.ArbitrateMoves(world, pushComposition.Requests, serverTick);
         transitions.AddRange(arbitration.Transitions);
         MergeArbitrationResult(arbitration, proposals, actionResults, reasons, deferredActions);
         ApplyDerivedArbitrationToReasons(arbitration.DerivedActions, reasons);
         IReadOnlyList<MovePlan> movePlans = CreateMovePlans(world, arbitration.AcceptedActions, actionResults, reasons, transitions);
+        if (rotateResponse.MovePlans.Count != 0)
+        {
+            movePlans = rotateResponse.MovePlans.Concat(movePlans).ToArray();
+        }
         var proposalResults = new List<CommitProposalResult>();
         proposalResults.AddRange(commitResolver.Resolve(world, proposals));
         proposalResults.AddRange(conflictResolver.Resolve(world, movePlans));
         ApplyProposalResultsToActions(actionResults, proposalResults, reasons, transitions);
         ApplyComposedPushResults(actionResults, pushComposition);
 
-        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, reasons, deferredActions, transitions);
+        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, reasons, deferredActions, transitions, rotateResponse.AnimationMetadata);
     }
 
     private static void ApplyPushComposition(GameWorld world, PushVectorCompositionResult composition, Dictionary<long, MoveResult> actionResults, List<string> reasons)
@@ -103,6 +112,20 @@ public sealed class StateDrivenRuleExecutionSystem
         for (int i = 0; i < arbitration.Reasons.Count; i++)
         {
             reasons.Add(arbitration.Reasons[i]);
+        }
+    }
+
+    private static void MergeRotatePivotResult(RotatePivotResponseResult rotateResponse, Dictionary<long, MoveResult> actionResults, List<string> reasons, List<DeferredAction> deferredActions)
+    {
+        foreach (KeyValuePair<long, MoveResult> pair in rotateResponse.ActionResults)
+        {
+            actionResults[pair.Key] = pair.Value;
+        }
+
+        deferredActions.AddRange(rotateResponse.DeferredActions);
+        for (int i = 0; i < rotateResponse.Reasons.Count; i++)
+        {
+            reasons.Add(rotateResponse.Reasons[i]);
         }
     }
 

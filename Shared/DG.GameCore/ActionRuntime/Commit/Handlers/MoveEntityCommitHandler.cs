@@ -2,6 +2,7 @@ namespace DG.GameCore
 {
 public sealed class MoveEntityCommitHandler : ICommitProposalHandler
 {
+    public CommitProposalId ProposalId => new(CommitProposalKind.MoveEntity);
     public CommitProposalKind Kind => CommitProposalKind.MoveEntity;
     public CommitProposalResult Apply(GameWorld world, CommitProposal proposal, CommitResolveContext context) => CommitHandlerOperations.ApplyMove(world, proposal, context);
 }

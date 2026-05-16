@@ -26,6 +26,9 @@ public sealed class DebugWorldEditService
     }
 
     public bool TrySpawn(long requestedEntityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, out long entityId, out string reason)
+        => TrySpawn(requestedEntityId, configId, coord, direction, playerId, autoMoveIntervalTicks, false, out entityId, out reason);
+
+    public bool TrySpawn(long requestedEntityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot, out long entityId, out string reason)
     {
         entityId = ResolveSpawnEntityId(requestedEntityId);
         if (!Enabled)
@@ -46,7 +49,7 @@ public sealed class DebugWorldEditService
             return false;
         }
 
-        var spawn = new EntitySpawnSpec(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks);
+        var spawn = new EntitySpawnSpec(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks, rotatePivot);
         if (!World.AddEntity(spawn))
         {
             reason = "spawn failed";
@@ -151,7 +154,7 @@ public sealed class DebugWorldEditService
 
         ActionContext context = CreateDebugActionContext(entityId);
         ActionTargetData target = ActionTargetData.Self(entityId, default, Direction.None);
-        EffectApplication application = new EffectApplication(context, effectSpec, target, World.ServerTick, DebugStackKey(kind, entityId));
+        EffectApplication application = new EffectApplication(context, effectSpec, target, World.ServerTick, DebugStackKey(kind, entityId), expireTick);
         var resolver = new CommitResolver();
         IReadOnlyList<CommitProposalResult> results = resolver.Resolve(World, new[]
         {

@@ -21,7 +21,8 @@ public sealed class C2G_DebugSpawnEntityRequestHandler : MessageRPC<C2G_DebugSpa
                 new GridCoord(request.X, request.Y),
                 (Direction)request.Direction,
                 request.PlayerId,
-                request.AutoMoveIntervalTicks);
+                request.AutoMoveIntervalTicks,
+                request.RotatePivot);
             MoveResult result = await input.WaitAsync();
             success = result.Success;
             reason = result.Reason;
@@ -32,13 +33,14 @@ public sealed class C2G_DebugSpawnEntityRequestHandler : MessageRPC<C2G_DebugSpa
         response.Reason = reason;
 
         Log.Info(
-            "[C2G_DebugSpawnEntityRequestHandler] success:{0} entity:{1} config:{2} coord:({3},{4}) direction:{5} reason:{6}",
+            "[C2G_DebugSpawnEntityRequestHandler] success:{0} entity:{1} config:{2} coord:({3},{4}) direction:{5} rotatePivot:{6} reason:{7}",
             response.Success,
             response.EntityId,
             request.ConfigId,
             request.X,
             request.Y,
             request.Direction,
+            request.RotatePivot,
             response.Reason);
 
         reply();

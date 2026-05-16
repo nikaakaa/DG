@@ -54,6 +54,33 @@
     "instant": true
   },
   {
+    "style_id": "rotate_pivot",
+    "motion_kind": "rotate_pivot",
+    "duration_seconds": 0.54,
+    "easing": 3,
+    "flash_color": "#A6F2FF",
+    "scale_feedback": 1.08,
+    "instant": false
+  },
+  {
+    "style_id": "rotate_pivot_bounce",
+    "motion_kind": "rotate_pivot_bounce",
+    "duration_seconds": 0.54,
+    "easing": 3,
+    "flash_color": "#FFD13D",
+    "scale_feedback": 1.12,
+    "instant": false
+  },
+  {
+    "style_id": "rotate_pivot_impact",
+    "motion_kind": "mechanism_push",
+    "duration_seconds": 0.54,
+    "easing": 2,
+    "flash_color": "#FF7040",
+    "scale_feedback": 1.2,
+    "instant": false
+  },
+  {
     "style_id": "unknown",
     "motion_kind": "unknown",
     "duration_seconds": 0.1,

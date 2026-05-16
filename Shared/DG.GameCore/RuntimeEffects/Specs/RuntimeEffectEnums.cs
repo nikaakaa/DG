@@ -11,7 +11,8 @@ public enum RuntimeEffectKind
     TemporaryPushable = 3,
     TemporaryPort = 4,
     TemporaryImmobile = 5,
-    TemporaryTag = 6
+    TemporaryTag = 6,
+    TemporaryRotatePivot = 7
 }
 
 public enum EffectKind
@@ -21,7 +22,8 @@ public enum EffectKind
     Pushable = 3,
     PortConnector = 4,
     MovementPermission = 5,
-    Tag = 6
+    Tag = 6,
+    RotatePivot = 7
 }
 
 public enum EffectDurationPolicy

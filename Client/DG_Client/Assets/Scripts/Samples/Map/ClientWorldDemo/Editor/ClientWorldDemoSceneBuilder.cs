@@ -20,6 +20,7 @@ namespace DG.EditorTools
             ClientMapWorld.AddComponent<WorldBootstrap>();
             ClientMapWorld.AddComponent<ClientWorldRunner>();
             ClientMapWorld.AddComponent<ClientMoveNetworkSubmitter>();
+            ClientMapWorld.AddComponent<ClientInputIntentSource>();
             ClientMapWorld.AddComponent<ClientWorldDemo>();
             ClientMapWorld.AddComponent<ClientWorldVisuals>();
             ClientMapWorld.AddComponent<ClientWorldDebugEditor>();

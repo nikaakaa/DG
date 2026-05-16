@@ -99,7 +99,7 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **AND** 规则层不通过 ability 或 effect 名称判断
 
 ### Requirement: 执行层只消费统一结果
-系统 SHALL process ordinary runtime behavior through an Action Policy Pipeline with explicit stages for action intake, `ActionSpec` lookup, tag/component gate, subject selection, target selection, registered strategy execution, claim production, claim arbitration, planning, and commit. The central arbitration stage SHALL compare candidates and claims; it MUST NOT build every behavior-specific outcome in one monolithic action interpreter. Runtime effect and runtime component/tag outputs SHALL leave strategy execution as commit proposals or effect applications, never as direct `GameWorld` final-state writes.
+系统 SHALL process ordinary runtime behavior through an Action Policy Pipeline with explicit stages for action intake, `ActionSpec` lookup, tag/component gate, subject selection, target selection, registered strategy execution, claim production, claim arbitration, planning, and commit. The central arbitration stage SHALL compare candidates and claims; it MUST NOT build every behavior-specific outcome in one monolithic action interpreter. Runtime effect and runtime component/tag outputs SHALL leave strategy execution as commit proposals or effect applications, never as direct `GameWorld` final-state writes. Action strategy selection SHALL use a stable registered strategy id resolved from configuration/provider data. New strategy types MUST be added as registered strategy modules with tests, not as new branches in `StateDrivenRuleExecutionSystem` or ordinary action-name checks.
 
 #### Scenario: 普通行为进入管线
 - **WHEN** player move, auto move, mechanism push, configured wind push, debug move, debug spawn, or debug remove is submitted
@@ -108,15 +108,17 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **AND** no stage selects ordinary behavior by comparing raw action id strings
 
 #### Scenario: 策略注册选择底层能力
-- **WHEN** a ready action references a strategy or primitive key
-- **THEN** the pipeline resolves the registered strategy module for that key
+- **WHEN** a ready action references a strategy id
+- **THEN** the pipeline resolves the registered strategy module for that id
 - **AND** the central arbitration stage does not switch on ordinary behavior names to choose the module
+- **AND** unknown strategy ids fail clearly before world mutation
 
 #### Scenario: 生成注册代码进入管线
 - **WHEN** a strategy class has valid registration metadata
-- **THEN** the editor/Roslyn generation path produces explicit registration source
-- **AND** server/test composition uses that generated source to build the strategy registry injected into the pipeline
-- **AND** the pipeline behavior is deterministic without runtime reflection or Unity editor-only scanning
+- **THEN** the editor/tooling generation path MAY use reflection to discover strategy metadata
+- **AND** it produces deterministic explicit registration source
+- **AND** server/test composition uses that generated or explicit source to build the strategy registry injected into the pipeline
+- **AND** runtime rule execution is deterministic without assembly scanning or Unity editor-only APIs
 
 #### Scenario: 仲裁器只处理候选和 claim
 - **WHEN** strategies produce candidate action units and claims
@@ -128,33 +130,38 @@ TBD - created by archiving change refactor-data-driven-runtime-actions. Update P
 - **THEN** implementation changes are limited to Luban data, generated config, tests, and optional documentation
 - **AND** files containing central arbitration orchestration do not change for that behavior
 
+#### Scenario: 新策略小类不修改执行系统
+- **WHEN** a new low-level action strategy cannot be expressed by existing strategies
+- **THEN** the developer adds a strategy class, registration metadata, config reference, and tests
+- **AND** `StateDrivenRuleExecutionSystem` and central action orchestration do not gain a new behavior-specific branch
+
 #### Scenario: Effect output does not write final state
 - **WHEN** `ApplyRuntimeEffect` or future effect-driven strategy executes
 - **THEN** it emits `EffectApplication` and commit proposals
 - **AND** it does not call `GameWorld.SetComponent`, `GameWorld.AddTag`, `GameWorld.RemoveTag`, or runtime effect store mutation directly
 
 ### Requirement: 普通新增行为不修改核心代码
-系统 SHALL allow a new ordinary behavior built from existing primitives, strategy modules, tag gates, subject policies, target rules, blocked result policies, deferred output policies, claim policies, plan rules, commit rules, and cost policies to be added by Luban action policy data and tests. It MUST NOT require new branches in core execution, central arbitration, planning, deferred output, or commit orchestration. If a behavior requires a new primitive, condition kind, result kind, claim kind, or reusable strategy type, the system SHALL add that capability through an explicit registered strategy or policy module with focused tests, not by editing a central action-name branch.
+系统 SHALL allow a new ordinary behavior built from existing registered strategies, tag gates, subject policies, targeting policies, blocked result policies, deferred output policies, claim policies, plan rules, commit handlers, and cost policies to be added by Luban action policy data and tests. It MUST NOT require new branches in core execution, central arbitration, planning, deferred output, or commit orchestration. If a behavior requires a new strategy, condition kind, result kind, claim kind, commit handler, or reusable policy type, the system SHALL add that capability through an explicit registered module with focused tests, not by editing a central action-name branch.
 
 #### Scenario: 新增风场推动
-- **WHEN** 新增一个 `wind_push` 行为，使用 existing `Move` primitive、mechanism-like source、tag gate、exclusive target cell claim、configured blocked result branches and connected-body subject policy
+- **WHEN** 新增一个 `wind_push` 行为，使用 existing movement strategy、mechanism-like source、tag gate、exclusive target cell claim、configured blocked result branches and connected-body subject policy
 - **THEN** 开发者新增或修改 Luban action policy and blocked result policy rows
 - **AND** 运行 Luban 导出生成 JSON/provider
 - **AND** 添加 Unity TestFramework EditMode 覆盖
 - **AND** 不修改核心 execution / central arbitration / planning / deferred output / commit orchestration code
 
 #### Scenario: 新增冰面滑行
-- **WHEN** 新增一个 `ice_slide` 行为，能够由已有 primitive、strategy module、target rule、blocked result policy、cost policy 和 commit policy 表达
+- **WHEN** 新增一个 `ice_slide` 行为，能够由已有 strategy module、targeting policy、blocked result policy、cost policy 和 commit policy 表达
 - **THEN** 行为差异由 action policy 数据表达
 - **AND** 核心规则模块不新增 `ice_slide` 名字分支
 - **AND** 中央仲裁器不需要理解冰面玩法名
 
 #### Scenario: 新增底层策略模块
-- **WHEN** 新需求无法由已有 primitive、condition kinds、result kinds、claim kinds、strategy modules 和 reusable policies 表达
-- **THEN** 系统 MAY add a new primitive, condition kind, result kind, claim kind, strategy module, or policy type
+- **WHEN** 新需求无法由已有 strategy modules、condition kinds、result kinds、claim kinds、commit handlers 和 reusable policies 表达
+- **THEN** 系统 MAY add a new strategy module, condition kind, result kind, claim kind, commit handler, or policy type
 - **AND** 该新增 MUST be treated as a core extension with explicit OpenSpec proposal, tasks, automated tests, and manual verification path
 - **AND** the new module declares registration metadata with an attribute or equivalent compile-time declaration
-- **AND** editor/Roslyn generation emits explicit registry code for that module
+- **AND** editor/tooling reflection generation or explicit compile-time registration emits deterministic registry code for that module
 - **AND** the new module is selected by typed strategy or policy data instead of an ordinary behavior action-name branch
 
 #### Scenario: 同策略不同行为 id 等价
@@ -407,7 +414,7 @@ Runtime action execution SHALL reject or flag new ordinary behavior strategy bra
 - **AND** those aliases do not affect server-authoritative arbitration, planning, commit, pending, or final coordinates
 
 ### Requirement: Targeting Policy Data Boundary
-系统 SHALL express ordinary action target selection through explicit targeting policy data. `ActionSpec` MUST reference a resolved targeting policy or compatible migration rule, and runtime execution MUST NOT add ordinary behavior-name branches to choose target shape, direction source, filter, ordering, selector class, or empty-target handling.
+系统 SHALL express ordinary action target selection through explicit targeting policy data. `ActionSpec` MUST reference a resolved targeting policy and target selector id; formal Luban action authoring and new tests MUST NOT use `ActionTargetRule` as the target algorithm entry. Compatible migration rules MAY map old `ActionTargetRule` values to targeting policies only inside explicit compatibility test or import boundaries. Runtime execution MUST NOT add ordinary behavior-name branches or new `ActionTargetRule` enum members to choose target shape, direction source, filter, ordering, selector class, or empty-target handling.
 
 #### Scenario: action 引用 targeting policy
 - **WHEN** player move, auto move, mechanism push, debug move, or configured front multi-target behavior enters the rules layer
@@ -418,12 +425,18 @@ Runtime action execution SHALL reject or flag new ordinary behavior strategy bra
 - **WHEN** an existing action still uses `ActionTargetRule`
 - **THEN** the registry or adapter maps it into equivalent targeting policy semantics
 - **AND** new ordinary behavior does not require adding a new central `ActionTargetRule` branch
-- **AND** new target algorithms are introduced as selector classes or extensions and then mapped from configuration
+- **AND** new target algorithms are introduced as selector classes or extensions and then mapped from configuration by selector id
+- **AND** this legacy mapping is not used by formal Luban source tables after this change
 
 #### Scenario: selector class comes from config
 - **WHEN** an action policy references a targeting selector id
 - **THEN** the runtime resolves that id to a registered target selector class or extension
 - **AND** changing the action alias does not change selector behavior
+
+#### Scenario: 新目标算法不改枚举
+- **WHEN** a new target algorithm such as cross, radius, ray, adjacent entity, or line area is added
+- **THEN** the developer adds a selector module, selector id registration, config rows, and tests
+- **AND** the change does not add a new `ActionTargetRule` enum member
 
 ### Requirement: Targeting Config Import Resolution
 系统 SHALL resolve targeting selector, targeting spec, and target filter authoring names into runtime identifiers or enums before authoritative rules consume them. Runtime action arbitration, execution, planning, and commit MUST NOT compare raw targeting names, selector names, filter names, tag strings, or action aliases to decide target behavior.
@@ -496,7 +509,7 @@ Target filter policy SHALL evaluate final `GameWorld` component, tag, and spatia
 - **AND** it does not silently apply a default runtime effect
 
 ### Requirement: Effect Outputs Do Not Replace Claim Arbitration
-系统 SHALL keep movement, push, body movement, target cell reservation, spawn, remove, and direction changes inside the existing claim/planning/commit boundaries. Effect applications MAY change final component/tag/stat-like facts that later action arbitration reads, but they MUST NOT directly accept or reject movement claims.
+系统 SHALL keep movement, push, body movement, target cell reservation, spawn, remove, direction changes, and other world mutations inside registered action, claim, planning, and commit boundaries. Effect applications MAY change final component/tag/stat-like facts that later action arbitration reads, but they MUST NOT directly accept or reject movement claims. Commit proposal execution SHALL be handled by registered commit handlers so new commit semantics do not require central commit orchestration branches.
 
 #### Scenario: Immobile effect affects later movement
 - **WHEN** an action applies an immobile effect to an entity
@@ -508,6 +521,12 @@ Target filter policy SHALL evaluate final `GameWorld` component, tag, and spatia
 - **WHEN** an effect is applied to a target entity in a cell
 - **THEN** the effect does not reserve, occupy, or move into any target cell by itself
 - **AND** target cell conflicts remain owned by action claims and commit validation
+
+#### Scenario: 新 commit handler 不修改中心提交流程
+- **WHEN** a future accepted action needs a new commit proposal semantic
+- **THEN** the developer adds a commit proposal payload, handler registration, and tests
+- **AND** the central commit resolver does not add a new behavior-name or action-name branch
+- **AND** unknown commit handlers fail clearly before world mutation
 
 ### Requirement: Authoritative Action Context
 

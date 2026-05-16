@@ -6,6 +6,31 @@ namespace DG.GameCore
 {
 public sealed class ActionSpec
 {
+    public static ActionSpec FromLegacyPrimitive(
+        ActionSpecId specId,
+        ActionPrimitive primitive,
+        ActionSourceKind defaultSource,
+        WorldActionPriority defaultPriority,
+        WorldTag sourceTag,
+        WorldTag abilityTag,
+        WorldTag requiredTags,
+        WorldTag blockedTags,
+        ActionTargetRule targetRule,
+        BlockedResultPolicyId blockedResultPolicyId,
+        ActionConflictPolicy conflictPolicy,
+        ActionInterruptPolicy interruptPolicy,
+        ActionMergePolicy mergePolicy,
+        ActionPlanRule planRule,
+        ActionCommitRule commitRules,
+        ActionSubjectKind subjectKind = ActionSubjectKind.HitEntity,
+        ActionHandoffSpec handoff = default,
+        int defaultCostTicks = 1,
+        TargetingSpec? targeting = null,
+        EffectSpecId effectSpecId = default)
+    {
+        return new ActionSpec(specId, new ActionStrategyId(primitive), defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId);
+    }
+
     public ActionSpec(
         ActionSpecId specId,
         ActionPrimitive primitive,
@@ -27,7 +52,7 @@ public sealed class ActionSpec
         int defaultCostTicks = 1,
         TargetingSpec? targeting = null,
         EffectSpecId effectSpecId = default)
-        : this(specId, primitive, new ActionStrategyId(primitive), defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId)
+        : this(specId, new ActionStrategyId(primitive), defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId)
     {
     }
 
@@ -53,10 +78,34 @@ public sealed class ActionSpec
         int defaultCostTicks = 1,
         TargetingSpec? targeting = null,
         EffectSpecId effectSpecId = default)
+        : this(specId, strategyId, defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId)
+    {
+    }
+
+    public ActionSpec(
+        ActionSpecId specId,
+        ActionStrategyId strategyId,
+        ActionSourceKind defaultSource,
+        WorldActionPriority defaultPriority,
+        WorldTag sourceTag,
+        WorldTag abilityTag,
+        WorldTag requiredTags,
+        WorldTag blockedTags,
+        ActionTargetRule targetRule,
+        BlockedResultPolicyId blockedResultPolicyId,
+        ActionConflictPolicy conflictPolicy,
+        ActionInterruptPolicy interruptPolicy,
+        ActionMergePolicy mergePolicy,
+        ActionPlanRule planRule,
+        ActionCommitRule commitRules,
+        ActionSubjectKind subjectKind = ActionSubjectKind.HitEntity,
+        ActionHandoffSpec handoff = default,
+        int defaultCostTicks = 1,
+        TargetingSpec? targeting = null,
+        EffectSpecId effectSpecId = default)
     {
         SpecId = specId;
-        Primitive = primitive;
-        StrategyId = strategyId.IsValid ? strategyId : new ActionStrategyId(primitive);
+        StrategyId = strategyId.IsValid ? strategyId : throw new ArgumentException("Action strategy id is empty.", nameof(strategyId));
         DefaultSource = defaultSource;
         DefaultPriority = defaultPriority;
         SourceTag = sourceTag;
@@ -78,7 +127,6 @@ public sealed class ActionSpec
     }
 
     public ActionSpecId SpecId { get; }
-    public ActionPrimitive Primitive { get; }
     public ActionStrategyId StrategyId { get; }
     public ActionSourceKind DefaultSource { get; }
     public WorldActionPriority DefaultPriority { get; }
@@ -376,7 +424,7 @@ public sealed class ActionRequestAdapter
         ActionSourceKind sourceKind = string.IsNullOrEmpty(action.DeferredEquivalenceKey) ? spec.DefaultSource : ActionSourceKind.Handoff;
         var source = new ActionSourceContext(sourceKind, action.EntityId, 0, spec.SourceTag);
         var target = new ActionTarget(0, action.TargetCoord, action.Direction);
-        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick, 0, 0, action.DeferredContributionCount, action.DeferredCausalitySamples, action.SubjectEntityIds);
+        return new ActionRequest(action.ActionId, spec.SpecId, spec.DefaultPriority, source, action.EntityId, target, ActionRuntimeParams.FromWorldAction(action), action.CreatedTick, action.ReadyTick, action.ClientTick, 0, 0, action.DeferredContributionCount, action.DeferredCausalitySamples, action.SubjectEntityIds, action.PushOriginContexts);
     }
 }
 

@@ -153,7 +153,18 @@ internal static class AuthoritativeWorldProtocolSender
             ServerTick = metadata.ServerTick,
             MotionKind = (int)metadata.MotionKind,
             StyleKey = metadata.StyleKey,
-            Direction = (int)metadata.Direction
+            Direction = (int)metadata.Direction,
+            PivotEntityId = metadata.PivotEntityId,
+            PivotX = metadata.PivotCoord.X,
+            PivotY = metadata.PivotCoord.Y,
+            FromX = metadata.FromCoord.X,
+            FromY = metadata.FromCoord.Y,
+            ToX = metadata.ToCoord.X,
+            ToY = metadata.ToCoord.Y,
+            RotateDirection = (int)metadata.RotateDirection,
+            Bounce = metadata.Bounce,
+            ImpactX = metadata.ImpactCoord.X,
+            ImpactY = metadata.ImpactCoord.Y
         };
     }
 
@@ -178,7 +189,8 @@ internal static class AuthoritativeWorldProtocolSender
             HasMovementPermission = snapshot.HasMovementPermission,
             CanMove = snapshot.CanMove,
             CanBePushed = snapshot.CanBePushed,
-            AutoMoveIntervalTicks = snapshot.AutoMoveIntervalTicks
+            AutoMoveIntervalTicks = snapshot.AutoMoveIntervalTicks,
+            RotatePivot = snapshot.RotatePivot
         };
     }
 

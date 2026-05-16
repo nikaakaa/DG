@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "4port",
+  "anchorX": -2,
+  "anchorY": 2,
+  "entries": [
+    {
+      "alias": "entity_800000002",
+      "configId": 1004,
+      "offsetX": 0,
+      "offsetY": 0,
+      "direction": "Up",
+      "playerId": 0,
+      "autoMoveIntervalTicks": 1,
+      "portLocalPorts": 15,
+      "rotatePivot": false,
+      "runtimeBlocking": false,
+      "runtimeAutoMove": false,
+      "runtimePushable": false,
+      "runtimePortLocalPorts": 15,
+      "runtimeImmobile": false
+    }
+  ]
+}

@@ -49,14 +49,41 @@ namespace Fantasy
 			return (G2C_MoveResponse)await session.Call(request);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static async FTask<G2C_MoveResponse> C2G_MoveRequest(this Session session, long entityId, int targetX, int targetY, long clientTick)
+		public static async FTask<G2C_MoveResponse> C2G_MoveRequest(this Session session, long entityId, int targetX, int targetY, long clientTick, long clientInputId, long beatTick, int direction)
 		{
 			using var request = Fantasy.C2G_MoveRequest.Create();
 			request.EntityId = entityId;
 			request.TargetX = targetX;
 			request.TargetY = targetY;
 			request.ClientTick = clientTick;
+			request.ClientInputId = clientInputId;
+			request.BeatTick = beatTick;
+			request.Direction = direction;
 			return (G2C_MoveResponse)await session.Call(request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_PlayerInputResponse> C2G_PlayerInputRequest(this Session session, C2G_PlayerInputRequest request)
+		{
+			return (G2C_PlayerInputResponse)await session.Call(request);
+		}
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static async FTask<G2C_PlayerInputResponse> C2G_PlayerInputRequest(this Session session, long entityId, long clientInputId, long beatTick, int direction, long clientTick, int inputKind, int inputSourceKind, int rhythmJudge, int targetHintKind, long targetEntityId, int targetX, int targetY, long sampleTimeMs)
+		{
+			using var request = Fantasy.C2G_PlayerInputRequest.Create();
+			request.EntityId = entityId;
+			request.ClientInputId = clientInputId;
+			request.BeatTick = beatTick;
+			request.Direction = direction;
+			request.ClientTick = clientTick;
+			request.InputKind = inputKind;
+			request.InputSourceKind = inputSourceKind;
+			request.RhythmJudge = rhythmJudge;
+			request.TargetHintKind = targetHintKind;
+			request.TargetEntityId = targetEntityId;
+			request.TargetX = targetX;
+			request.TargetY = targetY;
+			request.SampleTimeMs = sampleTimeMs;
+			return (G2C_PlayerInputResponse)await session.Call(request);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
 		public static async FTask<G2C_RegisterMoveObserverResponse> C2G_RegisterMoveObserverRequest(this Session session, C2G_RegisterMoveObserverRequest request)
@@ -120,7 +147,7 @@ namespace Fantasy
 			return (G2C_DebugSpawnEntityResponse)await session.Call(request);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]
-		public static async FTask<G2C_DebugSpawnEntityResponse> C2G_DebugSpawnEntityRequest(this Session session, long entityId, int configId, int x, int y, int direction, long playerId, int autoMoveIntervalTicks)
+		public static async FTask<G2C_DebugSpawnEntityResponse> C2G_DebugSpawnEntityRequest(this Session session, long entityId, int configId, int x, int y, int direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot)
 		{
 			using var request = Fantasy.C2G_DebugSpawnEntityRequest.Create();
 			request.EntityId = entityId;
@@ -130,6 +157,7 @@ namespace Fantasy
 			request.Direction = direction;
 			request.PlayerId = playerId;
 			request.AutoMoveIntervalTicks = autoMoveIntervalTicks;
+			request.RotatePivot = rotatePivot;
 			return (G2C_DebugSpawnEntityResponse)await session.Call(request);
 		}
 		[MethodImpl(MethodImplOptions.AggressiveInlining)]

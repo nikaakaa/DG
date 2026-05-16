@@ -9,7 +9,7 @@ public sealed partial class EffectSpec : Luban.BeanBase
     {
         JObject _obj = _buf as JObject;
         EffectId = (string)_obj.GetValue("effect_id");
-        Kind = (gamecore.EffectKind)(int)_obj.GetValue("kind");
+        EffectPayloadId = (string)_obj.GetValue("effect_payload_id");
         TargetBinding = (gamecore.EffectTargetBinding)(int)_obj.GetValue("target_binding");
         DurationPolicy = (gamecore.EffectDurationPolicy)(int)_obj.GetValue("duration_policy");
         StackPolicy = (gamecore.EffectStackPolicy)(int)_obj.GetValue("stack_policy");
@@ -30,7 +30,7 @@ public sealed partial class EffectSpec : Luban.BeanBase
     }
 
     public readonly string EffectId;
-    public readonly gamecore.EffectKind Kind;
+    public readonly string EffectPayloadId;
     public readonly gamecore.EffectTargetBinding TargetBinding;
     public readonly gamecore.EffectDurationPolicy DurationPolicy;
     public readonly gamecore.EffectStackPolicy StackPolicy;

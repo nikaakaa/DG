@@ -27,7 +27,7 @@ internal static class CommitHandlerOperations
             return new CommitProposalResult(proposal, false, "entity already exists");
         }
 
-        var spawn = new EntitySpawnSpec(proposal.EntityId, proposal.ConfigId, proposal.To, proposal.Direction, proposal.PlayerId, proposal.AutoMoveIntervalTicks <= 0 ? 1 : proposal.AutoMoveIntervalTicks);
+        var spawn = new EntitySpawnSpec(proposal.EntityId, proposal.ConfigId, proposal.To, proposal.Direction, proposal.PlayerId, proposal.AutoMoveIntervalTicks <= 0 ? 1 : proposal.AutoMoveIntervalTicks, proposal.RotatePivot);
         return world.AddEntity(spawn)
             ? new CommitProposalResult(proposal, true, string.Empty)
             : new CommitProposalResult(proposal, false, "spawn failed");

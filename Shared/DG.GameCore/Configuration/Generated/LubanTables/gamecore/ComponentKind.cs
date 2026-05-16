@@ -23,6 +23,7 @@ namespace cfg.gamecore
         PushOnEnter = 8,
         Pushable = 9,
         PortConnector = 10,
+        RotatePivot = 11,
     }
 
 } 

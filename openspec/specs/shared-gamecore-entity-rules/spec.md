@@ -18,7 +18,7 @@ TBD - created by archiving change refactor-shared-gamecore-move-rules. Update Pu
 - **AND** Unity 客户端能够使用同一套数据定义理解服务端 snapshot/delta
 
 ### Requirement: 组件驱动实体能力
-系统 SHALL 用组件和 tag 表达实体能力，规则 MUST NOT 依赖 entity 名字或 demo 专用类型判断实体行为。实体能力组合 MUST 由 archetype/build 边界创建，并应用到 `GameWorld` 的 component store。
+系统 SHALL 用组件和 tag 表达实体能力，规则 MUST NOT 依赖 entity 名字或 demo 专用类型判断实体行为。实体能力组合 MUST 由 archetype/build 边界创建，并应用到 `GameWorld` 的 component store。组件挂载 SHALL be selected through stable component ids and registered component applicators. New static component types MUST be addable by adding an applicator module, config data, and tests without editing `EntityBuilder` or `GameWorld` entity creation flow.
 
 #### Scenario: 玩家实体能力
 - **WHEN** 配置创建玩家 entity
@@ -26,7 +26,7 @@ TBD - created by archiving change refactor-shared-gamecore-move-rules. Update Pu
 - **AND** 玩家 entity 拥有 `ColliderComponent`
 - **AND** 玩家 entity 拥有 `BlockingComponent`
 - **AND** 玩家 entity 拥有 `PlayerControlComponent`
-- **AND** 这些组件由 entity builder 或等价组合边界应用，而不是由 `GameWorld` 内部 if 链组装
+- **AND** 这些组件由 registered component applicators or equivalent build boundary 应用，而不是由 `GameWorld` 内部 if 链组装
 
 #### Scenario: 反弹球实体能力
 - **WHEN** 配置创建自动反弹球 entity
@@ -35,14 +35,20 @@ TBD - created by archiving change refactor-shared-gamecore-move-rules. Update Pu
 - **AND** 球 entity 拥有 `ColliderComponent`
 - **AND** 球 entity 拥有 `AutoMoveComponent`
 - **AND** 球 entity 拥有 `BouncableComponent`
-- **AND** 这些组件由 entity builder 或等价组合边界应用，而不是由 `GameWorld` 内部 if 链组装
+- **AND** 这些组件由 registered component applicators or equivalent build boundary 应用，而不是由 `GameWorld` 内部 if 链组装
 
 #### Scenario: 阻挡体能力
 - **WHEN** 配置创建墙或阻挡体 entity
 - **THEN** 该 entity 拥有 `PositionComponent`
 - **AND** 该 entity 拥有 `ColliderComponent`
 - **AND** 该 entity 拥有 `BlockingComponent`
-- **AND** 这些组件由 entity builder 或等价组合边界应用，而不是由 `GameWorld` 内部 if 链组装
+- **AND** 这些组件由 registered component applicators or equivalent build boundary 应用，而不是由 `GameWorld` 内部 if 链组装
+
+#### Scenario: 新静态 component 不修改 EntityBuilder
+- **WHEN** a new static component type is introduced for authoritative rules
+- **THEN** the developer adds the component struct, component id, applicator module, config reference, and Unity TestFramework EditMode tests
+- **AND** `EntityBuilder` continues to iterate configured component ids and dispatch through the applicator registry
+- **AND** `GameWorld` entity creation flow does not gain a new component-specific branch
 
 ### Requirement: State-driven 统一规则入口
 系统 SHALL 将玩家输入、自动 tick、机关推动和后续配置化行为统一表示为服务端 tick 中的 action input 与 action unit，并通过统一的 state-driven rule system 修改 world 状态。旧 `MoveCommand` / `MovementResolveSystem` 路径 MAY remain only as a temporary compatibility or test helper during migration and MUST NOT be the long-term server-authoritative rule truth.
@@ -99,7 +105,7 @@ TBD - created by archiving change refactor-shared-gamecore-move-rules. Update Pu
 - **AND** 规则不检查该阻挡体的业务名字
 
 ### Requirement: 统一 Dirty 与 WorldSnapshot/WorldDelta
-系统 SHALL 用统一 dirty、WorldSnapshot 和 WorldDelta 数据模型表达玩家、球、阻挡体、进入推动地格以及调试编辑实体的服务端权威状态变化。WorldDelta SHALL 同时支持仍然存在的 changed entity snapshot 和已经被移除的 removed entity id。
+系统 SHALL 用统一 dirty、WorldSnapshot 和 WorldDelta 数据模型表达玩家、球、阻挡体、进入推动地格以及调试编辑实体的服务端权威状态变化。WorldDelta SHALL 同时支持仍然存在的 changed entity snapshot 和已经被移除的 removed entity id。Snapshot/delta component projection SHALL be explicit and registered: new component data enters sync only through projector/applier modules or an equivalent declared payload boundary, not by adding ad hoc fields directly to `GameWorld.CreateSnapshot` and mirror application code.
 
 #### Scenario: 玩家移动产生 delta
 - **WHEN** 玩家 movement action 成功移动
@@ -131,6 +137,12 @@ TBD - created by archiving change refactor-shared-gamecore-move-rules. Update Pu
 - **WHEN** 同一服务端 tick 中既有实体状态变更也有实体删除
 - **THEN** WorldDelta 分别暴露 changed entity snapshots 和 removed entity ids
 - **AND** 消费方不需要通过缺失 snapshot 推断实体删除
+
+#### Scenario: 新同步 component 使用投影注册
+- **WHEN** a new component must be visible to Unity mirror or server sync consumers
+- **THEN** the developer adds a snapshot projector/applier or equivalent declared payload mapping
+- **AND** `GameWorld.CreateSnapshot` and `GameWorld.ApplySnapshot` remain orchestration boundaries rather than component-specific switch bodies
+- **AND** components without registered sync projection remain server-authoritative only and are not silently serialized
 
 ### Requirement: 进入推动能力组件
 系统 SHALL 使用通用 `PushOnEnterComponent` 表达进入或停留在地格上会触发推动的能力，MUST NOT 使用 `ConveyorComponent` 这类物体种类组件作为核心规则判断。`PushOnEnterComponent` 的输出 action spec 和输出 cost SHALL come from Luban Excel entity/component configuration rather than a hard-coded action id in component application code.
@@ -203,7 +215,7 @@ Shared GameCore MUST remain usable by Fantasy server code and Unity client code 
 - **AND** Shared GameCore stores and evaluates rules with `GridCoord`
 
 ### Requirement: 实体组合构建边界
-系统 SHALL 将实体组件组合规则放在 GameCore 的 archetype/build 边界中，而不是放在 `GameWorld` 容器内部。`GameWorld` MUST 只负责 entity 存储、component store、空间索引、dirty 和 snapshot/delta。
+系统 SHALL 将实体组件组合规则放在 GameCore 的 archetype/build 边界中，而不是放在 `GameWorld` 容器内部。`GameWorld` MUST 只负责 entity 存储、component store、空间索引、dirty 和 snapshot/delta。Archetype component lists SHALL reference stable component ids, and authoring/provider import SHALL resolve readable component names before rule/runtime code consumes them.
 
 #### Scenario: GameWorld 不组装组件组合
 - **WHEN** 通过配置创建 player、ball 或 blocker entity
@@ -214,6 +226,11 @@ Shared GameCore MUST remain usable by Fantasy server code and Unity client code 
 - **WHEN** 后续新增一个由已有组件组成的实体 archetype
 - **THEN** 系统通过新增或修改 archetype 配置表达组合
 - **AND** 不需要修改 `GameWorld` 的实体创建代码
+
+#### Scenario: 未知 component id 显式失败
+- **WHEN** archetype configuration references an unknown component id
+- **THEN** provider or entity build fails with a clear error
+- **AND** the entity is not silently created with a partial or fallback component set
 
 ### Requirement: Archetype 与 Spawn Spec 分离
 系统 SHALL 分离实体类型组合定义和实体实例生成参数。Archetype SHALL 描述 `ConfigId`、`ArchetypeId`、`EntityTarget`、组件 kind 集合和 tags；spawn/build spec SHALL 描述 `EntityId`、位置、方向、playerId、自动移动间隔等实例参数。
@@ -289,7 +306,7 @@ Shared GameCore SHALL use `ActionSpec` as the behavior policy registry for autho
 - **AND** the rules layer does not choose `"player_push"` or `"connected_body_move"` by matching connected body state inside resolver code
 
 ### Requirement: System 层规则职责边界
-Shared GameCore SHALL organize movement and behavior rule code around system-layer responsibilities: action intake, action unit lifecycle, tag/component gate, subject selection, target selection, strategy execution, claim arbitration, planning, deferred output, conflict/commit, and result application. Component and tag reads inside these systems are allowed as rule inputs, but system code MUST NOT depend on concrete entity names, ordinary action ids, gameplay-specific names, Unity runtime objects, Fantasy runtime objects, protocol generated types, Ability state, RuntimeEffect state, editor scanning APIs, or runtime reflection to choose ordinary behavior strategy.
+Shared GameCore SHALL organize movement and behavior rule code around system-layer responsibilities: action intake, action unit lifecycle, tag/component gate, subject selection, target selection, strategy execution, claim arbitration, planning, deferred output, conflict/commit, and result application. Component and tag reads inside these systems are allowed as rule inputs, but system code MUST NOT depend on concrete entity names, ordinary action ids, gameplay-specific names, Unity runtime objects, Fantasy runtime objects, protocol generated types, Ability state, RuntimeEffect state, editor scanning APIs, or runtime assembly scanning to choose ordinary behavior strategy. Component presence checks used by targeting, blocked conditions, and debug authoring filters SHALL go through a component fact query registry keyed by component id rather than central `ComponentKind` switches.
 
 #### Scenario: 规则 system 读取 component 而不读取实体种类
 - **WHEN** player movement, push, auto movement, mechanism push, configured wind push, or future ordinary behavior is evaluated
@@ -299,12 +316,14 @@ Shared GameCore SHALL organize movement and behavior rule code around system-lay
 
 #### Scenario: tag 只作为事实输入
 - **WHEN** rules evaluate tags such as source, ability, state, immunity, or blocker tags
-- **THEN** those tags are used only as facts for explicit policy conditions or filters
-- **AND** tag combinations do not replace `ActionSpec`, strategy key, or reusable policy fields
+- **THEN** those tags are used only as facts for explicit policy checks
+- **AND** tag combinations do not choose hidden action strategy, subject policy, target policy, or commit behavior
 
-#### Scenario: 规则职责拆分后行为保持一致
-- **WHEN** the state-driven rule system processes the same world state and queued actions as before a pipeline refactor
-- **THEN** it produces equivalent accepted action units, rejected reasons, deferred outputs, move plans, commit results, dirty changes, and owner action results for existing covered scenarios
+#### Scenario: 新可查询 component 不修改 targeting
+- **WHEN** a new final component should be usable in target filters or blocked result conditions
+- **THEN** the developer adds a component fact query registration for its component id
+- **AND** targeting and blocked resolver modules do not gain a component-specific switch branch
+- **AND** unknown query component ids fail clearly
 
 ### Requirement: Legacy movement resolver 迁移边界
 Shared GameCore SHALL migrate production rule execution away from `Movement/Legacy/Systems.cs` before deleting or isolating that file. The server-authoritative path MUST use the state-driven action / action unit / arbitration / plan / commit pipeline as the rule truth, and legacy resolver APIs MUST NOT remain required by server-authoritative runtime construction after migration.
@@ -320,19 +339,38 @@ Shared GameCore SHALL migrate production rule execution away from `Movement/Lega
 - **AND** auto move and mechanism push are generated as state-driven actions or intents before arbitration and commit
 
 ### Requirement: Shared Rules Source Layout
-Shared GameCore rule execution code SHALL live under a directory that represents world rules instead of a single movement mechanic.
+Shared GameCore behavior execution code SHALL live under source folders that represent the final Shared runtime architecture instead of a generic `Rules` entry point or a single movement mechanic. The authoritative behavior pipeline SHALL use `Shared/DG.GameCore/ActionRuntime` as the primary source entry for action intake, lifecycle, gating, subject selection, targeting, strategy execution, claim arbitration, blocking, planning, commit, and generated action-runtime registration. Shared domain data, world storage, spatial indexes, snapshot/delta projection, Luban configuration import, Luban generated data, runtime effects, and tests SHALL live in their own sibling folders rather than under action runtime orchestration.
 
-#### Scenario: Rules pipeline has domain-level folder
-- **WHEN** a developer looks for action, intent, planning, arbitration, pending state, or commit code
-- **THEN** those files are discoverable under `Shared/DG.GameCore/Rules`
-- **AND** `Shared/DG.GameCore/Movement` is not the primary entry point for the rule pipeline
+#### Scenario: Action runtime replaces generic Rules entry
+- **WHEN** a developer looks for action, intent, lifecycle, targeting, blocking, arbitration, planning, or commit code
+- **THEN** those files are discoverable under `Shared/DG.GameCore/ActionRuntime`
+- **AND** `Shared/DG.GameCore/Rules` is not the long-term extension entry point
+- **AND** `Shared/DG.GameCore/Movement` is not the primary entry point for the behavior pipeline
+
+#### Scenario: Shared folders express runtime boundaries
+- **WHEN** a developer looks for component models, entity ids, world storage, spatial indexes, snapshot/delta data, Luban import, Luban generated tables, runtime effects, or tests
+- **THEN** those files are discoverable under `Domain`, `World`, `Configuration`, `RuntimeEffects`, or `Testing`
+- **AND** those folders do not depend on ordinary action names to decide behavior
+- **AND** Shared GameCore remains pure C# without UnityEngine, Fantasy runtime, or protocol generated type dependencies
+
+#### Scenario: Generated code is isolated
+- **WHEN** action-runtime generated registration or Luban generated table code is reviewed
+- **THEN** the files live under a `Generated` folder for their owning area
+- **AND** generated files do not contain hand-written ordinary behavior policy, world mutation logic, targeting decisions, or blocked outcome business branches
+- **AND** hand-written runtime code consumes generated registration through explicit registry/provider boundaries
+
+#### Scenario: Business outcomes are not hidden in low-level executor files
+- **WHEN** blocked behavior such as derive, bounce, reject, or noop is reviewed
+- **THEN** the business outcome implementation is found under `ActionRuntime/Blocking/Outcomes` or an equivalent focused policy module folder
+- **AND** the central blocked outcome executor only dispatches resolved policy outcomes
+- **AND** new blocked business behavior does not require adding ordinary action-name branches to a central executor
 
 #### Scenario: Legacy movement folder is not a rule entry point
 - **WHEN** the legacy movement resolver has no production references
 - **THEN** empty or obsolete `Movement/Legacy` folders do not remain as an apparent extension point
 
 ### Requirement: Rule Pipeline File Boundaries
-The rule pipeline SHALL keep action definitions, policy data models, request models, tag/component gates, subject selection, target selection, strategy registry, strategy modules, claim arbitration, planning, conflict resolution, deferred output enqueue, and commit in separate source file boundaries while preserving the same runtime behavior. No single central class SHALL own all ordinary behavior construction, blocked outcome execution, claim arbitration, and commit mutation.
+The action runtime pipeline SHALL keep action definitions, policy data models, request models, tag/component gates, subject selection, target selection, strategy registry, strategy modules, claim arbitration, blocking contact collection, blocked policy matching, blocked outcome modules, planning, conflict resolution, deferred output enqueue, commit proposal models, commit handler registry, commit handlers, and generated registration in separate source file boundaries while preserving the same runtime behavior. No single central class SHALL own all ordinary behavior construction, blocked outcome execution, claim arbitration, and commit mutation.
 
 #### Scenario: Action definitions are separate from execution
 - **WHEN** a new `ActionSpec` default policy is reviewed
@@ -351,10 +389,17 @@ The rule pipeline SHALL keep action definitions, policy data models, request mod
 - **AND** it does not contain ordinary action id branches, world-state decisions, tag-condition evaluation, planning, or commit logic
 - **AND** rule systems consume the completed registry through dependency injection
 
+#### Scenario: Blocking contacts, policies, and outcomes are separate
+- **WHEN** a move-like action is blocked by an occupied target cell
+- **THEN** contact collection produces blocker facts
+- **AND** blocked policy matching chooses the configured outcome
+- **AND** the chosen outcome module performs derive, bounce, reject, noop, or future configured behavior
+- **AND** the central action arbiter does not encode those ordinary blocked business branches directly
+
 #### Scenario: Planning and commit remain distinct
 - **WHEN** accepted action claims are available
 - **THEN** planning turns them into move/spawn/remove/component/effect proposals
-- **AND** commit applies proposals atomically
+- **AND** commit applies proposals atomically through commit handlers
 - **AND** conflict resolution remains responsible for same-tick atomic commit decisions
 
 #### Scenario: Deferred output is separate from commit
@@ -615,12 +660,12 @@ Shared GameCore SHALL remove push propagation from parent-child pending handoff 
 - **AND** it MUST NOT reuse the removed push pending chain as an implicit fallback
 
 ### Requirement: GameCore Runtime ID Boundary
-Shared GameCore SHALL convert configuration-readable action, policy, style, and tag names into stable runtime identifiers before authoritative rules consume them. Runtime arbitration, planning, commit, pending, deferred output, and component result resolution MUST consume typed or numeric identifiers and final component/tag values rather than comparing raw strings.
+Shared GameCore SHALL convert configuration-readable action, policy, style, component, effect payload, target selector, commit handler, snapshot payload, and tag names into stable runtime identifiers before authoritative rules consume them. Runtime arbitration, targeting, planning, commit, pending, deferred output, component application, effect settlement, snapshot projection, and component result resolution MUST consume typed or numeric identifiers and final component/tag values rather than comparing raw strings or requiring gameplay-extension enum members. Formal Luban source tables, generated formal config, fallback provider ordinary paths, and new tests MUST NOT use gameplay-extension enums for capabilities that can grow through gameplay content.
 
 #### Scenario: 配置名在导入边界解析
-- **WHEN** Luban action, blocked policy, push-on-enter output, entity tag, or animation style data is loaded
-- **THEN** the provider or registry resolves readable names into runtime identifiers or enums
-- **AND** rule execution receives the resolved identifier or enum value
+- **WHEN** Luban action, blocked policy, push-on-enter output, entity component, entity tag, effect payload, target selector, commit handler, snapshot payload, or animation style data is loaded
+- **THEN** the provider or registry resolves readable names into runtime identifiers or stable internal values
+- **AND** rule execution receives the resolved identifier or enum value only when that enum is a stable internal state
 - **AND** the readable name remains available only for authoring, diagnostics, or presentation metadata
 
 #### Scenario: 规则层不比较字符串 spec
@@ -632,6 +677,22 @@ Shared GameCore SHALL convert configuration-readable action, policy, style, and 
 - **WHEN** action policy or entity archetype data contains source, ability, state, immunity, or blocker tags
 - **THEN** configuration import resolves those tags to `WorldTag` or an equivalent typed tag set
 - **AND** authoritative rules read final tag/component facts rather than raw string tag names
+
+#### Scenario: 扩展 enum 不作为入口
+- **WHEN** a feature adds a new action strategy, target selector, commit handler, component applicator, component result resolver, effect payload mapper, or snapshot payload projector
+- **THEN** it uses stable id registration and config/provider data
+- **AND** it does not add members to `ActionPrimitive`, `ActionTargetRule`, `CommitProposalKind`, `ComponentKind`, `ComponentResultKind`, `EffectKind`, or `RuntimeEffectKind`
+- **AND** formal Luban source tables and fallback provider ordinary paths do not use those enums as authoring or construction inputs
+
+#### Scenario: 稳定内部 enum 可以保留
+- **WHEN** code uses fixed internal states such as direction, lifecycle state, duration policy, stack policy, remove policy, ordering policy, or fixed error code
+- **THEN** those values MAY remain enums
+- **AND** they are not used as the sole registry of gameplay extension modules
+
+#### Scenario: fallback 只保留兼容专项
+- **WHEN** compatibility tests verify old enum data migration
+- **THEN** they MAY construct legacy enum fixtures inside an explicit compatibility test boundary
+- **AND** ordinary fallback provider data, new gameplay tests, and runtime examples use id-first data
 
 ### Requirement: ECS Storage Abstraction Boundary
 Shared GameCore SHALL expose world, entity, component, query, spatial, dirty, snapshot, and delta semantics through stable APIs that do not reveal whether component data is stored in dictionaries, arrays, indexed pools, third-party ECS storage, or archetype chunks. `GameWorld` SHALL own the only public access boundary for rule, runtime effect, debug edit, server sync, and client mirror code. External rule modules MUST NOT depend on dictionary key order, per-query array allocation, concrete `ComponentStore<T>` internals, concrete indexed storage internals, storage adapter types, or third-party ECS types.

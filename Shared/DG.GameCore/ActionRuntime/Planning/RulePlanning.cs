@@ -11,16 +11,18 @@ public enum BehaviorBodyKind
 
 public readonly struct BodyMember
 {
-    public BodyMember(long entityId, GridCoord from, GridCoord to)
+    public BodyMember(long entityId, GridCoord from, GridCoord to, Direction direction = Direction.None)
     {
         EntityId = entityId;
         From = from;
         To = to;
+        Direction = direction;
     }
 
     public long EntityId { get; }
     public GridCoord From { get; }
     public GridCoord To { get; }
+    public Direction Direction { get; }
 }
 
 public sealed class BehaviorBody

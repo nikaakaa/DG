@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "infine",
+  "anchorX": -2,
+  "anchorY": 4,
+  "entries": [
+    {
+      "alias": "entity_800000095",
+      "configId": 1002,
+      "offsetX": 0,
+      "offsetY": 0,
+      "direction": "None",
+      "playerId": 0,
+      "autoMoveIntervalTicks": 1,
+      "portLocalPorts": 0,
+      "rotatePivot": false,
+      "runtimeBlocking": false,
+      "runtimeAutoMove": false,
+      "runtimePushable": true,
+      "runtimePortLocalPorts": 0,
+      "runtimeImmobile": false
+    }
+  ]
+}

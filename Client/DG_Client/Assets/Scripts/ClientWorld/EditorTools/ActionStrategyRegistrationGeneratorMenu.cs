@@ -56,7 +56,7 @@ public static class ActionStrategyRegistrationGeneratorMenu
                 throw new InvalidOperationException("Action strategy missing parameterless constructor: " + type.FullName);
             }
 
-            descriptors.Add(new ActionStrategyRegistrationDescriptor(attribute.Primitive, attribute.StrategyKey, type.FullName ?? type.Name));
+            descriptors.Add(new ActionStrategyRegistrationDescriptor(attribute.StrategyKey, type.FullName ?? type.Name));
         }
 
         return descriptors;

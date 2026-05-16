@@ -7,6 +7,11 @@ namespace DG.GameCore
 public readonly struct EntitySpawnSpec
 {
     public EntitySpawnSpec(long entityId, int configId, GridCoord position, Direction direction, long playerId, int autoMoveIntervalTicks)
+        : this(entityId, configId, position, direction, playerId, autoMoveIntervalTicks, false)
+    {
+    }
+
+    public EntitySpawnSpec(long entityId, int configId, GridCoord position, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot)
     {
         EntityId = entityId;
         ConfigId = configId;
@@ -14,6 +19,7 @@ public readonly struct EntitySpawnSpec
         Direction = direction;
         PlayerId = playerId;
         AutoMoveIntervalTicks = autoMoveIntervalTicks;
+        RotatePivot = rotatePivot;
     }
 
     public long EntityId { get; }
@@ -22,6 +28,7 @@ public readonly struct EntitySpawnSpec
     public Direction Direction { get; }
     public long PlayerId { get; }
     public int AutoMoveIntervalTicks { get; }
+    public bool RotatePivot { get; }
 
     public static EntitySpawnSpec FromSnapshot(EntitySnapshot snapshot)
     {
@@ -31,7 +38,8 @@ public readonly struct EntitySpawnSpec
             new GridCoord(snapshot.X, snapshot.Y),
             snapshot.Direction,
             snapshot.PlayerControlled ? snapshot.EntityId : 0,
-            snapshot.AutoMoveIntervalTicks);
+            snapshot.AutoMoveIntervalTicks,
+            snapshot.RotatePivot);
     }
 }
 }

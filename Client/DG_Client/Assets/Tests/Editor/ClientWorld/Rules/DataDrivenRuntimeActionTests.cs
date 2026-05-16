@@ -16,18 +16,19 @@ namespace DG.EditorTests
         {
             ActionSpecRegistry registry = ActionSpecRegistry.Default;
 
-            AssertSpec(registry, "player_move", ActionPrimitive.Move, ActionSourceKind.Player, ActionTargetRule.TargetCoordOneStep);
-            AssertSpec(registry, "auto_move", ActionPrimitive.Move, ActionSourceKind.Auto, ActionTargetRule.DirectionFromComponent);
-            AssertSpec(registry, "mechanism_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, ActionTargetRule.DirectionFromRequest);
-            AssertSpec(registry, "debug_move", ActionPrimitive.Move, ActionSourceKind.Debug, ActionTargetRule.TargetCoordAny);
-            AssertSpec(registry, "debug_spawn", ActionPrimitive.Spawn, ActionSourceKind.Debug, ActionTargetRule.TargetCoordAny);
-            AssertSpec(registry, "debug_remove", ActionPrimitive.Remove, ActionSourceKind.Debug, ActionTargetRule.None);
-            AssertSpec(registry, "connected_body_move", ActionPrimitive.Move, ActionSourceKind.Mechanism, ActionTargetRule.DirectionFromRequest);
+            AssertLubanSpec(registry, "player_move", "move", ActionSourceKind.Player, "legacy_target_coord_one_step");
+            AssertLubanSpec(registry, "auto_move", "move", ActionSourceKind.Auto, "legacy_direction_component_cell");
+            AssertLubanSpec(registry, "mechanism_push", "move", ActionSourceKind.Mechanism, "legacy_direction_cell");
+            AssertLubanSpec(registry, "debug_move", "move", ActionSourceKind.Debug, "legacy_target_coord_any");
+            AssertLubanSpec(registry, "debug_spawn", "spawn", ActionSourceKind.Debug, "legacy_target_coord_any");
+            AssertLubanSpec(registry, "debug_remove", "remove", ActionSourceKind.Debug, "legacy_none");
+            AssertLubanSpec(registry, "connected_body_move", "move", ActionSourceKind.Mechanism, "legacy_direction_cell");
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("player_move").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("player_push").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("configured_wind_push").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("connected_body_move").SubjectKind);
+            Assert.AreEqual(3, registry.Get("mechanism_push").DefaultCostTicks);
             Assert.AreEqual(new BlockedResultPolicyId("push_or_block"), registry.Get("player_move").BlockedResultPolicyId);
             Assert.AreEqual(new BlockedResultPolicyId("bounce_or_block"), registry.Get("auto_move").BlockedResultPolicyId);
             Assert.AreEqual(new BlockedResultPolicyId("immune_push_or_block"), registry.Get("mechanism_push").BlockedResultPolicyId);
@@ -38,19 +39,28 @@ namespace DG.EditorTests
         {
             ActionSpecRegistry registry = LubanActionSpecRegistry.FromDirectory(GameConfigDirectory());
 
-            AssertSpec(registry, "player_move", ActionPrimitive.Move, ActionSourceKind.Player, ActionTargetRule.TargetCoordOneStep);
-            AssertSpec(registry, "auto_move", ActionPrimitive.Move, ActionSourceKind.Auto, ActionTargetRule.DirectionFromComponent);
-            AssertSpec(registry, "mechanism_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, ActionTargetRule.DirectionFromRequest);
-            AssertSpec(registry, "debug_move", ActionPrimitive.Move, ActionSourceKind.Debug, ActionTargetRule.TargetCoordAny);
-            AssertSpec(registry, "debug_spawn", ActionPrimitive.Spawn, ActionSourceKind.Debug, ActionTargetRule.TargetCoordAny);
-            AssertSpec(registry, "debug_remove", ActionPrimitive.Remove, ActionSourceKind.Debug, ActionTargetRule.None);
+            AssertLubanSpec(registry, "player_move", "move", ActionSourceKind.Player, "legacy_target_coord_one_step");
+            AssertLubanSpec(registry, "auto_move", "move", ActionSourceKind.Auto, "legacy_direction_component_cell");
+            AssertLubanSpec(registry, "mechanism_push", "move", ActionSourceKind.Mechanism, "legacy_direction_cell");
+            AssertLubanSpec(registry, "debug_move", "move", ActionSourceKind.Debug, "legacy_target_coord_any");
+            AssertLubanSpec(registry, "debug_spawn", "spawn", ActionSourceKind.Debug, "legacy_target_coord_any");
+            AssertLubanSpec(registry, "debug_remove", "remove", ActionSourceKind.Debug, "legacy_none");
             Assert.AreEqual(new ActionSpecId("player_push"), registry.Get("player_move").Handoff.SpecId);
             Assert.AreEqual(new ActionSpecId("mechanism_push"), registry.Get("mechanism_push").Handoff.SpecId);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").Handoff.SubjectKind);
+            Assert.AreEqual(3, registry.Get("mechanism_push").DefaultCostTicks);
             Assert.AreEqual(3, registry.GetBlockedResultPolicy("immune_push_or_block").Branches.Count);
-            Assert.AreEqual(new TargetingSpecId("legacy_target_coord_one_step"), registry.Get("player_move").Targeting.SpecId);
-            Assert.AreEqual(new TargetingSpecId("legacy_direction_component_cell"), registry.Get("auto_move").Targeting.SpecId);
-            Assert.AreEqual(new TargetingSpecId("legacy_direction_cell"), registry.Get("mechanism_push").Targeting.SpecId);
+        }
+
+        [Test]
+        public void MechanismPush_UsesConfiguredThreeTickCostByDefault()
+        {
+            var queue = new WorldActionQueue(ActionSpecRegistry.Default);
+
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 10, Direction.Right, 20, 0);
+
+            Assert.AreEqual(3, action.CostTicks);
+            Assert.AreEqual(23, action.ReadyTick);
         }
 
         [Test]
@@ -2072,9 +2082,18 @@ namespace DG.EditorTests
         private static void AssertSpec(ActionSpecRegistry registry, ActionSpecId id, ActionPrimitive primitive, ActionSourceKind source, ActionTargetRule targetRule)
         {
             Assert.IsTrue(registry.TryGet(id, out ActionSpec spec));
-            Assert.AreEqual(primitive, spec.Primitive);
+            Assert.AreEqual(new ActionStrategyId(primitive), spec.StrategyId);
             Assert.AreEqual(source, spec.DefaultSource);
             Assert.AreEqual(targetRule, spec.TargetRule);
+        }
+
+        private static void AssertLubanSpec(ActionSpecRegistry registry, ActionSpecId id, ActionStrategyId strategyId, ActionSourceKind source, TargetingSpecId targetingId)
+        {
+            ActionSpec spec = registry.Get(id);
+            Assert.AreEqual(strategyId, spec.StrategyId);
+            Assert.AreEqual(source, spec.DefaultSource);
+            Assert.AreEqual(ActionTargetRule.None, spec.TargetRule);
+            Assert.AreEqual(targetingId, spec.Targeting.SpecId);
         }
 
         private static ActionContext Context(long actionId, ActionSpecId specId, long entityId, Direction direction)
@@ -2275,7 +2294,7 @@ namespace DG.EditorTests
         {
             var descriptors = new[]
             {
-                new ActionStrategyRegistrationDescriptor(ActionPrimitive.ApplyRuntimeEffect, "runtime_effect", typeof(TestRuntimeEffectStrategy).FullName)
+                new ActionStrategyRegistrationDescriptor("runtime_effect", typeof(TestRuntimeEffectStrategy).FullName)
             };
 
             string source = ActionStrategyRegistrationGenerator.GenerateSource("DG.GameCore", "GeneratedActionStrategyRegistration", descriptors);
@@ -2291,8 +2310,8 @@ namespace DG.EditorTests
         {
             var descriptors = new[]
             {
-                new ActionStrategyRegistrationDescriptor(ActionPrimitive.ApplyRuntimeEffect, "duplicate", typeof(TestRuntimeEffectStrategy).FullName),
-                new ActionStrategyRegistrationDescriptor(ActionPrimitive.SetComponentResult, "duplicate", typeof(TestSetComponentResultStrategy).FullName)
+                new ActionStrategyRegistrationDescriptor("duplicate", typeof(TestRuntimeEffectStrategy).FullName),
+                new ActionStrategyRegistrationDescriptor("duplicate", typeof(TestSetComponentResultStrategy).FullName)
             };
 
             Assert.Throws<InvalidOperationException>(() => ActionStrategyRegistrationGenerator.Validate(descriptors));
@@ -2389,7 +2408,6 @@ namespace DG.EditorTests
 
         private sealed class TestRuntimeEffectStrategy : IActionStrategy
         {
-            public ActionPrimitive Primitive => ActionPrimitive.ApplyRuntimeEffect;
             public ActionStrategyId StrategyId => "runtime_effect";
 
             public void Process(ActionStrategyContext context)
@@ -2401,7 +2419,6 @@ namespace DG.EditorTests
 
         private sealed class TestSetComponentResultStrategy : IActionStrategy
         {
-            public ActionPrimitive Primitive => ActionPrimitive.SetComponentResult;
             public ActionStrategyId StrategyId => "component_result";
 
             public void Process(ActionStrategyContext context)

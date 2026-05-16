@@ -1,9 +1,8 @@
 namespace DG.GameCore
 {
-[ActionStrategy("remove", ActionPrimitive.Remove)]
+[ActionStrategy("remove")]
 public sealed class RemoveActionStrategy : IActionStrategy
 {
-    public ActionPrimitive Primitive => ActionPrimitive.Remove;
     public ActionStrategyId StrategyId => "remove";
 
     public void Process(ActionStrategyContext context)

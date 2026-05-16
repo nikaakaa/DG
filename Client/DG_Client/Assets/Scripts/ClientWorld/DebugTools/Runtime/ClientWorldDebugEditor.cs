@@ -11,8 +11,9 @@ namespace DG.Map
         Ball = 1,
         Conveyor = 2,
         PortConnector = 3,
-        Select = 4,
-        Delete = 5
+        RotatePivot = 4,
+        Select = 5,
+        Delete = 6
     }
 
     public enum DebugWorldEditorMode
@@ -519,6 +520,10 @@ namespace DG.Map
             {
                 SelectSlot(DebugWorldEditorSlot.PortConnector);
             }
+            if (Input.GetKeyDown(KeyCode.Alpha5) && mode == DebugWorldEditorMode.Layout)
+            {
+                SelectSlot(DebugWorldEditorSlot.RotatePivot);
+            }
             if (Input.GetKeyDown(KeyCode.Delete) || Input.GetKeyDown(KeyCode.Backspace))
             {
                 if (selection.Count > 0 || selectedEntityId != 0)
@@ -868,7 +873,7 @@ namespace DG.Map
             {
                 int configId = GetConfigId(currentSlot);
                 Direction direction = currentSlot == DebugWorldEditorSlot.Blocker ? Direction.None : buildDirection;
-                networkSubmitter.DebugSpawn(0, configId, hoveredCoord, direction, 0, 1, (success, reason, entityId) =>
+                networkSubmitter.DebugSpawn(0, configId, hoveredCoord, direction, 0, 1, currentSlot == DebugWorldEditorSlot.RotatePivot, (success, reason, entityId) =>
                 {
                     lastResult = success ? $"spawned {entityId}" : $"spawn failed: {reason}";
                 });
@@ -947,7 +952,7 @@ namespace DG.Map
             int requestCount = requests.Count;
             foreach (DebugStructureSpawnRequest request in requests)
             {
-                networkSubmitter.DebugSpawn(0, request.ConfigId, new Vector2Int(request.X, request.Y), request.Direction, request.PlayerId, request.AutoMoveIntervalTicks, (success, reason, entityId) =>
+                networkSubmitter.DebugSpawn(0, request.ConfigId, new Vector2Int(request.X, request.Y), request.Direction, request.PlayerId, request.AutoMoveIntervalTicks, request.RotatePivot, (success, reason, entityId) =>
                 {
                     if (success)
                     {
@@ -1169,6 +1174,9 @@ namespace DG.Map
             GUILayout.BeginHorizontal();
             DrawBuildButton(DebugWorldEditorSlot.Conveyor, "3 Conveyor");
             DrawBuildButton(DebugWorldEditorSlot.PortConnector, "4 Port Connector");
+            GUILayout.EndHorizontal();
+            GUILayout.BeginHorizontal();
+            DrawBuildButton(DebugWorldEditorSlot.RotatePivot, "5 Rotate Pivot");
             GUILayout.EndHorizontal();
             GUILayout.Space(8);
             GUILayout.Label("Palette: " + paletteKind + "  Tool: " + currentSlot);
@@ -1416,6 +1424,7 @@ namespace DG.Map
             return "B:" + snapshot.Blocking +
                 " A:" + snapshot.AutoMove +
                 " P:" + snapshot.Pushable +
+                " Pivot:" + snapshot.RotatePivot +
                 " Port:" + port +
                 move;
         }
@@ -1563,7 +1572,8 @@ namespace DG.Map
             return slot == DebugWorldEditorSlot.Blocker ||
                 slot == DebugWorldEditorSlot.Ball ||
                 slot == DebugWorldEditorSlot.Conveyor ||
-                slot == DebugWorldEditorSlot.PortConnector;
+                slot == DebugWorldEditorSlot.PortConnector ||
+                slot == DebugWorldEditorSlot.RotatePivot;
         }
 
         private static int GetConfigId(DebugWorldEditorSlot slot)
@@ -1573,6 +1583,7 @@ namespace DG.Map
                 DebugWorldEditorSlot.Ball => DefaultWorldConfig.BallConfigId,
                 DebugWorldEditorSlot.Conveyor => DefaultWorldConfig.ConveyorConfigId,
                 DebugWorldEditorSlot.PortConnector => DefaultWorldConfig.PortConnectorBlockerConfigId,
+                DebugWorldEditorSlot.RotatePivot => DefaultWorldConfig.PushableBlockerConfigId,
                 _ => DefaultWorldConfig.BlockerConfigId
             };
         }
@@ -1584,6 +1595,7 @@ namespace DG.Map
                 DebugWorldEditorSlot.Ball => new Color(1f, 0.88f, 0.18f, alpha),
                 DebugWorldEditorSlot.Conveyor => new Color(0.35f, 1f, 0.45f, alpha),
                 DebugWorldEditorSlot.PortConnector => new Color(0.5f, 0.65f, 1f, alpha),
+                DebugWorldEditorSlot.RotatePivot => new Color(1f, 0.55f, 0.95f, alpha),
                 DebugWorldEditorSlot.Delete => new Color(1f, 0.2f, 0.2f, alpha),
                 DebugWorldEditorSlot.Select => new Color(0.95f, 1f, 0.45f, alpha),
                 _ => new Color(1f, 0.35f, 0.2f, alpha)

@@ -23,7 +23,7 @@ public sealed partial class EntityArchetype : Luban.BeanBase
         ConfigId = (int)_obj.GetValue("config_id");
         ArchetypeId = (int)_obj.GetValue("archetype_id");
         EntityTarget = (gamecore.EntityTarget)(int)_obj.GetValue("entity_target");
-        { var __json0 = _obj.GetValue("components"); Components = new System.Collections.Generic.List<gamecore.ComponentKind>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { gamecore.ComponentKind __v0;  __v0 = (gamecore.ComponentKind)(int)__e0;  Components.Add(__v0); }   }
+        { var __json0 = _obj.GetValue("component_ids"); ComponentIds = new System.Collections.Generic.List<string>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { string __v0;  __v0 = (string)__e0;  ComponentIds.Add(__v0); }   }
         { var __json0 = _obj.GetValue("tags"); Tags = new System.Collections.Generic.List<string>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { string __v0;  __v0 = (string)__e0;  Tags.Add(__v0); }   }
         DefaultAutoMoveIntervalTicks = (int)_obj.GetValue("default_auto_move_interval_ticks");
     }
@@ -36,7 +36,7 @@ public sealed partial class EntityArchetype : Luban.BeanBase
     public readonly int ConfigId;
     public readonly int ArchetypeId;
     public readonly gamecore.EntityTarget EntityTarget;
-    public readonly System.Collections.Generic.List<gamecore.ComponentKind> Components;
+    public readonly System.Collections.Generic.List<string> ComponentIds;
     public readonly System.Collections.Generic.List<string> Tags;
     public readonly int DefaultAutoMoveIntervalTicks;
 
@@ -54,7 +54,7 @@ public sealed partial class EntityArchetype : Luban.BeanBase
         + "configId:" + ConfigId + ","
         + "archetypeId:" + ArchetypeId + ","
         + "entityTarget:" + EntityTarget + ","
-        + "components:" + Luban.StringUtil.CollectionToString(Components) + ","
+        + "componentIds:" + Luban.StringUtil.CollectionToString(ComponentIds) + ","
         + "tags:" + Luban.StringUtil.CollectionToString(Tags) + ","
         + "defaultAutoMoveIntervalTicks:" + DefaultAutoMoveIntervalTicks + ","
         + "}";

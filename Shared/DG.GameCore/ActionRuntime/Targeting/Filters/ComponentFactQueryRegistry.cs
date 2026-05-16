@@ -60,6 +60,7 @@ public sealed class ComponentFactQueryRegistry
         registry.Register(new ComponentId(ComponentKind.PushOnEnter), (world, entity) => world.HasComponent<PushOnEnterComponent>(entity));
         registry.Register(new ComponentId(ComponentKind.Pushable), (world, entity) => world.HasComponent<PushableComponent>(entity));
         registry.Register(new ComponentId(ComponentKind.PortConnector), (world, entity) => world.HasComponent<PortConnectorComponent>(entity));
+        registry.Register(new ComponentId(ComponentKind.RotatePivot), (world, entity) => world.HasComponent<RotatePivotComponent>(entity));
         return registry;
     }
 }

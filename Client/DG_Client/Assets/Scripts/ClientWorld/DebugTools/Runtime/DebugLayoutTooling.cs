@@ -238,9 +238,15 @@ namespace DG.Map
     public static class DebugLayoutPaths
     {
         public const string DefaultFileName = "last.dgdebuglayout.json";
+        public static string DirectoryOverride { get; set; } = string.Empty;
 
         public static string DefaultDirectory()
         {
+            if (!string.IsNullOrWhiteSpace(DirectoryOverride))
+            {
+                return DirectoryOverride;
+            }
+
             return Path.Combine(Application.dataPath, "DebugLayouts");
         }
 
@@ -251,7 +257,255 @@ namespace DG.Map
 
         public static string NamedFilePath(string name)
         {
-            return Path.Combine(DefaultDirectory(), name + DebugStructureBlockStorage.FileExtension);
+            string normalized = NormalizeLayoutName(name);
+            return Path.Combine(DefaultDirectory(), normalized + DebugStructureBlockStorage.FileExtension);
+        }
+
+        public static string NormalizeLayoutName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = value.Trim();
+            if (trimmed.EndsWith(DebugStructureBlockStorage.FileExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                trimmed = trimmed.Substring(0, trimmed.Length - DebugStructureBlockStorage.FileExtension.Length);
+            }
+            else if (trimmed.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                trimmed = trimmed.Substring(0, trimmed.Length - ".json".Length);
+            }
+
+            char[] chars = trimmed.ToCharArray();
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (char.IsWhiteSpace(chars[i]))
+                {
+                    chars[i] = '_';
+                    continue;
+                }
+
+                for (int j = 0; j < invalidChars.Length; j++)
+                {
+                    if (chars[i] == invalidChars[j])
+                    {
+                        chars[i] = '_';
+                        break;
+                    }
+                }
+            }
+
+            return new string(chars).Trim('_', '.');
+        }
+
+        public static string RelativePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return "-";
+            }
+
+            string normalizedPath = Path.GetFullPath(path).Replace('\\', '/');
+            string dataPath = Path.GetFullPath(Application.dataPath).Replace('\\', '/');
+            if (normalizedPath.StartsWith(dataPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Assets" + normalizedPath.Substring(dataPath.Length);
+            }
+
+            return normalizedPath;
+        }
+    }
+
+    public readonly struct DebugLayoutFileMetadata
+    {
+        public DebugLayoutFileMetadata(string path, string shortName, int entryCount, DateTime lastWriteTime, bool valid, string reason)
+        {
+            Path = path ?? string.Empty;
+            ShortName = shortName ?? string.Empty;
+            EntryCount = entryCount;
+            LastWriteTime = lastWriteTime;
+            Valid = valid;
+            Reason = reason ?? string.Empty;
+        }
+
+        public string Path { get; }
+        public string ShortName { get; }
+        public int EntryCount { get; }
+        public DateTime LastWriteTime { get; }
+        public bool Valid { get; }
+        public string Reason { get; }
+    }
+
+    public sealed class DebugRuntimeLayoutManager
+    {
+        private readonly List<DebugLayoutFileMetadata> layoutFiles = new();
+
+        public IReadOnlyList<DebugLayoutFileMetadata> LayoutFiles => layoutFiles;
+        public string CurrentLayoutPath { get; private set; } = string.Empty;
+        public string SaveTargetName { get; private set; } = "debug-selection";
+        public string LastSavedPath { get; private set; } = string.Empty;
+        public string LastLayoutOperationResult { get; private set; } = "layout manager ready";
+        public DebugStructureBlockDocument LoadedStructureBlock { get; private set; }
+
+        public void SetSaveTargetName(string value)
+        {
+            string normalized = DebugLayoutPaths.NormalizeLayoutName(value);
+            SaveTargetName = string.IsNullOrEmpty(normalized) ? value ?? string.Empty : normalized;
+        }
+
+        public void Refresh(IGameConfigProvider provider)
+        {
+            string oldCurrent = CurrentLayoutPath;
+            layoutFiles.Clear();
+            layoutFiles.AddRange(DebugLayoutTooling.ListLayoutFiles(provider));
+            if (!string.IsNullOrWhiteSpace(oldCurrent) && !File.Exists(oldCurrent))
+            {
+                ClearLoadedLayout();
+                LastLayoutOperationResult = "current layout missing after refresh";
+                return;
+            }
+
+            LastLayoutOperationResult = "refreshed layouts: " + layoutFiles.Count;
+        }
+
+        public bool SaveAs(DebugLayoutSelectionSet selection, ClientMapWorld world, string name, IGameConfigProvider provider)
+        {
+            string normalized = DebugLayoutPaths.NormalizeLayoutName(name);
+            if (!TryResolveSaveName(normalized, out string path, out string reason))
+            {
+                LastLayoutOperationResult = "save failed: " + reason;
+                return false;
+            }
+
+            if (!DebugLayoutTooling.TrySaveSelection(selection, world, normalized, path, out reason))
+            {
+                LastLayoutOperationResult = "save failed: " + reason;
+                return false;
+            }
+
+            SaveTargetName = normalized;
+            LastSavedPath = path;
+            Refresh(provider);
+            if (!Load(path, provider))
+            {
+                return false;
+            }
+
+            LastLayoutOperationResult = "saved and loaded layout: " + DebugLayoutPaths.RelativePath(path);
+            return true;
+        }
+
+        public bool OverwriteCurrent(DebugLayoutSelectionSet selection, ClientMapWorld world, IGameConfigProvider provider)
+        {
+            if (string.IsNullOrWhiteSpace(CurrentLayoutPath))
+            {
+                LastLayoutOperationResult = "overwrite failed: current layout is empty";
+                return false;
+            }
+
+            string name = Path.GetFileName(CurrentLayoutPath);
+            if (name.EndsWith(DebugStructureBlockStorage.FileExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                name = name.Substring(0, name.Length - DebugStructureBlockStorage.FileExtension.Length);
+            }
+
+            if (!DebugLayoutTooling.TrySaveSelection(selection, world, name, CurrentLayoutPath, out string reason))
+            {
+                LastLayoutOperationResult = "overwrite failed: " + reason;
+                return false;
+            }
+
+            LastSavedPath = CurrentLayoutPath;
+            string result = "overwrote current layout: " + DebugLayoutPaths.RelativePath(CurrentLayoutPath);
+            Refresh(provider);
+            LastLayoutOperationResult = result;
+            return true;
+        }
+
+        public bool RenameCurrent(string newName, IGameConfigProvider provider)
+        {
+            if (string.IsNullOrWhiteSpace(CurrentLayoutPath))
+            {
+                LastLayoutOperationResult = "rename failed: current layout is empty";
+                return false;
+            }
+
+            if (!DebugLayoutTooling.TryRenameLayout(CurrentLayoutPath, newName, out string newPath, out string reason))
+            {
+                LastLayoutOperationResult = "rename failed: " + reason;
+                return false;
+            }
+
+            CurrentLayoutPath = newPath;
+            SaveTargetName = DebugLayoutPaths.NormalizeLayoutName(newName);
+            string result = "renamed current layout: " + DebugLayoutPaths.RelativePath(newPath);
+            Refresh(provider);
+            LastLayoutOperationResult = result;
+            return true;
+        }
+
+        public bool DeleteCurrent(IGameConfigProvider provider)
+        {
+            if (string.IsNullOrWhiteSpace(CurrentLayoutPath))
+            {
+                LastLayoutOperationResult = "delete failed: current layout is empty";
+                return false;
+            }
+
+            if (!DebugLayoutTooling.TryDeleteLayout(CurrentLayoutPath, out string reason))
+            {
+                LastLayoutOperationResult = "delete failed: " + reason;
+                return false;
+            }
+
+            ClearLoadedLayout();
+            Refresh(provider);
+            LastLayoutOperationResult = "deleted current layout";
+            return true;
+        }
+
+        public bool Load(string path, IGameConfigProvider provider)
+        {
+            if (!DebugLayoutTooling.TryLoadStructureBlock(path, provider, out DebugStructureBlockDocument document, out string reason))
+            {
+                LastLayoutOperationResult = "load failed: " + reason;
+                return false;
+            }
+
+            LoadedStructureBlock = document;
+            CurrentLayoutPath = path;
+            SaveTargetName = DebugLayoutPaths.NormalizeLayoutName(Path.GetFileName(path));
+            LastLayoutOperationResult = "loaded layout: " + DebugLayoutPaths.RelativePath(path);
+            return true;
+        }
+
+        public void ClearLoadedLayout()
+        {
+            LoadedStructureBlock = null;
+            CurrentLayoutPath = string.Empty;
+        }
+
+        private static bool TryResolveSaveName(string normalized, out string path, out string reason)
+        {
+            path = string.Empty;
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                reason = "name is empty";
+                return false;
+            }
+
+            path = DebugLayoutPaths.NamedFilePath(normalized);
+            if (File.Exists(path))
+            {
+                reason = "target layout already exists";
+                return false;
+            }
+
+            reason = string.Empty;
+            return true;
         }
     }
 
@@ -413,6 +667,80 @@ namespace DG.Map
 
             reason = string.Empty;
             return true;
+        }
+
+        public static IReadOnlyList<DebugLayoutFileMetadata> ListLayoutFiles(IGameConfigProvider provider)
+        {
+            string directory = DebugLayoutPaths.DefaultDirectory();
+            if (!Directory.Exists(directory))
+            {
+                return Array.Empty<DebugLayoutFileMetadata>();
+            }
+
+            return Directory.GetFiles(directory, "*" + DebugStructureBlockStorage.FileExtension)
+                .Select(path => CreateMetadata(path, provider))
+                .OrderByDescending(item => item.LastWriteTime)
+                .ThenBy(item => item.ShortName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        public static bool TryRenameLayout(string currentPath, string newName, out string newPath, out string reason)
+        {
+            newPath = string.Empty;
+            if (string.IsNullOrWhiteSpace(currentPath) || !File.Exists(currentPath))
+            {
+                reason = "current layout file missing";
+                return false;
+            }
+
+            string normalized = DebugLayoutPaths.NormalizeLayoutName(newName);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                reason = "name is empty";
+                return false;
+            }
+
+            newPath = DebugLayoutPaths.NamedFilePath(normalized);
+            if (File.Exists(newPath))
+            {
+                reason = "target layout already exists";
+                return false;
+            }
+
+            File.Move(currentPath, newPath);
+            reason = string.Empty;
+            return true;
+        }
+
+        public static bool TryDeleteLayout(string currentPath, out string reason)
+        {
+            if (string.IsNullOrWhiteSpace(currentPath) || !File.Exists(currentPath))
+            {
+                reason = "current layout file missing";
+                return false;
+            }
+
+            File.Delete(currentPath);
+            reason = string.Empty;
+            return true;
+        }
+
+        private static DebugLayoutFileMetadata CreateMetadata(string path, IGameConfigProvider provider)
+        {
+            string shortName = Path.GetFileName(path);
+            if (shortName.EndsWith(DebugStructureBlockStorage.FileExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                shortName = shortName.Substring(0, shortName.Length - DebugStructureBlockStorage.FileExtension.Length);
+            }
+
+            DateTime lastWrite = File.GetLastWriteTime(path);
+            if (DebugStructureBlockStorage.TryLoad(path, provider, out DebugStructureBlockDocument document, out IReadOnlyList<string> errors))
+            {
+                int count = document.Entries != null ? document.Entries.Count : 0;
+                return new DebugLayoutFileMetadata(path, shortName, count, lastWrite, true, string.Empty);
+            }
+
+            return new DebugLayoutFileMetadata(path, shortName, 0, lastWrite, false, string.Join("|", errors));
         }
     }
 

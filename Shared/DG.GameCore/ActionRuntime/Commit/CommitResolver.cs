@@ -33,7 +33,7 @@ public sealed class CommitResolver
         for (int i = 0; i < ordered.Count; i++)
         {
             CommitProposal proposal = ordered[i];
-            CommitProposalResult result = handlers.Get(proposal.Kind).Apply(world, proposal, context);
+            CommitProposalResult result = handlers.Get(proposal.ProposalId).Apply(world, proposal, context);
             results.Add(result);
         }
 
@@ -43,7 +43,7 @@ public sealed class CommitResolver
     private static IReadOnlyDictionary<long, HashSet<long>> BuildMoveGroups(IReadOnlyList<CommitProposal> proposals)
     {
         return proposals
-            .Where(proposal => proposal.Kind == CommitProposalKind.MoveEntity && proposal.SourceStateId != 0)
+            .Where(proposal => proposal.ProposalId.Equals(new CommitProposalId(CommitProposalKind.MoveEntity)) && proposal.SourceStateId != 0)
             .GroupBy(proposal => proposal.SourceStateId)
             .ToDictionary(group => group.Key, group => new HashSet<long>(group.Select(proposal => proposal.EntityId)));
     }

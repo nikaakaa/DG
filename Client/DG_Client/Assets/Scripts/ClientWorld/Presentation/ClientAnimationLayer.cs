@@ -13,7 +13,9 @@ namespace DG.Map
         AutoMove = 3,
         DebugDrag = 4,
         Spawn = 5,
-        Remove = 6
+        Remove = 6,
+        RotatePivot = 7,
+        RotatePivotBounce = 8
     }
 
     public enum ClientAnimationEasing
@@ -55,12 +57,24 @@ namespace DG.Map
         }
 
         public ClientAnimationMetadata(long entityId, long serverTick, ClientAnimationMotionKind motionKind, string styleKey, Direction direction)
+            : this(entityId, serverTick, motionKind, styleKey, direction, 0, default, default, default, RotatePivotDirection.None, false, default)
+        {
+        }
+
+        public ClientAnimationMetadata(long entityId, long serverTick, ClientAnimationMotionKind motionKind, string styleKey, Direction direction, long pivotEntityId, Vector2Int pivotCoord, Vector2Int fromCoord, Vector2Int toCoord, RotatePivotDirection rotateDirection, bool bounce, Vector2Int impactCoord)
         {
             EntityId = entityId;
             ServerTick = serverTick;
             MotionKind = motionKind;
             StyleKey = styleKey ?? string.Empty;
             Direction = direction;
+            PivotEntityId = pivotEntityId;
+            PivotCoord = pivotCoord;
+            FromCoord = fromCoord;
+            ToCoord = toCoord;
+            RotateDirection = rotateDirection;
+            Bounce = bounce;
+            ImpactCoord = impactCoord;
         }
 
         public long EntityId { get; }
@@ -68,6 +82,13 @@ namespace DG.Map
         public ClientAnimationMotionKind MotionKind { get; }
         public string StyleKey { get; }
         public Direction Direction { get; }
+        public long PivotEntityId { get; }
+        public Vector2Int PivotCoord { get; }
+        public Vector2Int FromCoord { get; }
+        public Vector2Int ToCoord { get; }
+        public RotatePivotDirection RotateDirection { get; }
+        public bool Bounce { get; }
+        public Vector2Int ImpactCoord { get; }
     }
 
     public readonly struct ClientAnimationEvent
@@ -78,6 +99,11 @@ namespace DG.Map
         }
 
         public ClientAnimationEvent(long entityId, long serverTick, Vector2Int fromCoord, Vector2Int toCoord, Direction fromDirection, Direction toDirection, ClientAnimationMotionKind motionKind, string styleId, ClientAnimationStyle style, Direction impulseDirection)
+            : this(entityId, serverTick, fromCoord, toCoord, fromDirection, toDirection, motionKind, styleId, style, impulseDirection, 0, default, RotatePivotDirection.None, false, default)
+        {
+        }
+
+        public ClientAnimationEvent(long entityId, long serverTick, Vector2Int fromCoord, Vector2Int toCoord, Direction fromDirection, Direction toDirection, ClientAnimationMotionKind motionKind, string styleId, ClientAnimationStyle style, Direction impulseDirection, long pivotEntityId, Vector2Int pivotCoord, RotatePivotDirection rotateDirection, bool bounce, Vector2Int impactCoord)
         {
             EntityId = entityId;
             ServerTick = serverTick;
@@ -89,6 +115,11 @@ namespace DG.Map
             StyleId = styleId ?? string.Empty;
             Style = style;
             ImpulseDirection = impulseDirection;
+            PivotEntityId = pivotEntityId;
+            PivotCoord = pivotCoord;
+            RotateDirection = rotateDirection;
+            Bounce = bounce;
+            ImpactCoord = impactCoord;
         }
 
         public long EntityId { get; }
@@ -101,6 +132,12 @@ namespace DG.Map
         public string StyleId { get; }
         public ClientAnimationStyle Style { get; }
         public Direction ImpulseDirection { get; }
+        public long PivotEntityId { get; }
+        public Vector2Int PivotCoord { get; }
+        public RotatePivotDirection RotateDirection { get; }
+        public bool Bounce { get; }
+        public Vector2Int ImpactCoord { get; }
+        public bool IsRotatePivot => MotionKind == ClientAnimationMotionKind.RotatePivot || MotionKind == ClientAnimationMotionKind.RotatePivotBounce;
         public bool IsMovement => MotionKind != ClientAnimationMotionKind.Spawn && MotionKind != ClientAnimationMotionKind.Remove && FromCoord != ToCoord;
         public bool IsImpulse => MotionKind == ClientAnimationMotionKind.MechanismPush && FromCoord == ToCoord && ImpulseDirection != Direction.None;
     }
@@ -153,6 +190,9 @@ namespace DG.Map
                 ["debug_drag"] = new("debug_drag", ClientAnimationMotionKind.DebugDrag, 0.06f, ClientAnimationEasing.Linear, Color.white, 1f, true),
                 ["spawn"] = new("spawn", ClientAnimationMotionKind.Spawn, 0.1f, ClientAnimationEasing.EaseOut, new Color(0.4f, 1f, 0.6f, 1f), 1.25f, true),
                 ["remove"] = new("remove", ClientAnimationMotionKind.Remove, 0.08f, ClientAnimationEasing.EaseOut, new Color(1f, 0.33f, 0.33f, 1f), 0.4f, true),
+                ["rotate_pivot"] = new("rotate_pivot", ClientAnimationMotionKind.RotatePivot, 0.54f, ClientAnimationEasing.EaseInOut, new Color(0.65f, 0.95f, 1f, 1f), 1.08f, false),
+                ["rotate_pivot_bounce"] = new("rotate_pivot_bounce", ClientAnimationMotionKind.RotatePivotBounce, 0.54f, ClientAnimationEasing.EaseInOut, new Color(1f, 0.82f, 0.24f, 1f), 1.12f, false),
+                ["rotate_pivot_impact"] = new("rotate_pivot_impact", ClientAnimationMotionKind.MechanismPush, 0.54f, ClientAnimationEasing.EaseOut, new Color(1f, 0.44f, 0.24f, 1f), 1.2f, false),
                 ["unknown"] = ClientAnimationStyle.Unknown
             });
         }
@@ -205,6 +245,8 @@ namespace DG.Map
                 "debug_drag" => ClientAnimationMotionKind.DebugDrag,
                 "spawn" => ClientAnimationMotionKind.Spawn,
                 "remove" => ClientAnimationMotionKind.Remove,
+                "rotate_pivot" => ClientAnimationMotionKind.RotatePivot,
+                "rotate_pivot_bounce" => ClientAnimationMotionKind.RotatePivotBounce,
                 _ => ClientAnimationMotionKind.Unknown
             };
         }
@@ -219,6 +261,8 @@ namespace DG.Map
                 ClientAnimationMotionKind.DebugDrag => "debug_drag",
                 ClientAnimationMotionKind.Spawn => "spawn",
                 ClientAnimationMotionKind.Remove => "remove",
+                ClientAnimationMotionKind.RotatePivot => "rotate_pivot",
+                ClientAnimationMotionKind.RotatePivotBounce => "rotate_pivot_bounce",
                 _ => "unknown"
             };
         }
@@ -317,17 +361,28 @@ namespace DG.Map
             metadataByEntity.TryGetValue(entityId, out ClientAnimationMetadata metadata);
             ClientAnimationMotionKind kind = metadata.MotionKind == ClientAnimationMotionKind.Unknown ? fallbackKind : metadata.MotionKind;
             ClientAnimationStyle style = styleProvider.Resolve(kind, metadata.StyleKey, to);
+            Vector2Int fromCoord = metadata.MotionKind == ClientAnimationMotionKind.RotatePivot || metadata.MotionKind == ClientAnimationMotionKind.RotatePivotBounce
+                ? metadata.FromCoord
+                : new Vector2Int(from.X, from.Y);
+            Vector2Int toCoord = metadata.MotionKind == ClientAnimationMotionKind.RotatePivot || metadata.MotionKind == ClientAnimationMotionKind.RotatePivotBounce
+                ? metadata.ToCoord
+                : new Vector2Int(to.X, to.Y);
             return new ClientAnimationEvent(
                 entityId,
                 serverTick,
-                new Vector2Int(from.X, from.Y),
-                new Vector2Int(to.X, to.Y),
+                fromCoord,
+                toCoord,
                 from.Direction,
                 to.Direction,
                 kind,
                 style.StyleId,
                 style,
-                metadata.Direction);
+                metadata.Direction,
+                metadata.PivotEntityId,
+                metadata.PivotCoord,
+                metadata.RotateDirection,
+                metadata.Bounce,
+                metadata.ImpactCoord);
         }
 
         private ClientAnimationMotionKind ResolveKind(long entityId, ClientAnimationMotionKind fallbackKind, IReadOnlyDictionary<long, ClientAnimationMetadata> metadataByEntity)
@@ -342,10 +397,14 @@ namespace DG.Map
 
         private static bool ShouldCreateSameStateFeedback(long entityId, ClientAnimationMotionKind kind, EntitySnapshot snapshot, IReadOnlyDictionary<long, ClientAnimationMetadata> metadataByEntity)
         {
-            return kind == ClientAnimationMotionKind.MechanismPush &&
+            return (kind == ClientAnimationMotionKind.MechanismPush ||
+                   kind == ClientAnimationMotionKind.RotatePivot ||
+                   kind == ClientAnimationMotionKind.RotatePivotBounce) &&
                    metadataByEntity.TryGetValue(entityId, out ClientAnimationMetadata metadata) &&
                    metadata.ServerTick >= snapshot.ServerTick &&
-                   metadata.Direction != Direction.None;
+                   (metadata.Direction != Direction.None ||
+                    kind == ClientAnimationMotionKind.RotatePivot ||
+                    kind == ClientAnimationMotionKind.RotatePivotBounce);
         }
 
         private void Enqueue(ClientAnimationEvent animationEvent)

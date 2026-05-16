@@ -4,6 +4,7 @@ using Fantasy.Network;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using DG.GameCore;
 using UnityEngine;
 
@@ -15,6 +16,7 @@ namespace DG.Map
         [SerializeField] private FantasyRuntime fantasyRuntime;
         [SerializeField] private bool serverAuthoritative = true;
         [SerializeField] private int sessionWaitFrames = 600;
+        private long nextClientInputId = 1;
 
         public bool ServerAuthoritative => serverAuthoritative;
         public bool HasJoined { get; private set; }
@@ -69,18 +71,48 @@ namespace DG.Map
                 return;
             }
 
-            SubmitAsync(entityId, targetCoord, clientTick).Coroutine();
+            Direction direction = ResolveDirection(entityId, targetCoord);
+            SubmitDirection(entityId, direction, clientTick, 0);
+        }
+
+        public long SubmitDirection(long entityId, Direction direction, long clientTick, long beatTick)
+        {
+            if (!serverAuthoritative)
+            {
+                Debug.LogWarning("[ClientMove] move ignored because server authoritative mode is disabled");
+                return 0;
+            }
+
+            if (!HasJoined)
+            {
+                Debug.LogWarning("[ClientJoinWorld] move ignored before join");
+                return 0;
+            }
+
+            long clientInputId = nextClientInputId++;
+            ClientMoveNetworkRuntime.RecordPendingInput(clientInputId, entityId, beatTick, direction, clientTick);
+            SubmitDirectionAsync(entityId, clientInputId, beatTick, direction, clientTick).Coroutine();
+            return clientInputId;
         }
 
         public void DebugSpawn(long entityId, int configId, Vector2Int coord, Direction direction, long playerId, int autoMoveIntervalTicks, Action<bool, string, long> completed)
+            => DebugSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, false, completed);
+
+        public void DebugSpawn(long entityId, int configId, Vector2Int coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot, Action<bool, string, long> completed)
         {
+            if (!serverAuthoritative)
+            {
+                completed?.Invoke(TrySpawnLocalEntity(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, rotatePivot, out long spawnedEntityId, out string localReason), localReason, spawnedEntityId);
+                return;
+            }
+
             if (!CanSubmitDebugRequest(out string reason))
             {
                 completed?.Invoke(false, reason, entityId);
                 return;
             }
 
-            DebugSpawnAsync(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, completed).Coroutine();
+            DebugSpawnAsync(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, rotatePivot, completed).Coroutine();
         }
 
         public void DebugMove(long entityId, Vector2Int targetCoord, Action<bool, string> completed)
@@ -132,7 +164,9 @@ namespace DG.Map
         {
             if (!serverAuthoritative)
             {
-                completed?.Invoke(false, "server authoritative disabled", 0);
+                RuntimeEffectId effectId = default;
+                bool success = TryApplyLocalRuntimeEffect(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out effectId, out string reason);
+                completed?.Invoke(success, reason, effectId.Value);
                 return;
             }
 
@@ -212,15 +246,30 @@ namespace DG.Map
             Debug.LogWarning("[ClientMoveObserver] session unavailable");
         }
 
-        private async FTask SubmitAsync(long entityId, Vector2Int targetCoord, int clientTick)
+        private async FTask SubmitDirectionAsync(long entityId, long clientInputId, long beatTick, Direction direction, long clientTick)
         {
             if (!TryGetSession(out Session session))
             {
                 Debug.LogWarning("[ClientMove] session unavailable");
+                ClientMoveNetworkRuntime.ResolvePendingInput(clientInputId, (int)ClientPlayerInputStatus.Rejected);
                 return;
             }
 
-            G2C_MoveResponse response = await session.C2G_MoveRequest(entityId, targetCoord.x, targetCoord.y, clientTick);
+            G2C_PlayerInputResponse response = await session.C2G_PlayerInputRequest(
+                entityId,
+                clientInputId,
+                beatTick,
+                (int)direction,
+                clientTick,
+                (int)ClientInputKind.Move,
+                (int)ClientInputSourceKind.Player,
+                0,
+                0,
+                0,
+                0,
+                0,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            ClientMoveNetworkRuntime.ResolvePendingInput(clientInputId, response.InputStatus);
             if (response.ErrorCode != 0)
             {
                 ClientMoveNetworkRuntime.RecordRuleFailure($"rpc error:{response.ErrorCode}");
@@ -235,17 +284,10 @@ namespace DG.Map
                 return;
             }
 
-            Vector2Int finalCoord = new Vector2Int(response.FinalX, response.FinalY);
-            if (!runner.ApplyServerMovementOrCreate(response.EntityId, finalCoord, DefaultWorldConfig.PlayerConfigId, Direction.None, response.EntityId, 1))
-            {
-                Debug.LogWarning($"[ClientMove] apply failed ClientMapEntity:{response.EntityId} final:{finalCoord}");
-                return;
-            }
-
-            Debug.Log($"[ClientMove] applied ClientMapEntity:{response.EntityId} final:{finalCoord} tick:{response.ClientTick}");
+            Debug.Log($"[ClientMove] accepted ClientMapEntity:{response.EntityId} input:{response.ClientInputId} status:{response.InputStatus} beat:{response.BeatTick} tick:{response.ClientTick}");
         }
 
-        private async FTask DebugSpawnAsync(long entityId, int configId, Vector2Int coord, Direction direction, long playerId, int autoMoveIntervalTicks, Action<bool, string, long> completed)
+        private async FTask DebugSpawnAsync(long entityId, int configId, Vector2Int coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot, Action<bool, string, long> completed)
         {
             if (!TryGetSession(out Session session))
             {
@@ -253,7 +295,7 @@ namespace DG.Map
                 return;
             }
 
-            G2C_DebugSpawnEntityResponse response = await session.C2G_DebugSpawnEntityRequest(entityId, configId, coord.x, coord.y, (int)direction, playerId, autoMoveIntervalTicks);
+            G2C_DebugSpawnEntityResponse response = await session.C2G_DebugSpawnEntityRequest(entityId, configId, coord.x, coord.y, (int)direction, playerId, autoMoveIntervalTicks, rotatePivot);
             if (response.ErrorCode != 0)
             {
                 ClientMoveNetworkRuntime.RecordRuleFailure($"rpc error:{response.ErrorCode}");
@@ -542,6 +584,154 @@ namespace DG.Map
             }
 
             return true;
+        }
+
+        private bool TrySpawnLocalEntity(long entityId, int configId, Vector2Int coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot, out long spawnedEntityId, out string reason)
+        {
+            reason = string.Empty;
+            if (runner == null || runner.Context == null)
+            {
+                spawnedEntityId = entityId;
+                reason = "runner unavailable";
+                return false;
+            }
+
+            spawnedEntityId = entityId == 0 ? NextLocalEntityId() : entityId;
+            ClientMapEntity entity = new ClientMapEntity { EntityId = entityId };
+            var spawn = new EntitySpawnSpec(
+                spawnedEntityId,
+                configId,
+                MapCoordinate.ToGridCoord(coord),
+                direction,
+                playerId,
+                autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks,
+                rotatePivot);
+            if (!runner.Context.ClientMapWorld.AddEntity(entity, spawn))
+            {
+                reason = "spawn failed";
+                return false;
+            }
+
+            return true;
+        }
+
+        private long NextLocalEntityId()
+        {
+            long entityId = 1;
+            while (runner.Context.ClientMapWorld.RegisteredEntities.ContainsKey(entityId) ||
+                   runner.Context.ClientMapWorld.TryGetCoreEntity(entityId, out _))
+            {
+                entityId++;
+            }
+
+            return entityId;
+        }
+
+        private bool TryApplyLocalRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectId effectId, out string reason)
+        {
+            effectId = default;
+            reason = string.Empty;
+            if (runner == null || runner.Context == null)
+            {
+                reason = "runner unavailable";
+                return false;
+            }
+
+            GameWorld world = runner.Context.ClientMapWorld.CoreWorld;
+            if (!world.TryGetEntity(entityId, out _))
+            {
+                reason = "entity not found";
+                return false;
+            }
+
+            if (!ClientGameConfigProviderFactory.Create().TryGetEffectSpec(DebugEffectSpecId(kind, portMask), out EffectSpec spec))
+            {
+                reason = "unknown effect spec";
+                return false;
+            }
+
+            var context = new ActionContext(0, 0, "debug_runtime_effect", WorldActionPriority.Debug, new ActionSourceContext(ActionSourceKind.Debug, entityId, 0, WorldTag.SourceDebug), entityId, entityId, entityId, entityId, new ActionTarget(entityId, null, Direction.None), Direction.None, world.ServerTick, world.ServerTick, 1, 0, 0);
+            var application = new EffectApplication(context, spec, ActionTargetData.Self(entityId, default, Direction.None), world.ServerTick, "debug:" + entityId + ":" + (int)kind, expireTick);
+            IReadOnlyList<CommitProposalResult> results = new CommitResolver().Resolve(world, new[] { CommitProposal.AddRuntimeEffect(WorldActionPriority.Debug, 0, application, world.ServerTick) });
+            if (results.Count == 0 || !results[0].Accepted)
+            {
+                reason = results.Count == 0 ? "runtime effect commit failed" : results[0].Reason;
+                return false;
+            }
+
+            RuntimeEffectInstance instance = world.RuntimeEffects.ActiveAt(world.ServerTick)
+                .Where(effect => effect.TargetEntityId == entityId && effect.Kind == kind)
+                .OrderByDescending(effect => effect.Id.Value)
+                .First();
+            effectId = instance.Id;
+            return true;
+        }
+
+        private static EffectSpecId DebugEffectSpecId(RuntimeEffectKind kind, DirectionMask portMask)
+        {
+            if (kind == RuntimeEffectKind.TemporaryPort)
+            {
+                if ((portMask & DirectionMask.Left) != 0)
+                {
+                    return "temporary_port_left";
+                }
+
+                if ((portMask & DirectionMask.Right) != 0)
+                {
+                    return "temporary_port_right";
+                }
+
+                if ((portMask & DirectionMask.Up) != 0)
+                {
+                    return "temporary_port_up";
+                }
+
+                if ((portMask & DirectionMask.Down) != 0)
+                {
+                    return "temporary_port_down";
+                }
+            }
+
+            return kind switch
+            {
+                RuntimeEffectKind.TemporaryBlocking => "temporary_blocking",
+                RuntimeEffectKind.TemporaryAutoMove => "temporary_auto_move",
+                RuntimeEffectKind.TemporaryPushable => "temporary_pushable",
+                RuntimeEffectKind.TemporaryImmobile => "temporary_immobile",
+                RuntimeEffectKind.TemporaryTag => "temporary_tag_super_armor",
+                _ => string.Empty
+            };
+        }
+
+        private Direction ResolveDirection(long entityId, Vector2Int targetCoord)
+        {
+            if (runner != null &&
+                runner.Context != null &&
+                runner.Context.ClientMapWorld.TryGetPosition(entityId, out Vector2Int current))
+            {
+                Vector2Int delta = targetCoord - current;
+                if (delta == Vector2Int.left)
+                {
+                    return Direction.Left;
+                }
+
+                if (delta == Vector2Int.right)
+                {
+                    return Direction.Right;
+                }
+
+                if (delta == Vector2Int.up)
+                {
+                    return Direction.Up;
+                }
+
+                if (delta == Vector2Int.down)
+                {
+                    return Direction.Down;
+                }
+            }
+
+            return Direction.None;
         }
 
     }

@@ -41,19 +41,26 @@ public sealed class WorldAction
     public int ConfigId { get; private set; }
     public long PlayerId { get; private set; }
     public int AutoMoveIntervalTicks { get; private set; }
+    public bool RotatePivot { get; private set; }
     public long CausalityId { get; private set; }
     public string DedupeKey { get; private set; } = string.Empty;
     public string DeferredEquivalenceKey { get; private set; } = string.Empty;
     public int DeferredContributionCount { get; private set; } = 1;
     public IReadOnlyList<long> SubjectEntityIds { get; private set; } = Array.Empty<long>();
+    public IReadOnlyList<PushOriginContext> PushOriginContexts => pushOriginContexts;
     public IReadOnlyList<long> DeferredCausalitySamples => deferredCausalitySamples;
     private readonly List<long> deferredCausalitySamples = new();
+    private readonly List<PushOriginContext> pushOriginContexts = new();
 
     public WorldAction WithSpawn(int configId, long playerId, int autoMoveIntervalTicks)
+        => WithSpawn(configId, playerId, autoMoveIntervalTicks, false);
+
+    public WorldAction WithSpawn(int configId, long playerId, int autoMoveIntervalTicks, bool rotatePivot)
     {
         ConfigId = configId;
         PlayerId = playerId;
         AutoMoveIntervalTicks = autoMoveIntervalTicks;
+        RotatePivot = rotatePivot;
         return this;
     }
 
@@ -66,6 +73,9 @@ public sealed class WorldAction
     }
 
     public WorldAction WithDeferredSource(long causalityId, string dedupeKey, string equivalenceKey)
+        => WithDeferredSource(causalityId, dedupeKey, equivalenceKey, Array.Empty<PushOriginContext>());
+
+    public WorldAction WithDeferredSource(long causalityId, string dedupeKey, string equivalenceKey, IReadOnlyList<PushOriginContext> contexts)
     {
         CausalityId = causalityId;
         DedupeKey = dedupeKey ?? string.Empty;
@@ -73,6 +83,15 @@ public sealed class WorldAction
         DeferredContributionCount = 1;
         deferredCausalitySamples.Clear();
         deferredCausalitySamples.Add(causalityId);
+        pushOriginContexts.Clear();
+        if (contexts != null)
+        {
+            for (int i = 0; i < contexts.Count && pushOriginContexts.Count < 8; i++)
+            {
+                pushOriginContexts.Add(contexts[i]);
+            }
+        }
+
         return this;
     }
 
@@ -83,11 +102,92 @@ public sealed class WorldAction
     }
 
     public void MergeDeferredContribution(long causalityId)
+        => MergeDeferredContribution(causalityId, Array.Empty<PushOriginContext>());
+
+    public void MergeDeferredContribution(long causalityId, IReadOnlyList<PushOriginContext> contexts)
     {
         DeferredContributionCount++;
         if (deferredCausalitySamples.Count < 8 && !deferredCausalitySamples.Contains(causalityId))
         {
             deferredCausalitySamples.Add(causalityId);
+        }
+
+        if (contexts == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < contexts.Count && pushOriginContexts.Count < 8; i++)
+        {
+            PushOriginContext context = contexts[i];
+            if (!pushOriginContexts.Contains(context))
+            {
+                pushOriginContexts.Add(context);
+            }
+        }
+    }
+}
+
+public enum PushOriginKind
+{
+    Ordinary = 0,
+    RotatePivotImpact = 1
+}
+
+public readonly struct PushOriginContext : IEquatable<PushOriginContext>
+{
+    public PushOriginContext(PushOriginKind kind, long impactMemberId, GridCoord impactFrom, GridCoord impactTo, long blockerEntityId, long pivotEntityId, Direction rotateDirection, long sourceActionId)
+    {
+        Kind = kind;
+        ImpactMemberId = impactMemberId;
+        ImpactFrom = impactFrom;
+        ImpactTo = impactTo;
+        BlockerEntityId = blockerEntityId;
+        PivotEntityId = pivotEntityId;
+        RotateDirection = rotateDirection;
+        SourceActionId = sourceActionId;
+    }
+
+    public PushOriginKind Kind { get; }
+    public long ImpactMemberId { get; }
+    public GridCoord ImpactFrom { get; }
+    public GridCoord ImpactTo { get; }
+    public long BlockerEntityId { get; }
+    public long PivotEntityId { get; }
+    public Direction RotateDirection { get; }
+    public long SourceActionId { get; }
+    public bool IsValid => Kind != PushOriginKind.Ordinary;
+
+    public bool Equals(PushOriginContext other)
+    {
+        return Kind == other.Kind &&
+            ImpactMemberId == other.ImpactMemberId &&
+            ImpactFrom.Equals(other.ImpactFrom) &&
+            ImpactTo.Equals(other.ImpactTo) &&
+            BlockerEntityId == other.BlockerEntityId &&
+            PivotEntityId == other.PivotEntityId &&
+            RotateDirection == other.RotateDirection &&
+            SourceActionId == other.SourceActionId;
+    }
+
+    public override bool Equals(object obj)
+    {
+        return obj is PushOriginContext other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int hash = (int)Kind;
+            hash = (hash * 397) ^ ImpactMemberId.GetHashCode();
+            hash = (hash * 397) ^ ImpactFrom.GetHashCode();
+            hash = (hash * 397) ^ ImpactTo.GetHashCode();
+            hash = (hash * 397) ^ BlockerEntityId.GetHashCode();
+            hash = (hash * 397) ^ PivotEntityId.GetHashCode();
+            hash = (hash * 397) ^ RotateDirection.GetHashCode();
+            hash = (hash * 397) ^ SourceActionId.GetHashCode();
+            return hash;
         }
     }
 }
@@ -95,6 +195,11 @@ public sealed class WorldAction
 public readonly struct DeferredAction
 {
     public DeferredAction(ActionSpecId specId, long entityId, IReadOnlyList<long> subjectEntityIds, Direction direction, long createdTick, long readyTick, int costTicks, long causalityId, string dedupeKey)
+        : this(specId, entityId, subjectEntityIds, direction, createdTick, readyTick, costTicks, causalityId, dedupeKey, Array.Empty<PushOriginContext>())
+    {
+    }
+
+    public DeferredAction(ActionSpecId specId, long entityId, IReadOnlyList<long> subjectEntityIds, Direction direction, long createdTick, long readyTick, int costTicks, long causalityId, string dedupeKey, IReadOnlyList<PushOriginContext> originContexts)
     {
         SpecId = specId;
         EntityId = entityId;
@@ -105,6 +210,7 @@ public readonly struct DeferredAction
         CostTicks = Math.Max(1, costTicks);
         CausalityId = causalityId;
         DedupeKey = dedupeKey ?? string.Empty;
+        OriginContexts = originContexts == null ? Array.Empty<PushOriginContext>() : originContexts.ToArray();
     }
 
     public ActionSpecId SpecId { get; }
@@ -116,6 +222,7 @@ public readonly struct DeferredAction
     public int CostTicks { get; }
     public long CausalityId { get; }
     public string DedupeKey { get; }
+    public IReadOnlyList<PushOriginContext> OriginContexts { get; }
 }
 
 public sealed class WorldActionQueue
@@ -152,10 +259,13 @@ public sealed class WorldActionQueue
     }
 
     public WorldAction EnqueueDebugSpawn(long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks)
+        => EnqueueDebugSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, false);
+
+    public WorldAction EnqueueDebugSpawn(long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot)
     {
         var spec = registry.Get("debug_spawn");
         var action = new WorldAction(nextActionId++, spec.DefaultPriority, spec.SpecId, entityId, coord, direction, 0, 0, 0, spec.DefaultCostTicks)
-            .WithSpawn(configId, playerId, autoMoveIntervalTicks);
+            .WithSpawn(configId, playerId, autoMoveIntervalTicks, rotatePivot);
         actions.Add(action);
         return action;
     }
@@ -197,13 +307,13 @@ public sealed class WorldActionQueue
             WorldAction existing = actions[i];
             if (existing.DeferredEquivalenceKey == equivalenceKey)
             {
-                existing.MergeDeferredContribution(deferred.CausalityId);
+                existing.MergeDeferredContribution(deferred.CausalityId, deferred.OriginContexts);
                 return new DeferredEnqueueResult(existing, false, equivalenceKey, existing.DeferredContributionCount);
             }
         }
 
         var action = new WorldAction(nextActionId++, spec.DefaultPriority, deferred.SpecId, deferred.EntityId, null, deferred.Direction, 0, deferred.CreatedTick, readyTick, resolvedCost)
-            .WithDeferredSource(deferred.CausalityId, deferred.DedupeKey, equivalenceKey)
+            .WithDeferredSource(deferred.CausalityId, deferred.DedupeKey, equivalenceKey, deferred.OriginContexts)
             .WithSubjectEntityIds(deferred.SubjectEntityIds);
         actions.Add(action);
         return new DeferredEnqueueResult(action, true, equivalenceKey, action.DeferredContributionCount);

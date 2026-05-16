@@ -40,31 +40,27 @@ public static class LubanActionSpecRegistry
         ActionHandoffPolicy handoffPolicy = ConvertEnum<cfg.gamecore.ActionHandoffPolicy, ActionHandoffPolicy>(row.HandoffPolicy, specId, nameof(row.HandoffPolicy));
         ActionSubjectKind handoffSubject = ConvertEnum<cfg.gamecore.ActionSubjectPolicy, ActionSubjectKind>(row.HandoffSubjectPolicy, specId, nameof(row.HandoffSubjectPolicy));
 
-        ActionTargetRule legacyRule = ConvertEnum<cfg.gamecore.ActionTargetRule, ActionTargetRule>(row.TargetRule, specId, nameof(row.TargetRule));
-        TargetingSpecId targetingId = string.IsNullOrWhiteSpace(row.TargetingId)
-            ? TargetingSpec.FromLegacyRule(legacyRule).SpecId
-            : new TargetingSpecId(row.TargetingId);
+        TargetingSpecId targetingId = new TargetingSpecId(row.TargetingId);
+        if (!targetingId.IsValid)
+        {
+            throw new InvalidOperationException("Action spec missing targeting id: " + specId);
+        }
+
         if (!targetingSpecs.TryGetValue(targetingId, out TargetingSpec targeting))
         {
             throw new InvalidOperationException("Unknown targeting spec on " + specId + ": " + targetingId);
         }
 
-        if (legacyRule != ActionTargetRule.None && targeting.LegacyRule != ActionTargetRule.None && targeting.LegacyRule != legacyRule)
-        {
-            throw new InvalidOperationException("Targeting spec legacy rule mismatch on " + specId + ": " + targeting.SpecId);
-        }
-
         return new ActionSpec(
             specId,
-            ConvertEnum<cfg.gamecore.ActionPrimitive, ActionPrimitive>(row.Primitive, specId, nameof(row.Primitive)),
-            string.IsNullOrWhiteSpace(row.StrategyId) ? new ActionStrategyId(ConvertEnum<cfg.gamecore.ActionPrimitive, ActionPrimitive>(row.Primitive, specId, nameof(row.Primitive))) : new ActionStrategyId(row.StrategyId),
+            new ActionStrategyId(row.StrategyId),
             ConvertEnum<cfg.gamecore.ActionSourceKind, ActionSourceKind>(row.Source, specId, nameof(row.Source)),
             ConvertEnum<cfg.gamecore.ActionPriority, WorldActionPriority>(row.Priority, specId, nameof(row.Priority)),
             ParseTags(row.SourceTag),
             ParseTags(row.AbilityTag),
             ParseTags(row.RequiredTags),
             ParseTags(row.BlockedTags),
-            legacyRule,
+            ActionTargetRule.None,
             row.BlockedResultPolicyId,
             ConvertEnum<cfg.gamecore.ActionConflictPolicy, ActionConflictPolicy>(row.ConflictPolicy, specId, nameof(row.ConflictPolicy)),
             ConvertEnum<cfg.gamecore.ActionInterruptPolicy, ActionInterruptPolicy>(row.InterruptPolicy, specId, nameof(row.InterruptPolicy)),

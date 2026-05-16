@@ -6,10 +6,10 @@ namespace DG.GameCore
 {
 public sealed class EffectSpec
 {
-    public EffectSpec(EffectSpecId specId, EffectKind kind, EffectTargetBinding targetBinding, EffectDurationPolicy durationPolicy, EffectStackPolicy stackPolicy, EffectRemovePolicy removePolicy, long durationTicks, int autoMoveIntervalTicks, DirectionMask portMask, bool canMove, bool canBePushed, WorldTag tag, string cueId = "", string statPayloadId = "")
+    public EffectSpec(EffectSpecId specId, EffectPayloadId payloadId, EffectTargetBinding targetBinding, EffectDurationPolicy durationPolicy, EffectStackPolicy stackPolicy, EffectRemovePolicy removePolicy, long durationTicks, int autoMoveIntervalTicks, DirectionMask portMask, bool canMove, bool canBePushed, WorldTag tag, string cueId = "", string statPayloadId = "")
     {
         SpecId = specId;
-        Kind = kind;
+        PayloadId = payloadId;
         TargetBinding = targetBinding;
         DurationPolicy = durationPolicy;
         StackPolicy = stackPolicy;
@@ -25,8 +25,14 @@ public sealed class EffectSpec
         Validate();
     }
 
+    public EffectSpec(EffectSpecId specId, EffectKind kind, EffectTargetBinding targetBinding, EffectDurationPolicy durationPolicy, EffectStackPolicy stackPolicy, EffectRemovePolicy removePolicy, long durationTicks, int autoMoveIntervalTicks, DirectionMask portMask, bool canMove, bool canBePushed, WorldTag tag, string cueId = "", string statPayloadId = "")
+        : this(specId, new EffectPayloadId(kind), targetBinding, durationPolicy, stackPolicy, removePolicy, durationTicks, autoMoveIntervalTicks, portMask, canMove, canBePushed, tag, cueId, statPayloadId)
+    {
+    }
+
     public EffectSpecId SpecId { get; }
-    public EffectKind Kind { get; }
+    public EffectPayloadId PayloadId { get; }
+    public EffectKind Kind => EffectPayloadCompatibility.ToEffectKind(PayloadId);
     public EffectTargetBinding TargetBinding { get; }
     public EffectDurationPolicy DurationPolicy { get; }
     public EffectStackPolicy StackPolicy { get; }
@@ -40,16 +46,7 @@ public sealed class EffectSpec
     public string CueId { get; }
     public string StatPayloadId { get; }
 
-    public RuntimeEffectKind RuntimeKind => Kind switch
-    {
-        EffectKind.Blocking => RuntimeEffectKind.TemporaryBlocking,
-        EffectKind.AutoMove => RuntimeEffectKind.TemporaryAutoMove,
-        EffectKind.Pushable => RuntimeEffectKind.TemporaryPushable,
-        EffectKind.PortConnector => RuntimeEffectKind.TemporaryPort,
-        EffectKind.MovementPermission => RuntimeEffectKind.TemporaryImmobile,
-        EffectKind.Tag => RuntimeEffectKind.TemporaryTag,
-        _ => throw new InvalidOperationException("Unknown effect kind: " + Kind)
-    };
+    public RuntimeEffectKind RuntimeKind => EffectPayloadCompatibility.ToRuntimeKind(PayloadId);
 
     public long ResolveExpireTick(long startTick)
     {
@@ -63,7 +60,7 @@ public sealed class EffectSpec
             throw new InvalidOperationException("Effect spec id is empty.");
         }
 
-        if (!Enum.IsDefined(typeof(EffectKind), Kind) ||
+        if (!PayloadId.IsValid ||
             !Enum.IsDefined(typeof(EffectTargetBinding), TargetBinding) ||
             !Enum.IsDefined(typeof(EffectDurationPolicy), DurationPolicy) ||
             !Enum.IsDefined(typeof(EffectStackPolicy), StackPolicy) ||
@@ -77,15 +74,72 @@ public sealed class EffectSpec
             throw new InvalidOperationException("Timed effect duration is invalid: " + SpecId);
         }
 
-        if (Kind == EffectKind.PortConnector && PortMask == DirectionMask.None)
+        if (PayloadId.Equals(new EffectPayloadId("PortConnector")) && PortMask == DirectionMask.None)
         {
             throw new InvalidOperationException("Port effect requires port mask: " + SpecId);
         }
 
-        if (Kind == EffectKind.Tag && Tag == WorldTag.None)
+        if (PayloadId.Equals(new EffectPayloadId("Tag")) && Tag == WorldTag.None)
         {
             throw new InvalidOperationException("Tag effect requires tag: " + SpecId);
         }
+    }
+}
+
+public static class EffectPayloadCompatibility
+{
+    public static EffectKind ToEffectKind(EffectPayloadId id)
+    {
+        foreach (EffectKind kind in Enum.GetValues(typeof(EffectKind)))
+        {
+            if (new EffectPayloadId(kind).Equals(id))
+            {
+                return kind;
+            }
+        }
+
+        return 0;
+    }
+
+    public static RuntimeEffectKind ToRuntimeKind(EffectPayloadId id)
+    {
+        if (id.Equals(new EffectPayloadId("Blocking")))
+        {
+            return RuntimeEffectKind.TemporaryBlocking;
+        }
+
+        if (id.Equals(new EffectPayloadId("AutoMove")))
+        {
+            return RuntimeEffectKind.TemporaryAutoMove;
+        }
+
+        if (id.Equals(new EffectPayloadId("Pushable")))
+        {
+            return RuntimeEffectKind.TemporaryPushable;
+        }
+
+        if (id.Equals(new EffectPayloadId("PortConnector")))
+        {
+            return RuntimeEffectKind.TemporaryPort;
+        }
+
+        if (id.Equals(new EffectPayloadId("MovementPermission")))
+        {
+            return RuntimeEffectKind.TemporaryImmobile;
+        }
+
+        if (id.Equals(new EffectPayloadId("Tag")))
+        {
+            return RuntimeEffectKind.TemporaryTag;
+        }
+
+        if (id.Equals(new EffectPayloadId("RotatePivot")) ||
+            id.Equals(new EffectPayloadId("rotate_pivot")))
+        {
+            return RuntimeEffectKind.TemporaryRotatePivot;
+        }
+
+        throw new InvalidOperationException("Unknown effect payload id: " + id);
     }
 }
 

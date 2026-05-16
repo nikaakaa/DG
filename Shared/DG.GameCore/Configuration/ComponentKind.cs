@@ -16,6 +16,7 @@ public enum ComponentKind
     PushOnEnter = 8,
     Pushable = 9,
     PortConnector = 10,
+    RotatePivot = 11,
 }
 
 public readonly struct ComponentId : IEquatable<ComponentId>

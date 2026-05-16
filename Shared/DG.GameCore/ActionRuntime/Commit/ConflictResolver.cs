@@ -43,13 +43,26 @@ public sealed class ConflictResolver
                     continue;
                 }
 
-                movedEntities.Add(member.EntityId);
-                if (world.HasComponent<BlockingComponent>(entity))
+                bool moved = member.From != member.To;
+                if (moved)
+                {
+                    movedEntities.Add(member.EntityId);
+                }
+
+                if (moved && world.HasComponent<BlockingComponent>(entity))
                 {
                     occupiedTargets.Add(member.To);
                 }
 
-                world.MoveEntity(entity, member.To);
+                if (moved)
+                {
+                    world.MoveEntity(entity, member.To);
+                }
+
+                if (member.Direction != Direction.None)
+                {
+                    world.SetDirection(entity, member.Direction);
+                }
             }
 
             acceptedKeys.Add(key);

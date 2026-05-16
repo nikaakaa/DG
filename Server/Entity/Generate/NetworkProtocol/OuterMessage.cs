@@ -149,6 +149,9 @@ namespace Fantasy
             TargetX = default;
             TargetY = default;
             ClientTick = default;
+            ClientInputId = default;
+            BeatTick = default;
+            Direction = default;
             MessageObjectPool<C2G_MoveRequest>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.C2G_MoveRequest; } 
@@ -162,6 +165,12 @@ namespace Fantasy
         public int TargetY { get; set; }
         [ProtoMember(4)]
         public long ClientTick { get; set; }
+        [ProtoMember(5)]
+        public long ClientInputId { get; set; }
+        [ProtoMember(6)]
+        public long BeatTick { get; set; }
+        [ProtoMember(7)]
+        public int Direction { get; set; }
     }
 
     [Serializable]
@@ -182,6 +191,10 @@ namespace Fantasy
             MoveErrorCode = default;
             Reason = default;
             ClientTick = default;
+            ClientInputId = default;
+            BeatTick = default;
+            InputStatus = default;
+            Direction = default;
             MessageObjectPool<G2C_MoveResponse>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.G2C_MoveResponse; } 
@@ -201,6 +214,122 @@ namespace Fantasy
         public string Reason { get; set; }
         [ProtoMember(8)]
         public long ClientTick { get; set; }
+        [ProtoMember(9)]
+        public long ClientInputId { get; set; }
+        [ProtoMember(10)]
+        public long BeatTick { get; set; }
+        [ProtoMember(11)]
+        public int InputStatus { get; set; }
+        [ProtoMember(12)]
+        public int Direction { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class C2G_PlayerInputRequest : AMessage, IRequest
+    {
+        public static C2G_PlayerInputRequest Create()
+        {
+            return MessageObjectPool<C2G_PlayerInputRequest>.Rent();
+        }
+
+        public void Dispose()
+        {
+            EntityId = default;
+            ClientInputId = default;
+            BeatTick = default;
+            Direction = default;
+            ClientTick = default;
+            InputKind = default;
+            InputSourceKind = default;
+            RhythmJudge = default;
+            TargetHintKind = default;
+            TargetEntityId = default;
+            TargetX = default;
+            TargetY = default;
+            SampleTimeMs = default;
+            MessageObjectPool<C2G_PlayerInputRequest>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.C2G_PlayerInputRequest; } 
+        [ProtoIgnore]
+        public G2C_PlayerInputResponse ResponseType { get; set; }
+        [ProtoMember(1)]
+        public long EntityId { get; set; }
+        [ProtoMember(2)]
+        public long ClientInputId { get; set; }
+        [ProtoMember(3)]
+        public long BeatTick { get; set; }
+        [ProtoMember(4)]
+        public int Direction { get; set; }
+        [ProtoMember(5)]
+        public long ClientTick { get; set; }
+        [ProtoMember(6)]
+        public int InputKind { get; set; }
+        [ProtoMember(7)]
+        public int InputSourceKind { get; set; }
+        [ProtoMember(8)]
+        public int RhythmJudge { get; set; }
+        [ProtoMember(9)]
+        public int TargetHintKind { get; set; }
+        [ProtoMember(10)]
+        public long TargetEntityId { get; set; }
+        [ProtoMember(11)]
+        public int TargetX { get; set; }
+        [ProtoMember(12)]
+        public int TargetY { get; set; }
+        [ProtoMember(13)]
+        public long SampleTimeMs { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class G2C_PlayerInputResponse : AMessage, IResponse
+    {
+        public static G2C_PlayerInputResponse Create()
+        {
+            return MessageObjectPool<G2C_PlayerInputResponse>.Rent();
+        }
+
+        public void Dispose()
+        {
+            Success = default;
+            EntityId = default;
+            FinalX = default;
+            FinalY = default;
+            MoveErrorCode = default;
+            Reason = default;
+            ClientTick = default;
+            ClientInputId = default;
+            BeatTick = default;
+            InputStatus = default;
+            Direction = default;
+            MessageObjectPool<G2C_PlayerInputResponse>.Return(this);
+        }
+        public uint OpCode() { return OuterOpcode.G2C_PlayerInputResponse; } 
+        [ProtoMember(1)]
+        public uint ErrorCode { get; set; }
+        [ProtoMember(2)]
+        public bool Success { get; set; }
+        [ProtoMember(3)]
+        public long EntityId { get; set; }
+        [ProtoMember(4)]
+        public int FinalX { get; set; }
+        [ProtoMember(5)]
+        public int FinalY { get; set; }
+        [ProtoMember(6)]
+        public int MoveErrorCode { get; set; }
+        [ProtoMember(7)]
+        public string Reason { get; set; }
+        [ProtoMember(8)]
+        public long ClientTick { get; set; }
+        [ProtoMember(9)]
+        public long ClientInputId { get; set; }
+        [ProtoMember(10)]
+        public long BeatTick { get; set; }
+        [ProtoMember(11)]
+        public int InputStatus { get; set; }
+        [ProtoMember(12)]
+        public int Direction { get; set; }
     }
 
     [Serializable]
@@ -317,6 +446,7 @@ namespace Fantasy
             CanMove = default;
             CanBePushed = default;
             AutoMoveIntervalTicks = default;
+            RotatePivot = default;
             MessageObjectPool<G2C_WorldEntityState>.Return(this);
         }
         [ProtoMember(1)]
@@ -355,6 +485,8 @@ namespace Fantasy
         public bool CanBePushed { get; set; }
         [ProtoMember(18)]
         public int AutoMoveIntervalTicks { get; set; }
+        [ProtoMember(19)]
+        public bool RotatePivot { get; set; }
     }
 
     [Serializable]
@@ -373,6 +505,17 @@ namespace Fantasy
             MotionKind = default;
             StyleKey = default;
             Direction = default;
+            PivotEntityId = default;
+            PivotX = default;
+            PivotY = default;
+            FromX = default;
+            FromY = default;
+            ToX = default;
+            ToY = default;
+            RotateDirection = default;
+            Bounce = default;
+            ImpactX = default;
+            ImpactY = default;
             MessageObjectPool<G2C_WorldDeltaAnimationMetadata>.Return(this);
         }
         [ProtoMember(1)]
@@ -385,6 +528,28 @@ namespace Fantasy
         public string StyleKey { get; set; }
         [ProtoMember(5)]
         public int Direction { get; set; }
+        [ProtoMember(6)]
+        public long PivotEntityId { get; set; }
+        [ProtoMember(7)]
+        public int PivotX { get; set; }
+        [ProtoMember(8)]
+        public int PivotY { get; set; }
+        [ProtoMember(9)]
+        public int FromX { get; set; }
+        [ProtoMember(10)]
+        public int FromY { get; set; }
+        [ProtoMember(11)]
+        public int ToX { get; set; }
+        [ProtoMember(12)]
+        public int ToY { get; set; }
+        [ProtoMember(13)]
+        public int RotateDirection { get; set; }
+        [ProtoMember(14)]
+        public bool Bounce { get; set; }
+        [ProtoMember(15)]
+        public int ImpactX { get; set; }
+        [ProtoMember(16)]
+        public int ImpactY { get; set; }
     }
 
     [Serializable]
@@ -455,6 +620,7 @@ namespace Fantasy
             Direction = default;
             PlayerId = default;
             AutoMoveIntervalTicks = default;
+            RotatePivot = default;
             MessageObjectPool<C2G_DebugSpawnEntityRequest>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.C2G_DebugSpawnEntityRequest; } 
@@ -474,6 +640,8 @@ namespace Fantasy
         public long PlayerId { get; set; }
         [ProtoMember(7)]
         public int AutoMoveIntervalTicks { get; set; }
+        [ProtoMember(8)]
+        public bool RotatePivot { get; set; }
     }
 
     [Serializable]

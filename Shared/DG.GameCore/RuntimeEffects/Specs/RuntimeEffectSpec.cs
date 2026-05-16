@@ -7,14 +7,20 @@ namespace DG.GameCore
 public readonly struct RuntimeEffectSpec
 {
     public RuntimeEffectSpec(RuntimeEffectKind kind, long targetEntityId, long sourceEntityId, long startTick, long expireTick, int autoMoveIntervalTicks, DirectionMask portMask, bool canMove, bool canBePushed)
-        : this(default, kind, targetEntityId, sourceEntityId, startTick, expireTick, string.Empty, 0, default, 0, autoMoveIntervalTicks, portMask, canMove, canBePushed, WorldTag.None, EffectStackPolicy.AllowMultiple, string.Empty)
+        : this(default, new EffectPayloadId(kind), kind, targetEntityId, sourceEntityId, startTick, expireTick, string.Empty, 0, default, 0, autoMoveIntervalTicks, portMask, canMove, canBePushed, WorldTag.None, EffectStackPolicy.AllowMultiple, string.Empty)
     {
     }
 
     public RuntimeEffectSpec(EffectSpecId effectSpecId, RuntimeEffectKind kind, long targetEntityId, long sourceEntityId, long startTick, long expireTick, string stackKey, long causalityId, ActionSpecId sourceActionSpecId, long sourceActionId, int autoMoveIntervalTicks, DirectionMask portMask, bool canMove, bool canBePushed, WorldTag tag, EffectStackPolicy stackPolicy, string cueId)
+        : this(effectSpecId, new EffectPayloadId(kind), kind, targetEntityId, sourceEntityId, startTick, expireTick, stackKey, causalityId, sourceActionSpecId, sourceActionId, autoMoveIntervalTicks, portMask, canMove, canBePushed, tag, stackPolicy, cueId)
+    {
+    }
+
+    public RuntimeEffectSpec(EffectSpecId effectSpecId, EffectPayloadId payloadId, RuntimeEffectKind legacyKind, long targetEntityId, long sourceEntityId, long startTick, long expireTick, string stackKey, long causalityId, ActionSpecId sourceActionSpecId, long sourceActionId, int autoMoveIntervalTicks, DirectionMask portMask, bool canMove, bool canBePushed, WorldTag tag, EffectStackPolicy stackPolicy, string cueId)
     {
         EffectSpecId = effectSpecId;
-        Kind = kind;
+        PayloadId = payloadId.IsValid ? payloadId : new EffectPayloadId(legacyKind);
+        Kind = legacyKind;
         TargetEntityId = targetEntityId;
         SourceEntityId = sourceEntityId;
         StartTick = startTick;
@@ -33,6 +39,7 @@ public readonly struct RuntimeEffectSpec
     }
 
     public EffectSpecId EffectSpecId { get; }
+    public EffectPayloadId PayloadId { get; }
     public RuntimeEffectKind Kind { get; }
     public long TargetEntityId { get; }
     public long SourceEntityId { get; }
@@ -77,7 +84,12 @@ public readonly struct RuntimeEffectSpec
 
     public static RuntimeEffectSpec TagEffect(long targetEntityId, WorldTag tag, long startTick = 0, long expireTick = 0, long sourceEntityId = 0)
     {
-        return new RuntimeEffectSpec(default, RuntimeEffectKind.TemporaryTag, targetEntityId, sourceEntityId, startTick, expireTick, string.Empty, 0, default, 0, 1, DirectionMask.None, true, true, tag, EffectStackPolicy.AllowMultiple, string.Empty);
+        return new RuntimeEffectSpec(default, new EffectPayloadId(RuntimeEffectKind.TemporaryTag), RuntimeEffectKind.TemporaryTag, targetEntityId, sourceEntityId, startTick, expireTick, string.Empty, 0, default, 0, 1, DirectionMask.None, true, true, tag, EffectStackPolicy.AllowMultiple, string.Empty);
+    }
+
+    public static RuntimeEffectSpec RotatePivot(long targetEntityId, long startTick = 0, long expireTick = 0, long sourceEntityId = 0)
+    {
+        return new RuntimeEffectSpec(default, new EffectPayloadId(RuntimeEffectKind.TemporaryRotatePivot), RuntimeEffectKind.TemporaryRotatePivot, targetEntityId, sourceEntityId, startTick, expireTick, string.Empty, 0, default, 0, 1, DirectionMask.None, true, true, WorldTag.None, EffectStackPolicy.AllowMultiple, string.Empty);
     }
 }
 

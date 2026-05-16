@@ -1,55 +1,54 @@
 [
   {
     "effect_id": "temporary_blocking",
-    "kind": 1,
     "target_binding": 1,
-    "duration_policy": 2,
+    "duration_policy": 3,
     "stack_policy": 2,
-    "remove_policy": 1,
-    "duration_ticks": 5,
+    "remove_policy": 2,
+    "duration_ticks": 0,
     "auto_move_interval_ticks": 1,
     "port_mask": 0,
     "can_move": true,
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_blocking",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "Blocking"
   },
   {
     "effect_id": "temporary_auto_move",
-    "kind": 2,
     "target_binding": 1,
-    "duration_policy": 2,
+    "duration_policy": 3,
     "stack_policy": 2,
-    "remove_policy": 1,
-    "duration_ticks": 5,
+    "remove_policy": 2,
+    "duration_ticks": 0,
     "auto_move_interval_ticks": 1,
     "port_mask": 0,
     "can_move": true,
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_auto_move",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "AutoMove"
   },
   {
     "effect_id": "temporary_pushable",
-    "kind": 3,
     "target_binding": 1,
-    "duration_policy": 2,
-    "stack_policy": 3,
-    "remove_policy": 1,
-    "duration_ticks": 5,
+    "duration_policy": 3,
+    "stack_policy": 2,
+    "remove_policy": 2,
+    "duration_ticks": 0,
     "auto_move_interval_ticks": 1,
     "port_mask": 0,
     "can_move": true,
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_pushable",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "Pushable"
   },
   {
     "effect_id": "temporary_port",
-    "kind": 4,
     "target_binding": 1,
     "duration_policy": 3,
     "stack_policy": 1,
@@ -61,11 +60,11 @@
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_port",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "PortConnector"
   },
   {
     "effect_id": "temporary_port_left",
-    "kind": 4,
     "target_binding": 1,
     "duration_policy": 3,
     "stack_policy": 1,
@@ -77,11 +76,11 @@
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_port_left",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "PortConnector"
   },
   {
     "effect_id": "temporary_port_right",
-    "kind": 4,
     "target_binding": 1,
     "duration_policy": 3,
     "stack_policy": 1,
@@ -93,11 +92,11 @@
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_port_right",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "PortConnector"
   },
   {
     "effect_id": "temporary_port_up",
-    "kind": 4,
     "target_binding": 1,
     "duration_policy": 3,
     "stack_policy": 1,
@@ -109,11 +108,11 @@
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_port_up",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "PortConnector"
   },
   {
     "effect_id": "temporary_port_down",
-    "kind": 4,
     "target_binding": 1,
     "duration_policy": 3,
     "stack_policy": 1,
@@ -125,38 +124,55 @@
     "can_be_pushed": true,
     "tag": "",
     "cue_id": "temporary_port_down",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "PortConnector"
   },
   {
     "effect_id": "temporary_immobile",
-    "kind": 5,
     "target_binding": 1,
-    "duration_policy": 2,
+    "duration_policy": 3,
     "stack_policy": 2,
-    "remove_policy": 1,
-    "duration_ticks": 5,
+    "remove_policy": 2,
+    "duration_ticks": 0,
     "auto_move_interval_ticks": 1,
     "port_mask": 0,
     "can_move": false,
     "can_be_pushed": false,
     "tag": "",
     "cue_id": "temporary_immobile",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "MovementPermission"
   },
   {
     "effect_id": "temporary_tag_super_armor",
-    "kind": 6,
     "target_binding": 1,
-    "duration_policy": 2,
-    "stack_policy": 3,
-    "remove_policy": 1,
-    "duration_ticks": 5,
+    "duration_policy": 3,
+    "stack_policy": 2,
+    "remove_policy": 2,
+    "duration_ticks": 0,
     "auto_move_interval_ticks": 1,
     "port_mask": 0,
     "can_move": true,
     "can_be_pushed": true,
     "tag": "StateSuperArmor",
     "cue_id": "temporary_tag",
-    "stat_payload_id": ""
+    "stat_payload_id": "",
+    "effect_payload_id": "Tag"
+  },
+  {
+    "effect_id": "temporary_rotate_pivot",
+    "target_binding": 1,
+    "duration_policy": 3,
+    "stack_policy": 2,
+    "remove_policy": 2,
+    "duration_ticks": 0,
+    "auto_move_interval_ticks": 1,
+    "port_mask": 0,
+    "can_move": true,
+    "can_be_pushed": true,
+    "tag": "",
+    "cue_id": "temporary_rotate_pivot",
+    "stat_payload_id": "",
+    "effect_payload_id": "RotatePivot"
   }
 ]

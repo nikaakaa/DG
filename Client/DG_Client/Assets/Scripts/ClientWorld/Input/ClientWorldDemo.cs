@@ -9,6 +9,7 @@ namespace DG.Map
         [SerializeField] private ClientWorldRunner runner;
         [SerializeField] private ClientMoveNetworkSubmitter networkSubmitter;
         [SerializeField] private long localEntityId = 1;
+        [SerializeField] private bool enableLegacyKeyboardInput;
         [SerializeField] private bool autoMove;
 
         private long playerEntityId;
@@ -43,7 +44,10 @@ namespace DG.Map
 
         private void Update()
         {
-            if (runner == null || playerEntityId == 0 || !runner.Context.ClientMapWorld.TryGetPosition(playerEntityId, out Vector2Int coord))
+            if (!enableLegacyKeyboardInput ||
+                runner == null ||
+                playerEntityId == 0 ||
+                !runner.Context.ClientMapWorld.TryGetPosition(playerEntityId, out Vector2Int coord))
             {
                 return;
             }

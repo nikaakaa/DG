@@ -182,7 +182,7 @@ namespace DG.EditorTests
 
         private sealed class TestSnapshotProjection : IEntitySnapshotProjector, IEntitySnapshotApplier
         {
-            public ComponentId ComponentId => new("test_snapshot");
+            public SnapshotPayloadId PayloadId => "test_snapshot";
 
             public void Project(GameWorld world, GameEntity entity, EntitySnapshotBuilder builder)
             {

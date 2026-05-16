@@ -13,6 +13,7 @@ public sealed class AuthoritativeWorldTickRunner
     private readonly AuthoritativeWorldSyncSystem SyncSystem;
     private readonly WorldActionQueue ActionQueue;
     private readonly StateDrivenRuleExecutionSystem RuleExecutionSystem;
+    private readonly MoveIntentAdapter IntentAdapter = new();
     private readonly Dictionary<long, AuthoritativeMoveInput> pendingMoveInputs = new();
     private readonly int tickIntervalMs;
     private FCancellationToken? cancellationToken;
@@ -63,7 +64,7 @@ public sealed class AuthoritativeWorldTickRunner
         InputQueue.FailPending("tick runner stopped");
         foreach (AuthoritativeMoveInput input in pendingMoveInputs.Values)
         {
-            input.Complete(new MoveResult(false, input.EntityId, default, Direction.None, MoveErrorCode.UnknownEntity, "tick runner stopped", false, default, input.ClientTick));
+            input.Complete(AuthoritativePlayerInputStatus.Rejected, new MoveResult(false, input.EntityId, default, input.Direction, MoveErrorCode.UnknownEntity, "tick runner stopped", false, default, input.ClientTick));
         }
 
         pendingMoveInputs.Clear();
@@ -73,11 +74,17 @@ public sealed class AuthoritativeWorldTickRunner
     {
         long serverTick = World.NextTick();
         World.ExpireRuntimeEffects(serverTick);
-        IReadOnlyList<AuthoritativeMoveInput> inputs = InputQueue.DrainMoves();
+        IReadOnlyList<AuthoritativeMoveInput> inputs = InputQueue.DrainMoves(serverTick);
         for (int i = 0; i < inputs.Count; i++)
         {
             AuthoritativeMoveInput input = inputs[i];
-            WorldAction action = ActionQueue.EnqueuePlayerMove(input.EntityId, input.TargetCoord, input.ClientTick);
+            if (!IntentAdapter.TryResolveMoveTarget(World, input.Intent, out GridCoord targetCoord, out MoveResult rejectResult))
+            {
+                input.Complete(AuthoritativePlayerInputStatus.Rejected, rejectResult);
+                continue;
+            }
+
+            WorldAction action = ActionQueue.EnqueuePlayerMove(input.EntityId, targetCoord, input.ClientTick);
             pendingMoveInputs[action.ActionId] = input;
         }
 
@@ -97,7 +104,7 @@ public sealed class AuthoritativeWorldTickRunner
         {
             if (ruleResult.ActionResults.TryGetValue(pair.Key, out MoveResult result))
             {
-                pair.Value.Complete(result);
+                pair.Value.Complete(AuthoritativePlayerInputStatus.Resolved, result);
                 pendingMoveInputs.Remove(pair.Key);
             }
         }
@@ -157,6 +164,7 @@ public sealed class AuthoritativeWorldTickRunner
     {
         var actionById = actions.ToDictionary(action => action.ActionId);
         var recorded = new HashSet<string>();
+        RecordRotatePivotAnimationMetadata(result, recorded);
         RecordDeferredOutputAnimationMetadata(serverTick, actions, result, recorded);
         if (result.ProposalResults.Count == 0)
         {
@@ -189,6 +197,42 @@ public sealed class AuthoritativeWorldTickRunner
                 kind,
                 MotionKindStyleKey(kind),
                 ResolveAnimationDirection(proposalResult.Proposal, actionById)));
+        }
+    }
+
+    private void RecordRotatePivotAnimationMetadata(StateDrivenRuleExecutionResult result, HashSet<string> recorded)
+    {
+        if (result.AnimationMetadata.Count == 0)
+        {
+            return;
+        }
+
+        var committedMoveEntities = new HashSet<long>();
+        for (int i = 0; i < result.ProposalResults.Count; i++)
+        {
+            CommitProposalResult proposalResult = result.ProposalResults[i];
+            if (proposalResult.Accepted && proposalResult.Proposal.Kind == CommitProposalKind.MoveEntity)
+            {
+                committedMoveEntities.Add(proposalResult.Proposal.EntityId);
+            }
+        }
+
+        for (int i = 0; i < result.AnimationMetadata.Count; i++)
+        {
+            WorldDeltaAnimationMetadata metadata = result.AnimationMetadata[i];
+            if (metadata.MotionKind == WorldDeltaMotionKind.RotatePivot &&
+                !committedMoveEntities.Contains(metadata.EntityId))
+            {
+                continue;
+            }
+
+            string key = metadata.EntityId + "|" + metadata.MotionKind;
+            if (!recorded.Add(key))
+            {
+                continue;
+            }
+
+            World.AddAnimationMetadata(metadata);
         }
     }
 
@@ -322,6 +366,8 @@ public sealed class AuthoritativeWorldTickRunner
             WorldDeltaMotionKind.DebugDrag => "debug_drag",
             WorldDeltaMotionKind.Spawn => "spawn",
             WorldDeltaMotionKind.Remove => "remove",
+            WorldDeltaMotionKind.RotatePivot => "rotate_pivot",
+            WorldDeltaMotionKind.RotatePivotBounce => "rotate_pivot_bounce",
             _ => "unknown"
         };
     }
@@ -337,7 +383,11 @@ public sealed class AuthoritativeWorldTickRunner
             ? "none"
             : string.Join(" | ", inputs.Select(input =>
                 "entity:" + input.EntityId +
-                " target:(" + input.TargetCoord.X + "," + input.TargetCoord.Y + ")" +
+                " beat:" + input.BeatTick +
+                " dir:" + input.Direction +
+                " status:" + input.Status +
+                " input:" + input.ClientInputId +
+                " seq:" + input.SubmitSequence +
                 " clientTick:" + input.ClientTick +
                 " before:" + SnapshotText(beforeSnapshot, input.EntityId)));
         string actionText = actions.Count == 0

@@ -10,7 +10,18 @@ public enum ComponentResultKind
     AutoMove = 2,
     Pushable = 3,
     PortConnector = 4,
-    MovementPermission = 5
+    MovementPermission = 5,
+    RotatePivot = 6
+}
+
+public static class ComponentResultIds
+{
+    public static readonly ComponentResultId Blocking = new("blocking");
+    public static readonly ComponentResultId AutoMove = new("auto_move");
+    public static readonly ComponentResultId Pushable = new("pushable");
+    public static readonly ComponentResultId PortConnector = new("port_connector");
+    public static readonly ComponentResultId MovementPermission = new("movement_permission");
+    public static readonly ComponentResultId RotatePivot = new("rotate_pivot");
 }
 
 public readonly struct ComponentResultId : IEquatable<ComponentResultId>
@@ -21,8 +32,22 @@ public readonly struct ComponentResultId : IEquatable<ComponentResultId>
     }
 
     public ComponentResultId(ComponentResultKind kind)
-        : this(kind.ToString())
+        : this(KindName(kind))
     {
+    }
+
+    private static string KindName(ComponentResultKind kind)
+    {
+        return kind switch
+        {
+            ComponentResultKind.Blocking => "blocking",
+            ComponentResultKind.AutoMove => "auto_move",
+            ComponentResultKind.Pushable => "pushable",
+            ComponentResultKind.PortConnector => "port_connector",
+            ComponentResultKind.MovementPermission => "movement_permission",
+            ComponentResultKind.RotatePivot => "rotate_pivot",
+            _ => kind.ToString()
+        };
     }
 
     public ComponentResultId(int runtimeKey, string debugName)
@@ -152,6 +177,11 @@ public readonly struct ComponentSourceContribution
     public static ComponentSourceContribution MovementPermission(long entityId, ComponentSourceKey source, bool canMove, bool canBePushed)
     {
         return new ComponentSourceContribution(entityId, ComponentResultKind.MovementPermission, source, 1, DirectionMask.None, canMove, canBePushed);
+    }
+
+    public static ComponentSourceContribution RotatePivot(long entityId, ComponentSourceKey source)
+    {
+        return new ComponentSourceContribution(entityId, ComponentResultKind.RotatePivot, source, 1, DirectionMask.None, true, true);
     }
 }
 
@@ -307,6 +337,11 @@ public sealed class ComponentStateResolver
             contributions.Add(ComponentSourceContribution.MovementPermission(entity.EntityId, source, permission.CanMove, permission.CanBePushed));
         }
 
+        if (world.HasComponent<RotatePivotComponent>(entity))
+        {
+            contributions.Add(ComponentSourceContribution.RotatePivot(entity.EntityId, source));
+        }
+
         if (world.TryGetComponent(entity, out TagSetComponent tags))
         {
             tagContributions.Add(new EffectContribution(entity.EntityId, source, EffectKind.Tag, null, tags.Tags, WorldTag.None));
@@ -416,25 +451,31 @@ public sealed class ComponentStateResolver
             RuntimeEffectInstance effect = effects[i];
             ComponentSourceKey source = ComponentSourceKey.Runtime(effect.Id);
             RuntimeEffectSpec spec = effect.Spec;
-            if (spec.Kind == RuntimeEffectKind.TemporaryBlocking)
+            if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryBlocking)))
             {
                 result.Add(ComponentSourceContribution.Blocking(spec.TargetEntityId, source));
             }
-            else if (spec.Kind == RuntimeEffectKind.TemporaryAutoMove)
+            else if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryAutoMove)))
             {
                 result.Add(ComponentSourceContribution.AutoMove(spec.TargetEntityId, source, spec.AutoMoveIntervalTicks));
             }
-            else if (spec.Kind == RuntimeEffectKind.TemporaryPushable)
+            else if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryPushable)))
             {
                 result.Add(ComponentSourceContribution.Pushable(spec.TargetEntityId, source));
             }
-            else if (spec.Kind == RuntimeEffectKind.TemporaryPort)
+            else if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryPort)))
             {
                 result.Add(ComponentSourceContribution.PortConnector(spec.TargetEntityId, source, spec.PortMask));
             }
-            else if (spec.Kind == RuntimeEffectKind.TemporaryImmobile)
+            else if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryImmobile)))
             {
                 result.Add(ComponentSourceContribution.MovementPermission(spec.TargetEntityId, source, spec.CanMove, spec.CanBePushed));
+            }
+            else if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryRotatePivot)) ||
+                spec.PayloadId.Equals(new EffectPayloadId("RotatePivot")) ||
+                spec.PayloadId.Equals(new EffectPayloadId("rotate_pivot")))
+            {
+                result.Add(ComponentSourceContribution.RotatePivot(spec.TargetEntityId, source));
             }
         }
 
@@ -448,7 +489,7 @@ public sealed class ComponentStateResolver
         {
             RuntimeEffectInstance effect = effects[i];
             RuntimeEffectSpec spec = effect.Spec;
-            if (spec.Kind == RuntimeEffectKind.TemporaryTag && spec.Tag != WorldTag.None)
+            if (spec.PayloadId.Equals(new EffectPayloadId(RuntimeEffectKind.TemporaryTag)) && spec.Tag != WorldTag.None)
             {
                 result.Add(new EffectContribution(spec.TargetEntityId, ComponentSourceKey.Runtime(effect.Id), EffectKind.Tag, null, spec.Tag, WorldTag.None));
             }
@@ -622,6 +663,26 @@ public sealed class ComponentStateResolver
         world.SetComponent(entity, new MovementPermissionComponent(canMove, canBePushed));
         world.MarkDirty(entity.EntityId);
     }
+
+    internal static void ApplyRotatePivot(GameWorld world, GameEntity entity, bool desired)
+    {
+        bool current = world.HasComponent<RotatePivotComponent>(entity);
+        if (current == desired)
+        {
+            return;
+        }
+
+        if (desired)
+        {
+            world.SetComponent(entity, new RotatePivotComponent());
+        }
+        else
+        {
+            world.RemoveComponent<RotatePivotComponent>(entity);
+        }
+
+        world.MarkDirty(entity.EntityId);
+    }
 }
 
 public interface IComponentResultResolver
@@ -672,37 +733,44 @@ public sealed class ComponentResultResolverRegistry
         registry.Register(new PushableResultResolver());
         registry.Register(new PortConnectorResultResolver());
         registry.Register(new MovementPermissionResultResolver());
+        registry.Register(new RotatePivotResultResolver());
         return registry;
     }
 }
 
 public sealed class BlockingResultResolver : IComponentResultResolver
 {
-    public ComponentResultId ResultId => new(ComponentResultKind.Blocking);
+    public ComponentResultId ResultId => ComponentResultIds.Blocking;
     public void Apply(GameWorld world, GameEntity entity, IReadOnlyList<ComponentSourceContribution> sources) => ComponentStateResolver.ApplyBlocking(world, entity, sources.Count > 0);
 }
 
 public sealed class PushableResultResolver : IComponentResultResolver
 {
-    public ComponentResultId ResultId => new(ComponentResultKind.Pushable);
+    public ComponentResultId ResultId => ComponentResultIds.Pushable;
     public void Apply(GameWorld world, GameEntity entity, IReadOnlyList<ComponentSourceContribution> sources) => ComponentStateResolver.ApplyPushable(world, entity, sources.Count > 0);
 }
 
 public sealed class AutoMoveResultResolver : IComponentResultResolver
 {
-    public ComponentResultId ResultId => new(ComponentResultKind.AutoMove);
+    public ComponentResultId ResultId => ComponentResultIds.AutoMove;
     public void Apply(GameWorld world, GameEntity entity, IReadOnlyList<ComponentSourceContribution> sources) => ComponentStateResolver.ApplyAutoMove(world, entity, sources);
 }
 
 public sealed class PortConnectorResultResolver : IComponentResultResolver
 {
-    public ComponentResultId ResultId => new(ComponentResultKind.PortConnector);
+    public ComponentResultId ResultId => ComponentResultIds.PortConnector;
     public void Apply(GameWorld world, GameEntity entity, IReadOnlyList<ComponentSourceContribution> sources) => ComponentStateResolver.ApplyPortConnector(world, entity, sources);
 }
 
 public sealed class MovementPermissionResultResolver : IComponentResultResolver
 {
-    public ComponentResultId ResultId => new(ComponentResultKind.MovementPermission);
+    public ComponentResultId ResultId => ComponentResultIds.MovementPermission;
     public void Apply(GameWorld world, GameEntity entity, IReadOnlyList<ComponentSourceContribution> sources) => ComponentStateResolver.ApplyMovementPermission(world, entity, sources);
+}
+
+public sealed class RotatePivotResultResolver : IComponentResultResolver
+{
+    public ComponentResultId ResultId => ComponentResultIds.RotatePivot;
+    public void Apply(GameWorld world, GameEntity entity, IReadOnlyList<ComponentSourceContribution> sources) => ComponentStateResolver.ApplyRotatePivot(world, entity, sources.Count > 0);
 }
 }

@@ -5,7 +5,7 @@ namespace DG.GameCore
 {
 public sealed class CommitHandlerRegistry
 {
-    private readonly Dictionary<CommitProposalKind, ICommitProposalHandler> handlers = new();
+    private readonly Dictionary<CommitProposalId, ICommitProposalHandler> handlers = new();
 
     public static CommitHandlerRegistry Default { get; } = CreateDefault();
 
@@ -16,19 +16,24 @@ public sealed class CommitHandlerRegistry
             throw new ArgumentNullException(nameof(handler));
         }
 
-        if (handlers.ContainsKey(handler.Kind))
+        if (!handler.ProposalId.IsValid)
         {
-            throw new InvalidOperationException("Duplicate commit handler: " + handler.Kind);
+            throw new InvalidOperationException("Commit handler id is empty.");
         }
 
-        handlers.Add(handler.Kind, handler);
+        if (handlers.ContainsKey(handler.ProposalId))
+        {
+            throw new InvalidOperationException("Duplicate commit handler: " + handler.ProposalId);
+        }
+
+        handlers.Add(handler.ProposalId, handler);
     }
 
-    public ICommitProposalHandler Get(CommitProposalKind kind)
+    public ICommitProposalHandler Get(CommitProposalId id)
     {
-        if (!handlers.TryGetValue(kind, out ICommitProposalHandler handler))
+        if (!handlers.TryGetValue(id, out ICommitProposalHandler handler))
         {
-            throw new InvalidOperationException("No commit handler registered for kind: " + kind);
+            throw new InvalidOperationException("No commit handler registered for id: " + id);
         }
 
         return handler;

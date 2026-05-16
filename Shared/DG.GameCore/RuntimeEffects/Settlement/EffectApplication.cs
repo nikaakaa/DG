@@ -6,7 +6,7 @@ namespace DG.GameCore
 {
 public readonly struct EffectApplication
 {
-    public EffectApplication(ActionContext context, EffectSpec spec, ActionTargetData targetData, long startTick, string stackKey)
+    public EffectApplication(ActionContext context, EffectSpec spec, ActionTargetData targetData, long startTick, string stackKey, long? expireTickOverride = null)
     {
         Context = context;
         Spec = spec ?? throw new ArgumentNullException(nameof(spec));
@@ -15,7 +15,7 @@ public readonly struct EffectApplication
         TargetBodyId = targetData.BodyId;
         TargetCell = targetData.TargetCoord;
         StartTick = startTick;
-        ExpireTick = spec.ResolveExpireTick(startTick);
+        ExpireTick = expireTickOverride ?? spec.ResolveExpireTick(startTick);
         StackKey = string.IsNullOrWhiteSpace(stackKey) ? BuildDefaultStackKey(context, spec, TargetEntityId) : stackKey;
         CausalityId = context.CausalityId;
     }

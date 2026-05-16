@@ -21,15 +21,13 @@ public sealed partial class ActionSpec : Luban.BeanBase
     {
         JObject _obj = _buf as JObject;
         SpecId = (string)_obj.GetValue("spec_id");
-        Primitive = (gamecore.ActionPrimitive)(int)_obj.GetValue("primitive");
-        StrategyId = (string)(_obj.GetValue("strategy_id") ?? "");
+        StrategyId = (string)_obj.GetValue("strategy_id");
         Source = (gamecore.ActionSourceKind)(int)_obj.GetValue("source");
         Priority = (gamecore.ActionPriority)(int)_obj.GetValue("priority");
         SourceTag = (string)_obj.GetValue("source_tag");
         AbilityTag = (string)_obj.GetValue("ability_tag");
         { var __json0 = _obj.GetValue("required_tags"); RequiredTags = new System.Collections.Generic.List<string>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { string __v0;  __v0 = (string)__e0;  RequiredTags.Add(__v0); }   }
         { var __json0 = _obj.GetValue("blocked_tags"); BlockedTags = new System.Collections.Generic.List<string>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { string __v0;  __v0 = (string)__e0;  BlockedTags.Add(__v0); }   }
-        TargetRule = (gamecore.ActionTargetRule)(int)_obj.GetValue("target_rule");
         TargetingId = (string)_obj.GetValue("targeting_id");
         HandoffPolicy = (gamecore.ActionHandoffPolicy)(int)_obj.GetValue("handoff_policy");
         BlockedResultPolicyId = (string)_obj.GetValue("blocked_result_policy_id");
@@ -52,7 +50,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
     }
 
     public readonly string SpecId;
-    public readonly gamecore.ActionPrimitive Primitive;
     public readonly string StrategyId;
     public readonly gamecore.ActionSourceKind Source;
     public readonly gamecore.ActionPriority Priority;
@@ -60,7 +57,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
     public readonly string AbilityTag;
     public readonly System.Collections.Generic.List<string> RequiredTags;
     public readonly System.Collections.Generic.List<string> BlockedTags;
-    public readonly gamecore.ActionTargetRule TargetRule;
     public readonly string TargetingId;
     public readonly gamecore.ActionHandoffPolicy HandoffPolicy;
     public readonly string BlockedResultPolicyId;
@@ -88,7 +84,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
     {
         return "{ "
         + "specId:" + SpecId + ","
-        + "primitive:" + Primitive + ","
         + "strategyId:" + StrategyId + ","
         + "source:" + Source + ","
         + "priority:" + Priority + ","
@@ -96,7 +91,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
         + "abilityTag:" + AbilityTag + ","
         + "requiredTags:" + Luban.StringUtil.CollectionToString(RequiredTags) + ","
         + "blockedTags:" + Luban.StringUtil.CollectionToString(BlockedTags) + ","
-        + "targetRule:" + TargetRule + ","
         + "targetingId:" + TargetingId + ","
         + "handoffPolicy:" + HandoffPolicy + ","
         + "blockedResultPolicyId:" + BlockedResultPolicyId + ","

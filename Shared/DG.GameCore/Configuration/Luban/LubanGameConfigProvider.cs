@@ -115,7 +115,7 @@ public sealed class LubanGameConfigProvider : IGameConfigProvider
             row.ConfigId,
             row.ArchetypeId,
             (int)row.EntityTarget,
-            row.Components.Select(component => (ComponentKind)(int)component).ToArray(),
+            row.ComponentIds.Select(component => new ComponentId(component)).ToArray(),
             row.Tags.ToArray(),
             row.DefaultAutoMoveIntervalTicks);
     }
@@ -145,7 +145,7 @@ public sealed class LubanGameConfigProvider : IGameConfigProvider
     {
         return new EffectSpec(
             row.EffectId,
-            (EffectKind)(int)row.Kind,
+            row.EffectPayloadId,
             (EffectTargetBinding)(int)row.TargetBinding,
             (EffectDurationPolicy)(int)row.DurationPolicy,
             (EffectStackPolicy)(int)row.StackPolicy,

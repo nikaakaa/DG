@@ -50,6 +50,9 @@ public sealed class DebugStructureBlockEntry
     [JsonProperty("portLocalPorts")]
     public int PortLocalPorts { get; set; }
 
+    [JsonProperty("rotatePivot")]
+    public bool RotatePivot { get; set; }
+
     [JsonProperty("runtimeBlocking")]
     public bool RuntimeBlocking { get; set; }
 
@@ -68,7 +71,7 @@ public sealed class DebugStructureBlockEntry
 
 public readonly struct DebugStructureSpawnRequest
 {
-    public DebugStructureSpawnRequest(string alias, int configId, int x, int y, Direction direction, long playerId, int autoMoveIntervalTicks, DirectionMask portLocalPorts, bool runtimeBlocking, bool runtimeAutoMove, bool runtimePushable, DirectionMask runtimePortLocalPorts, bool runtimeImmobile)
+    public DebugStructureSpawnRequest(string alias, int configId, int x, int y, Direction direction, long playerId, int autoMoveIntervalTicks, DirectionMask portLocalPorts, bool rotatePivot, bool runtimeBlocking, bool runtimeAutoMove, bool runtimePushable, DirectionMask runtimePortLocalPorts, bool runtimeImmobile)
     {
         Alias = alias ?? string.Empty;
         ConfigId = configId;
@@ -78,6 +81,7 @@ public readonly struct DebugStructureSpawnRequest
         PlayerId = playerId;
         AutoMoveIntervalTicks = Math.Max(1, autoMoveIntervalTicks);
         PortLocalPorts = portLocalPorts;
+        RotatePivot = rotatePivot;
         RuntimeBlocking = runtimeBlocking;
         RuntimeAutoMove = runtimeAutoMove;
         RuntimePushable = runtimePushable;
@@ -93,6 +97,7 @@ public readonly struct DebugStructureSpawnRequest
     public long PlayerId { get; }
     public int AutoMoveIntervalTicks { get; }
     public DirectionMask PortLocalPorts { get; }
+    public bool RotatePivot { get; }
     public bool RuntimeBlocking { get; }
     public bool RuntimeAutoMove { get; }
     public bool RuntimePushable { get; }

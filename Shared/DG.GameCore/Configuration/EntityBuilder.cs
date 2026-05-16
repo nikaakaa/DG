@@ -27,6 +27,7 @@ public static class EntityBuilder
         }
 
         ApplyComponents(world, provider, entity, archetype, spawn);
+        ApplySpawnOverrides(world, entity, spawn);
         ApplyTags(world, entity, archetype);
         world.ResolveComponentResults();
         return true;
@@ -69,6 +70,14 @@ public static class EntityBuilder
         if (tags != WorldTag.None)
         {
             world.AddStaticTagSource(entity.EntityId, ComponentSourceKey.Static(entity.EntityId), tags);
+        }
+    }
+
+    private static void ApplySpawnOverrides(GameWorld world, GameEntity entity, EntitySpawnSpec spawn)
+    {
+        if (spawn.RotatePivot)
+        {
+            world.AddStaticComponentSource(ComponentSourceContribution.RotatePivot(entity.EntityId, ComponentSourceKey.Static(entity.EntityId)));
         }
     }
 

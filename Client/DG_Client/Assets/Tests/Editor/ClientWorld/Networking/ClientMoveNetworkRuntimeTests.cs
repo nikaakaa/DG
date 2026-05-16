@@ -5,6 +5,7 @@ using DG.Map;
 using Fantasy;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace DG.EditorTests
 {
@@ -277,6 +278,122 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void PendingInput_RecordDoesNotModifyMirrorCoord()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            ClientMoveNetworkRuntime.RecordPendingInput(100, 1, 7, Direction.Right, 22);
+
+            Assert.AreEqual(1, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsTrue(ClientMoveNetworkRuntime.TryGetPendingInput(100, out PendingPlayerInput pending));
+            Assert.AreEqual(Direction.Right, pending.Direction);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
+            Assert.AreEqual(new Vector2Int(0, 0), coord);
+        }
+
+        [Test]
+        public void InputIntentSource_CreatesMoveIntentFromInputSystemVector()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            ClientMoveNetworkRuntime.ApplyJoinedPlayer(1, 0, 0);
+            GameObject gameObject = new GameObject("InputIntentSource");
+            var source = gameObject.AddComponent<ClientInputIntentSource>();
+
+            ClientDeclaredInputIntent intent = source.CreateMoveIntent(Vector2.right, 100, 7, 22);
+
+            Assert.AreEqual(ClientInputKind.Move, intent.InputKind);
+            Assert.AreEqual(ClientInputSourceKind.Player, intent.SourceKind);
+            Assert.AreEqual(Direction.Right, intent.Direction);
+            Assert.AreEqual(ClientRhythmJudge.None, intent.RhythmJudge);
+            Assert.AreEqual(1, intent.ActorEntityId);
+        }
+
+        [Test]
+        public void PendingIntent_RecordDoesNotModifyMirrorCoord()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            ClientMoveNetworkRuntime.RecordPendingIntent(103, 1, 7, Direction.Right, 22);
+
+            Assert.AreEqual(1, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsTrue(ClientMoveNetworkRuntime.TryGetPendingInput(103, out PendingPlayerInput pending));
+            Assert.AreEqual(ClientInputKind.Move, pending.InputKind);
+            Assert.AreEqual(ClientInputSourceKind.Player, pending.SourceKind);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
+            Assert.AreEqual(new Vector2Int(0, 0), coord);
+        }
+
+        [Test]
+        public void PendingInput_RejectedStatusClearsWithoutMirrorChange()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            ClientMoveNetworkRuntime.RecordPendingInput(101, 1, 7, Direction.Right, 22);
+
+            ClientMoveNetworkRuntime.ResolvePendingInput(101, (int)ClientPlayerInputStatus.Rejected);
+
+            Assert.AreEqual(0, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsFalse(ClientMoveNetworkRuntime.TryGetPendingInput(101, out _));
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
+            Assert.AreEqual(new Vector2Int(0, 0), coord);
+        }
+
+        [Test]
+        public void PendingInput_ReplacedAndExpiredStatusClearsWithoutMirrorChange()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            ClientMoveNetworkRuntime.RecordPendingInput(104, 1, 7, Direction.Right, 22);
+            ClientMoveNetworkRuntime.RecordPendingInput(105, 1, 8, Direction.Left, 23);
+
+            ClientMoveNetworkRuntime.ResolvePendingInput(104, (int)ClientPlayerInputStatus.Replaced);
+            ClientMoveNetworkRuntime.ResolvePendingInput(105, (int)ClientPlayerInputStatus.Expired);
+
+            Assert.AreEqual(0, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
+            Assert.AreEqual(new Vector2Int(0, 0), coord);
+        }
+
+        [Test]
+        public void ApplyWorldDelta_ClearsResolvedPendingInputByServerTick()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            ClientMoveNetworkRuntime.RecordPendingInput(102, 1, 4, Direction.Right, 22);
+
+            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(4, new[]
+            {
+                new G2C_WorldEntityState
+                {
+                    EntityId = 1,
+                    ConfigId = DefaultWorldConfig.PlayerConfigId,
+                    ArchetypeId = DefaultWorldConfig.PlayerArchetypeId,
+                    EntityTarget = DefaultWorldConfig.PlayerTarget,
+                    X = 1,
+                    Y = 0,
+                    Direction = (int)Direction.Right,
+                    HasCollider = true,
+                    Blocking = true,
+                    PlayerControlled = true
+                }
+            }, new List<long>());
+
+            Assert.IsTrue(applied);
+            Assert.AreEqual(0, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
+            Assert.AreEqual(new Vector2Int(1, 0), coord);
+        }
+
+        [Test]
         public void DebugSubmitter_NoSessionCannotSubmit()
         {
             GameObject gameObject = new GameObject("Submitter");
@@ -406,6 +523,47 @@ namespace DG.EditorTests
 
             Assert.AreEqual(DGDebugPanelTool.Delete, panel.CurrentTool);
             Assert.AreEqual(0, panel.SelectedEntityId);
+        }
+
+        [Test]
+        public void DGDebugPanelController_SubmitSpawnRequestsAppliesStructureRuntimeEffects()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            GameObject submitterObject = new GameObject("Submitter");
+            var submitter = submitterObject.AddComponent<ClientMoveNetworkSubmitter>();
+            typeof(ClientMoveNetworkSubmitter)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(submitter, runner);
+            typeof(ClientMoveNetworkSubmitter)
+                .GetField("serverAuthoritative", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(submitter, false);
+            GameObject panelObject = new GameObject("DebugPanel");
+            var panel = panelObject.AddComponent<DGDebugPanelController>();
+            typeof(DGDebugPanelController)
+                .GetField("runner", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(panel, runner);
+            typeof(DGDebugPanelController)
+                .GetField("networkSubmitter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .SetValue(panel, submitter);
+            var request = new DebugStructureSpawnRequest("runtime_pushable", DefaultWorldConfig.BlockerConfigId, 2, 0, Direction.None, 0, 1, DirectionMask.None, false, false, false, true, DirectionMask.None, false);
+
+            typeof(DGDebugPanelController)
+                .GetMethod("SubmitSpawnRequests", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Invoke(panel, new object[] { new[] { request } });
+
+            EntitySnapshot spawned = default;
+            foreach (EntitySnapshot snapshot in runner.Context.ClientMapWorld.CreateSnapshot())
+            {
+                if (snapshot.X == 2 && snapshot.Y == 0)
+                {
+                    spawned = snapshot;
+                    break;
+                }
+            }
+
+            Assert.AreNotEqual(0, spawned.EntityId);
+            Assert.IsTrue(runner.Context.ClientMapWorld.CoreWorld.TryGetEntity(spawned.EntityId, out GameEntity entity));
+            Assert.IsTrue(runner.Context.ClientMapWorld.CoreWorld.HasComponent<PushableComponent>(entity));
         }
 
         [Test]
@@ -683,6 +841,7 @@ namespace DG.EditorTests
                         RuntimeBlocking = true,
                         RuntimeAutoMove = true,
                         RuntimePushable = true,
+                        RotatePivot = true,
                         RuntimePortLocalPorts = (int)(DirectionMask.Up | DirectionMask.Right),
                         RuntimeImmobile = true,
                         AutoMoveIntervalTicks = 3
@@ -699,6 +858,7 @@ namespace DG.EditorTests
             Assert.IsTrue(requests[0].RuntimeBlocking);
             Assert.IsTrue(requests[0].RuntimeAutoMove);
             Assert.IsTrue(requests[0].RuntimePushable);
+            Assert.IsTrue(requests[0].RotatePivot);
             Assert.AreEqual(DirectionMask.Up | DirectionMask.Right, requests[0].RuntimePortLocalPorts);
             Assert.IsTrue(requests[0].RuntimeImmobile);
             Assert.AreEqual(3, requests[0].AutoMoveIntervalTicks);
@@ -735,6 +895,52 @@ namespace DG.EditorTests
             Assert.AreEqual(0, document.Entries[0].RuntimePortLocalPorts);
             Assert.IsFalse(document.Entries[0].RuntimeBlocking);
             Assert.IsFalse(document.Entries[0].RuntimePushable);
+        }
+
+        [Test]
+        public void DebugStructureBlockStorage_SerializesRotatePivotFromSnapshot()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(71, new GridCoord(2, 3))));
+            Assert.IsTrue(world.TryGetEntity(71, out GameEntity entity));
+            world.SetComponent(entity, new RotatePivotComponent());
+
+            DebugStructureBlockDocument document = DebugStructureBlockStorage.FromSnapshots("pivot", world.CreateSnapshot());
+            IReadOnlyList<DebugStructureSpawnRequest> requests = DebugStructureBlockStorage.CreateSpawnRequests(document, 5, 6);
+
+            Assert.AreEqual(1, document.Entries.Count);
+            Assert.IsTrue(document.Entries[0].RotatePivot);
+            Assert.AreEqual(1, requests.Count);
+            Assert.IsTrue(requests[0].RotatePivot);
+        }
+
+        [Test]
+        public void ClientMoveNetworkRuntime_AppliesRotatePivotFromWorldState()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            var state = new G2C_WorldEntityState
+            {
+                EntityId = 81,
+                ConfigId = DefaultWorldConfig.PushableBlockerConfigId,
+                ArchetypeId = DefaultWorldConfig.PushableBlockerArchetypeId,
+                EntityTarget = DefaultWorldConfig.BlockerTarget,
+                X = 3,
+                Y = 4,
+                HasCollider = true,
+                Blocking = true,
+                Pushable = true,
+                RotatePivot = true,
+                CanMove = true,
+                CanBePushed = true,
+                AutoMoveIntervalTicks = 1
+            };
+
+            Assert.IsTrue(ClientMoveNetworkRuntime.ApplyWorldSnapshot(12, new[] { state }));
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetSnapshot(81, out EntitySnapshot snapshot));
+            Assert.IsTrue(snapshot.RotatePivot);
+            Assert.IsTrue(runner.Context.ClientMapWorld.CoreWorld.TryGetEntity(81, out GameEntity entity));
+            Assert.IsTrue(runner.Context.ClientMapWorld.CoreWorld.HasComponent<RotatePivotComponent>(entity));
         }
 
         [Test]

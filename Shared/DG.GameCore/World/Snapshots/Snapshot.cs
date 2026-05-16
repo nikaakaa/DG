@@ -24,7 +24,9 @@ public enum WorldDeltaMotionKind
     AutoMove = 3,
     DebugDrag = 4,
     Spawn = 5,
-    Remove = 6
+    Remove = 6,
+    RotatePivot = 7,
+    RotatePivotBounce = 8
 }
 
 public readonly struct WorldDeltaAnimationMetadata
@@ -35,12 +37,24 @@ public readonly struct WorldDeltaAnimationMetadata
     }
 
     public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Direction direction)
+        : this(entityId, serverTick, motionKind, styleKey, direction, 0, default, default, default, RotatePivotDirection.None, false, default)
+    {
+    }
+
+    public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Direction direction, long pivotEntityId, GridCoord pivotCoord, GridCoord fromCoord, GridCoord toCoord, RotatePivotDirection rotateDirection, bool bounce, GridCoord impactCoord)
     {
         EntityId = entityId;
         ServerTick = serverTick;
         MotionKind = motionKind;
         StyleKey = styleKey ?? string.Empty;
         Direction = direction;
+        PivotEntityId = pivotEntityId;
+        PivotCoord = pivotCoord;
+        FromCoord = fromCoord;
+        ToCoord = toCoord;
+        RotateDirection = rotateDirection;
+        Bounce = bounce;
+        ImpactCoord = impactCoord;
     }
 
     public long EntityId { get; }
@@ -48,6 +62,13 @@ public readonly struct WorldDeltaAnimationMetadata
     public WorldDeltaMotionKind MotionKind { get; }
     public string StyleKey { get; }
     public Direction Direction { get; }
+    public long PivotEntityId { get; }
+    public GridCoord PivotCoord { get; }
+    public GridCoord FromCoord { get; }
+    public GridCoord ToCoord { get; }
+    public RotatePivotDirection RotateDirection { get; }
+    public bool Bounce { get; }
+    public GridCoord ImpactCoord { get; }
 }
 
 public readonly struct EntitySnapshot
@@ -58,6 +79,11 @@ public readonly struct EntitySnapshot
     }
 
     public EntitySnapshot(long entityId, int configId, int archetypeId, int entityTarget, int x, int y, Direction direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, int autoMoveIntervalTicks, bool playerControlled, bool pushable, DirectionMask portLocalPorts, bool hasMovementPermission, bool canMove, bool canBePushed, long serverTick)
+        : this(entityId, configId, archetypeId, entityTarget, x, y, direction, hasCollider, blocking, bouncable, autoMove, autoMoveIntervalTicks, playerControlled, pushable, portLocalPorts, false, hasMovementPermission, canMove, canBePushed, serverTick)
+    {
+    }
+
+    public EntitySnapshot(long entityId, int configId, int archetypeId, int entityTarget, int x, int y, Direction direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, int autoMoveIntervalTicks, bool playerControlled, bool pushable, DirectionMask portLocalPorts, bool rotatePivot, bool hasMovementPermission, bool canMove, bool canBePushed, long serverTick)
     {
         EntityId = entityId;
         ConfigId = configId;
@@ -74,6 +100,7 @@ public readonly struct EntitySnapshot
         PlayerControlled = playerControlled;
         Pushable = pushable;
         PortLocalPorts = portLocalPorts;
+        RotatePivot = rotatePivot;
         HasMovementPermission = hasMovementPermission;
         CanMove = !hasMovementPermission || canMove;
         CanBePushed = !hasMovementPermission || canBePushed;
@@ -95,6 +122,7 @@ public readonly struct EntitySnapshot
     public bool PlayerControlled { get; }
     public bool Pushable { get; }
     public DirectionMask PortLocalPorts { get; }
+    public bool RotatePivot { get; }
     public bool HasMovementPermission { get; }
     public bool CanMove { get; }
     public bool CanBePushed { get; }

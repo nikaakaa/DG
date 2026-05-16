@@ -1,17 +1,4 @@
 <module name="gamecore">
-    <enum name="ComponentKind">
-        <var name="Position" value="1"/>
-        <var name="Direction" value="2"/>
-        <var name="Collider" value="3"/>
-        <var name="Blocking" value="4"/>
-        <var name="Bouncable" value="5"/>
-        <var name="AutoMove" value="6"/>
-        <var name="PlayerControl" value="7"/>
-        <var name="PushOnEnter" value="8"/>
-        <var name="Pushable" value="9"/>
-        <var name="PortConnector" value="10"/>
-    </enum>
-
     <enum name="EntityTarget">
         <var name="All" value="0"/>
         <var name="Player" value="1"/>
@@ -25,23 +12,6 @@
         <var name="Right" value="2"/>
         <var name="Up" value="3"/>
         <var name="Down" value="4"/>
-    </enum>
-
-    <enum name="ActionPrimitive">
-        <var name="Move" value="1"/>
-        <var name="Spawn" value="2"/>
-        <var name="Remove" value="3"/>
-        <var name="SetComponentResult" value="4"/>
-        <var name="ApplyRuntimeEffect" value="5"/>
-    </enum>
-
-    <enum name="EffectKind">
-        <var name="Blocking" value="1"/>
-        <var name="AutoMove" value="2"/>
-        <var name="Pushable" value="3"/>
-        <var name="PortConnector" value="4"/>
-        <var name="MovementPermission" value="5"/>
-        <var name="Tag" value="6"/>
     </enum>
 
     <enum name="EffectDurationPolicy">
@@ -82,14 +52,6 @@
         <var name="Player" value="2"/>
         <var name="Mechanism" value="3"/>
         <var name="Auto" value="4"/>
-    </enum>
-
-    <enum name="ActionTargetRule">
-        <var name="None" value="0"/>
-        <var name="TargetCoordOneStep" value="1"/>
-        <var name="TargetCoordAny" value="2"/>
-        <var name="DirectionFromRequest" value="3"/>
-        <var name="DirectionFromComponent" value="4"/>
     </enum>
 
     <enum name="TargetDirectionSource">
@@ -188,7 +150,7 @@
         <var name="config_id" type="int"/>
         <var name="archetype_id" type="int"/>
         <var name="entity_target" type="EntityTarget"/>
-        <var name="components" type="(list#sep=,),ComponentKind"/>
+        <var name="component_ids" type="(list#sep=,),string"/>
         <var name="tags" type="(list#sep=,),string"/>
         <var name="default_auto_move_interval_ticks" type="int"/>
     </bean>
@@ -272,7 +234,6 @@
 
     <bean name="ActionSpec">
         <var name="spec_id" type="string"/>
-        <var name="primitive" type="ActionPrimitive"/>
         <var name="strategy_id" type="string"/>
         <var name="source" type="ActionSourceKind"/>
         <var name="priority" type="ActionPriority"/>
@@ -280,7 +241,6 @@
         <var name="ability_tag" type="string"/>
         <var name="required_tags" type="(list#sep=,),string"/>
         <var name="blocked_tags" type="(list#sep=,),string"/>
-        <var name="target_rule" type="ActionTargetRule"/>
         <var name="targeting_id" type="string"/>
         <var name="handoff_policy" type="ActionHandoffPolicy"/>
         <var name="blocked_result_policy_id" type="string"/>
@@ -299,7 +259,7 @@
 
     <bean name="EffectSpec">
         <var name="effect_id" type="string"/>
-        <var name="kind" type="EffectKind"/>
+        <var name="effect_payload_id" type="string"/>
         <var name="target_binding" type="EffectTargetBinding"/>
         <var name="duration_policy" type="EffectDurationPolicy"/>
         <var name="stack_policy" type="EffectStackPolicy"/>

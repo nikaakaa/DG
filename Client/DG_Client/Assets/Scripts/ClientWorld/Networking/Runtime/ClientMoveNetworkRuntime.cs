@@ -6,6 +6,16 @@ using UnityEngine;
 
 namespace DG.Map
 {
+    public enum ClientPlayerInputStatus
+    {
+        Buffered = 1,
+        Replaced = 2,
+        Consumed = 3,
+        Expired = 4,
+        Rejected = 5,
+        Resolved = 6
+    }
+
     public static class ClientMoveNetworkRuntime
     {
         public static ClientWorldRunner Runner { get; private set; }
@@ -15,6 +25,9 @@ namespace DG.Map
         public static bool HasDemoMovingEntity { get; private set; }
         public static long LastWorldServerTick { get; private set; }
         public static string LastRuleFailureReason { get; private set; } = string.Empty;
+        private static readonly Dictionary<long, PendingPlayerInput> PendingInputs = new Dictionary<long, PendingPlayerInput>();
+
+        public static int PendingInputCount => PendingInputs.Count;
 
         public static void SetRunner(ClientWorldRunner runner)
         {
@@ -85,6 +98,7 @@ namespace DG.Map
             IReadOnlyList<EntitySnapshot> after = Runner.Context.ClientMapWorld.CreateSnapshot();
             IReadOnlyList<ClientAnimationMetadata> convertedMetadata = ConvertAnimationMetadata(animationMetadata);
             Runner.Context.AnimationLayer.CaptureSnapshotApply(serverTick, before, after, convertedMetadata);
+            ClearResolvedInputs(serverTick);
             return allApplied;
         }
 
@@ -94,6 +108,9 @@ namespace DG.Map
         }
 
         public static bool ApplyWorldEntity(long serverTick, long entityId, int configId, int archetypeId, int entityTarget, int x, int y, int direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, int autoMoveIntervalTicks, bool playerControlled, bool pushable, int portLocalPorts, bool hasMovementPermission, bool canMove, bool canBePushed)
+            => ApplyWorldEntity(serverTick, entityId, configId, archetypeId, entityTarget, x, y, direction, hasCollider, blocking, bouncable, autoMove, autoMoveIntervalTicks, playerControlled, pushable, portLocalPorts, false, hasMovementPermission, canMove, canBePushed);
+
+        public static bool ApplyWorldEntity(long serverTick, long entityId, int configId, int archetypeId, int entityTarget, int x, int y, int direction, bool hasCollider, bool blocking, bool bouncable, bool autoMove, int autoMoveIntervalTicks, bool playerControlled, bool pushable, int portLocalPorts, bool rotatePivot, bool hasMovementPermission, bool canMove, bool canBePushed)
         {
             if (Runner == null || Runner.Context == null)
             {
@@ -117,6 +134,7 @@ namespace DG.Map
                 playerControlled,
                 pushable,
                 (DirectionMask)portLocalPorts,
+                rotatePivot,
                 hasMovementPermission,
                 canMove,
                 canBePushed,
@@ -160,6 +178,7 @@ namespace DG.Map
                     entity.PlayerControlled,
                     entity.Pushable,
                     entity.PortLocalPorts,
+                    entity.RotatePivot,
                     entity.HasMovementPermission,
                     entity.CanMove,
                     entity.CanBePushed);
@@ -204,7 +223,14 @@ namespace DG.Map
                     item.ServerTick,
                     ConvertMotionKind(item.MotionKind),
                     item.StyleKey,
-                    (Direction)item.Direction));
+                    (Direction)item.Direction,
+                    item.PivotEntityId,
+                    new Vector2Int(item.PivotX, item.PivotY),
+                    new Vector2Int(item.FromX, item.FromY),
+                    new Vector2Int(item.ToX, item.ToY),
+                    (RotatePivotDirection)item.RotateDirection,
+                    item.Bounce,
+                    new Vector2Int(item.ImpactX, item.ImpactY)));
             }
 
             return result;
@@ -220,6 +246,8 @@ namespace DG.Map
                 (int)WorldDeltaMotionKind.DebugDrag => ClientAnimationMotionKind.DebugDrag,
                 (int)WorldDeltaMotionKind.Spawn => ClientAnimationMotionKind.Spawn,
                 (int)WorldDeltaMotionKind.Remove => ClientAnimationMotionKind.Remove,
+                (int)WorldDeltaMotionKind.RotatePivot => ClientAnimationMotionKind.RotatePivot,
+                (int)WorldDeltaMotionKind.RotatePivotBounce => ClientAnimationMotionKind.RotatePivotBounce,
                 _ => ClientAnimationMotionKind.Unknown
             };
         }
@@ -233,11 +261,101 @@ namespace DG.Map
             HasDemoMovingEntity = false;
             LastWorldServerTick = 0;
             LastRuleFailureReason = string.Empty;
+            PendingInputs.Clear();
         }
 
         public static void RecordRuleFailure(string reason)
         {
             LastRuleFailureReason = reason ?? string.Empty;
         }
+
+        public static void RecordPendingInput(long clientInputId, long entityId, long beatTick, Direction direction, long clientTick)
+        {
+            RecordPendingIntent(clientInputId, entityId, beatTick, direction, clientTick);
+        }
+
+        public static void RecordPendingIntent(long clientInputId, long entityId, long beatTick, Direction direction, long clientTick)
+        {
+            PendingInputs[clientInputId] = new PendingPlayerInput(clientInputId, entityId, beatTick, direction, clientTick, ClientInputKind.Move, ClientInputSourceKind.Player);
+        }
+
+        public static bool TryGetPendingInput(long clientInputId, out PendingPlayerInput input)
+        {
+            return PendingInputs.TryGetValue(clientInputId, out input);
+        }
+
+        public static void ResolvePendingInput(long clientInputId, int inputStatus)
+        {
+            if (inputStatus == 0)
+            {
+                return;
+            }
+
+            PendingInputs.Remove(clientInputId);
+        }
+
+        private static void ClearResolvedInputs(long serverTick)
+        {
+            if (PendingInputs.Count == 0)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<long, PendingPlayerInput> pair in new List<KeyValuePair<long, PendingPlayerInput>>(PendingInputs))
+            {
+                if (pair.Value.BeatTick <= serverTick)
+                {
+                    PendingInputs.Remove(pair.Key);
+                }
+            }
+        }
+    }
+
+    public readonly struct PendingPlayerInput
+    {
+        public PendingPlayerInput(long clientInputId, long entityId, long beatTick, Direction direction, long clientTick)
+            : this(clientInputId, entityId, beatTick, direction, clientTick, ClientInputKind.Move, ClientInputSourceKind.Player)
+        {
+        }
+
+        public PendingPlayerInput(long clientInputId, long entityId, long beatTick, Direction direction, long clientTick, ClientInputKind inputKind, ClientInputSourceKind sourceKind)
+        {
+            ClientInputId = clientInputId;
+            EntityId = entityId;
+            BeatTick = beatTick;
+            Direction = direction;
+            ClientTick = clientTick;
+            InputKind = inputKind;
+            SourceKind = sourceKind;
+        }
+
+        public long ClientInputId { get; }
+        public long EntityId { get; }
+        public long BeatTick { get; }
+        public Direction Direction { get; }
+        public long ClientTick { get; }
+        public ClientInputKind InputKind { get; }
+        public ClientInputSourceKind SourceKind { get; }
+    }
+
+    public enum ClientInputKind
+    {
+        None = 0,
+        Move = 1,
+        Wait = 2,
+        Attack = 3,
+        Interact = 4,
+        Skill = 5,
+        Cancel = 6
+    }
+
+    public enum ClientInputSourceKind
+    {
+        None = 0,
+        Player = 1,
+        Debug = 2,
+        AI = 3,
+        Replay = 4,
+        Script = 5
     }
 }
