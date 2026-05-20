@@ -6,13 +6,15 @@ namespace Fantasy;
 public sealed class DebugWorldEditService
 {
     private readonly GameWorld World;
+    private readonly AuthoritativeInputQueue InputQueue;
     private readonly IGameConfigProvider ConfigProvider;
     private readonly long FirstDebugEntityId;
     private long nextDebugEntityId;
 
-    public DebugWorldEditService(GameWorld world, IGameConfigProvider? configProvider = null, long firstDebugEntityId = 800000000)
+    public DebugWorldEditService(GameWorld world, AuthoritativeInputQueue inputQueue, IGameConfigProvider? configProvider = null, long firstDebugEntityId = 800000000)
     {
         World = world;
+        InputQueue = inputQueue;
         ConfigProvider = configProvider ?? FallbackGameConfigProvider.Instance;
         FirstDebugEntityId = firstDebugEntityId;
         nextDebugEntityId = firstDebugEntityId;
@@ -25,192 +27,93 @@ public sealed class DebugWorldEditService
         return requestedEntityId > 0 ? requestedEntityId : AllocateEntityId();
     }
 
-    public bool TrySpawn(long requestedEntityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, out long entityId, out string reason)
-        => TrySpawn(requestedEntityId, configId, coord, direction, playerId, autoMoveIntervalTicks, false, out entityId, out reason);
+    public AuthoritativeDebugActionInput EnqueueSpawn(long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks)
+        => EnqueueSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, false);
 
-    public bool TrySpawn(long requestedEntityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot, out long entityId, out string reason)
+    public AuthoritativeDebugActionInput EnqueueSpawn(long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot)
     {
-        entityId = ResolveSpawnEntityId(requestedEntityId);
         if (!Enabled)
         {
-            reason = "debug edit disabled";
-            return false;
+            return CreateRejectedInput(entityId, "debug edit disabled");
         }
 
-        if (configId <= 0)
-        {
-            reason = "invalid config id";
-            return false;
-        }
-
-        if (World.TryGetEntity(entityId, out _))
-        {
-            reason = "entity already exists";
-            return false;
-        }
-
-        var spawn = new EntitySpawnSpec(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks <= 0 ? 1 : autoMoveIntervalTicks, rotatePivot);
-        if (!World.AddEntity(spawn))
-        {
-            reason = "spawn failed";
-            return false;
-        }
-
-        reason = string.Empty;
-        return true;
+        return InputQueue.EnqueueDebugSpawn(entityId, configId, coord, direction, playerId, autoMoveIntervalTicks, rotatePivot);
     }
 
-    public bool TryMove(long entityId, GridCoord coord, out GridCoord finalCoord, out string reason)
+    public AuthoritativeDebugActionInput EnqueueMove(long entityId, GridCoord coord)
     {
-        finalCoord = coord;
         if (!Enabled)
         {
-            reason = "debug edit disabled";
-            return false;
+            return CreateRejectedInput(entityId, "debug edit disabled");
         }
 
-        if (!World.TryGetEntity(entityId, out GameEntity entity))
-        {
-            reason = "entity not found";
-            return false;
-        }
-
-        World.MoveEntity(entity, coord);
-        reason = string.Empty;
-        return true;
+        return InputQueue.EnqueueDebugMove(entityId, coord);
     }
 
-    public bool TryRemove(long entityId, out string reason)
+    public AuthoritativeDebugActionInput EnqueueRemove(long entityId)
     {
         if (!Enabled)
         {
-            reason = "debug edit disabled";
-            return false;
+            return CreateRejectedInput(entityId, "debug edit disabled");
         }
 
-        if (!World.RemoveEntity(entityId))
-        {
-            reason = "entity not found";
-            return false;
-        }
-
-        reason = string.Empty;
-        return true;
+        return InputQueue.EnqueueDebugRemove(entityId);
     }
 
-    public bool TrySetTag(long entityId, WorldTag tag, bool enabled, out string reason)
+    public AuthoritativeDebugActionInput EnqueueSetTag(long entityId, WorldTag tag, bool enabled)
     {
         if (!Enabled)
         {
-            reason = "debug edit disabled";
-            return false;
+            return CreateRejectedInput(entityId, "debug edit disabled");
         }
 
-        if (tag == WorldTag.None)
-        {
-            reason = "invalid tag";
-            return false;
-        }
-
-        if (!World.TryGetEntity(entityId, out GameEntity entity))
-        {
-            reason = "entity not found";
-            return false;
-        }
-
-        if (enabled)
-        {
-            World.AddTag(entity, tag);
-        }
-        else
-        {
-            World.RemoveTag(entity, tag);
-        }
-
-        World.MarkDirty(entityId);
-        reason = string.Empty;
-        return true;
+        return InputQueue.EnqueueDebugSetTag(entityId, tag, enabled);
     }
 
-    public bool TryApplyRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectId effectId, out string reason)
+    public AuthoritativeDebugActionInput EnqueueApplyRuntimeEffect(long entityId, RuntimeEffectKind kind, DirectionMask portMask, long expireTick)
     {
-        effectId = default;
         if (!Enabled)
         {
-            reason = "debug edit disabled";
-            return false;
+            return CreateRejectedInput(entityId, "debug edit disabled");
         }
 
-        if (!World.TryGetEntity(entityId, out _))
+        if (!TryResolveDebugEffectSpec(kind, portMask, out EffectSpec spec, out string reason))
         {
-            reason = "entity not found";
-            return false;
+            return CreateRejectedInput(entityId, reason);
         }
 
-        if (!TryResolveDebugEffectSpec(kind, portMask, out EffectSpec effectSpec, out reason))
-        {
-            return false;
-        }
-
-        ActionContext context = CreateDebugActionContext(entityId);
-        ActionTargetData target = ActionTargetData.Self(entityId, default, Direction.None);
-        EffectApplication application = new EffectApplication(context, effectSpec, target, World.ServerTick, DebugStackKey(kind, entityId), expireTick);
-        var resolver = new CommitResolver();
-        IReadOnlyList<CommitProposalResult> results = resolver.Resolve(World, new[]
-        {
-            CommitProposal.AddRuntimeEffect(WorldActionPriority.Debug, 0, application, World.ServerTick)
-        });
-        if (results.Count == 0 || !results[0].Accepted)
-        {
-            reason = results.Count == 0 ? "runtime effect commit failed" : results[0].Reason;
-            return false;
-        }
-
-        RuntimeEffectInstance instance = World.RuntimeEffects.ActiveAt(World.ServerTick)
-            .Where(effect => effect.TargetEntityId == entityId && effect.Kind == kind)
-            .OrderByDescending(effect => effect.Id.Value)
-            .First();
-        effectId = instance.Id;
-        reason = string.Empty;
-        return true;
+        return InputQueue.EnqueueDebugApplyEffect(entityId, spec.SpecId, DebugStackKey(kind, entityId), expireTick);
     }
 
-    public bool TryRemoveRuntimeEffect(long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId, out RuntimeEffectId removedEffectId, out string reason)
+    public AuthoritativeDebugActionInput EnqueueRemoveRuntimeEffect(long entityId, RuntimeEffectKind kind, RuntimeEffectId requestedEffectId)
     {
-        removedEffectId = default;
         if (!Enabled)
         {
-            reason = "debug edit disabled";
-            return false;
+            return CreateRejectedInput(entityId, "debug edit disabled");
         }
 
-        if (!World.TryGetEntity(entityId, out _))
-        {
-            reason = "entity not found";
-            return false;
-        }
-
-        RuntimeEffectId effectId = requestedEffectId.IsValid ? FindRuntimeEffect(entityId, kind, requestedEffectId) : FindRuntimeEffect(entityId, kind);
+        RuntimeEffectId effectId = requestedEffectId.IsValid
+            ? FindRuntimeEffect(entityId, kind, requestedEffectId)
+            : FindRuntimeEffect(entityId, kind);
         if (!effectId.IsValid)
         {
-            reason = "runtime effect not found";
-            return false;
+            return CreateRejectedInput(entityId, "runtime effect not found");
         }
 
-        var resolver = new CommitResolver();
-        IReadOnlyList<CommitProposalResult> results = resolver.Resolve(World, new[]
-        {
-            CommitProposal.RemoveRuntimeEffect(WorldActionPriority.Debug, 0, entityId, effectId, World.ServerTick)
-        });
-        if (results.Count == 0 || !results[0].Accepted)
-        {
-            reason = results.Count == 0 ? "runtime effect not found" : results[0].Reason;
-            return false;
-        }
+        return InputQueue.EnqueueDebugRemoveEffect(entityId, effectId);
+    }
 
-        removedEffectId = effectId;
-        reason = string.Empty;
-        return true;
+    public RuntimeEffectId FindLatestRuntimeEffect(long entityId, RuntimeEffectKind kind)
+    {
+        return FindRuntimeEffect(entityId, kind);
+    }
+
+    private static AuthoritativeDebugActionInput CreateRejectedInput(long entityId, string reason)
+    {
+        var placeholder = new WorldAction(0, WorldActionPriority.Debug, default, entityId, null, Direction.None, 0, 0, 0, 1);
+        var input = new AuthoritativeDebugActionInput(placeholder);
+        input.Complete(new MoveResult(false, entityId, default, Direction.None, MoveErrorCode.Blocked, reason, false, default, 0));
+        return input;
     }
 
     private bool TryResolveDebugEffectSpec(RuntimeEffectKind kind, DirectionMask portMask, out EffectSpec spec, out string reason)
@@ -248,11 +151,6 @@ public sealed class DebugWorldEditService
 
         reason = string.Empty;
         return true;
-    }
-
-    private ActionContext CreateDebugActionContext(long entityId)
-    {
-        return new ActionContext(0, 0, new ActionSpecId("debug_runtime_effect"), WorldActionPriority.Debug, new ActionSourceContext(ActionSourceKind.Debug, entityId, 0, WorldTag.SourceDebug), entityId, entityId, entityId, entityId, new ActionTarget(entityId, null, Direction.None), Direction.None, World.ServerTick, World.ServerTick, 1, 0, 0);
     }
 
     private static string DebugStackKey(RuntimeEffectKind kind, long entityId)

@@ -164,9 +164,7 @@ namespace DG.Map
         {
             if (!serverAuthoritative)
             {
-                RuntimeEffectId effectId = default;
-                bool success = TryApplyLocalRuntimeEffect(entityId, kind, autoMoveIntervalTicks, portMask, expireTick, out effectId, out string reason);
-                completed?.Invoke(success, reason, effectId.Value);
+                completed?.Invoke(false, "server authoritative disabled", 0);
                 return;
             }
 
@@ -625,82 +623,6 @@ namespace DG.Map
             }
 
             return entityId;
-        }
-
-        private bool TryApplyLocalRuntimeEffect(long entityId, RuntimeEffectKind kind, int autoMoveIntervalTicks, DirectionMask portMask, long expireTick, out RuntimeEffectId effectId, out string reason)
-        {
-            effectId = default;
-            reason = string.Empty;
-            if (runner == null || runner.Context == null)
-            {
-                reason = "runner unavailable";
-                return false;
-            }
-
-            GameWorld world = runner.Context.ClientMapWorld.CoreWorld;
-            if (!world.TryGetEntity(entityId, out _))
-            {
-                reason = "entity not found";
-                return false;
-            }
-
-            if (!ClientGameConfigProviderFactory.Create().TryGetEffectSpec(DebugEffectSpecId(kind, portMask), out EffectSpec spec))
-            {
-                reason = "unknown effect spec";
-                return false;
-            }
-
-            var context = new ActionContext(0, 0, "debug_runtime_effect", WorldActionPriority.Debug, new ActionSourceContext(ActionSourceKind.Debug, entityId, 0, WorldTag.SourceDebug), entityId, entityId, entityId, entityId, new ActionTarget(entityId, null, Direction.None), Direction.None, world.ServerTick, world.ServerTick, 1, 0, 0);
-            var application = new EffectApplication(context, spec, ActionTargetData.Self(entityId, default, Direction.None), world.ServerTick, "debug:" + entityId + ":" + (int)kind, expireTick);
-            IReadOnlyList<CommitProposalResult> results = new CommitResolver().Resolve(world, new[] { CommitProposal.AddRuntimeEffect(WorldActionPriority.Debug, 0, application, world.ServerTick) });
-            if (results.Count == 0 || !results[0].Accepted)
-            {
-                reason = results.Count == 0 ? "runtime effect commit failed" : results[0].Reason;
-                return false;
-            }
-
-            RuntimeEffectInstance instance = world.RuntimeEffects.ActiveAt(world.ServerTick)
-                .Where(effect => effect.TargetEntityId == entityId && effect.Kind == kind)
-                .OrderByDescending(effect => effect.Id.Value)
-                .First();
-            effectId = instance.Id;
-            return true;
-        }
-
-        private static EffectSpecId DebugEffectSpecId(RuntimeEffectKind kind, DirectionMask portMask)
-        {
-            if (kind == RuntimeEffectKind.TemporaryPort)
-            {
-                if ((portMask & DirectionMask.Left) != 0)
-                {
-                    return "temporary_port_left";
-                }
-
-                if ((portMask & DirectionMask.Right) != 0)
-                {
-                    return "temporary_port_right";
-                }
-
-                if ((portMask & DirectionMask.Up) != 0)
-                {
-                    return "temporary_port_up";
-                }
-
-                if ((portMask & DirectionMask.Down) != 0)
-                {
-                    return "temporary_port_down";
-                }
-            }
-
-            return kind switch
-            {
-                RuntimeEffectKind.TemporaryBlocking => "temporary_blocking",
-                RuntimeEffectKind.TemporaryAutoMove => "temporary_auto_move",
-                RuntimeEffectKind.TemporaryPushable => "temporary_pushable",
-                RuntimeEffectKind.TemporaryImmobile => "temporary_immobile",
-                RuntimeEffectKind.TemporaryTag => "temporary_tag_super_armor",
-                _ => string.Empty
-            };
         }
 
         private Direction ResolveDirection(long entityId, Vector2Int targetCoord)

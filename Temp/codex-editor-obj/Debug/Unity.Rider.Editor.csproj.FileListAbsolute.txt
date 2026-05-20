@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Rider.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Rider.Editor.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Rider.Editor.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Rider.Editor.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Ri.18F3507A.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Rider.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Rider.Editor.pdb

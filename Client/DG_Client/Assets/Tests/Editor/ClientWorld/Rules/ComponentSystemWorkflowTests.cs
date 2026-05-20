@@ -190,7 +190,7 @@ namespace DG.EditorTests
             Assert.AreEqual(DirectionMask.Left | DirectionMask.Right, lubanPort.LocalPorts);
             Assert.IsTrue(luban.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig conveyorOutput));
             Assert.AreEqual(new ActionSpecId("mechanism_push"), conveyorOutput.OutputSpecId);
-            Assert.AreEqual(3, conveyorOutput.OutputCostTicks);
+            Assert.AreEqual(1, conveyorOutput.OutputCostTicks);
             Assert.IsTrue(luban.TryGetPushOnEnter(DefaultWorldConfig.WindFieldConfigId, out PushOnEnterConfig windOutput));
             Assert.AreEqual(new ActionSpecId("configured_wind_push"), windOutput.OutputSpecId);
             Assert.AreEqual(2, windOutput.OutputCostTicks);

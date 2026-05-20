@@ -49,6 +49,12 @@ public sealed class WorldAction
     public IReadOnlyList<long> SubjectEntityIds { get; private set; } = Array.Empty<long>();
     public IReadOnlyList<PushOriginContext> PushOriginContexts => pushOriginContexts;
     public IReadOnlyList<long> DeferredCausalitySamples => deferredCausalitySamples;
+    public EffectSpecId EffectSpecId { get; private set; }
+    public string StackKey { get; private set; } = string.Empty;
+    public long ExpireTick { get; private set; }
+    public RuntimeEffectId RuntimeEffectId { get; private set; }
+    public WorldTag Tag { get; private set; }
+    public bool TagEnabled { get; private set; }
     private readonly List<long> deferredCausalitySamples = new();
     private readonly List<PushOriginContext> pushOriginContexts = new();
 
@@ -68,7 +74,7 @@ public sealed class WorldAction
     {
         CreatedTick = createdTick;
         CostTicks = Math.Max(1, costTicks);
-        ReadyTick = CreatedTick + CostTicks;
+        ReadyTick = CreatedTick;
         return this;
     }
 
@@ -98,6 +104,27 @@ public sealed class WorldAction
     public WorldAction WithSubjectEntityIds(IReadOnlyList<long> subjectEntityIds)
     {
         SubjectEntityIds = subjectEntityIds == null || subjectEntityIds.Count == 0 ? Array.Empty<long>() : subjectEntityIds.ToArray();
+        return this;
+    }
+
+    public WorldAction WithEffectParams(EffectSpecId effectSpecId, string stackKey, long expireTick)
+    {
+        EffectSpecId = effectSpecId;
+        StackKey = stackKey ?? string.Empty;
+        ExpireTick = expireTick;
+        return this;
+    }
+
+    public WorldAction WithRuntimeEffectId(RuntimeEffectId runtimeEffectId)
+    {
+        RuntimeEffectId = runtimeEffectId;
+        return this;
+    }
+
+    public WorldAction WithTagParams(WorldTag tag, bool enabled)
+    {
+        Tag = tag;
+        TagEnabled = enabled;
         return this;
     }
 
@@ -242,6 +269,22 @@ public sealed class WorldActionQueue
 
     public int Count => actions.Count;
 
+    public bool HasPendingMove(long entityId, ActionSpecId specId, Direction direction)
+    {
+        for (int i = 0; i < actions.Count; i++)
+        {
+            WorldAction action = actions[i];
+            if (action.EntityId == entityId &&
+                action.SpecId.Equals(specId) &&
+                action.Direction == direction)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public WorldAction EnqueuePlayerMove(long entityId, GridCoord targetCoord, long clientTick)
     {
         var spec = registry.Get("player_move");
@@ -278,11 +321,38 @@ public sealed class WorldActionQueue
         return action;
     }
 
+    public WorldAction EnqueueDebugApplyEffect(long entityId, EffectSpecId effectSpecId, string stackKey, long expireTick)
+    {
+        var spec = registry.Get("debug_apply_effect");
+        var action = new WorldAction(nextActionId++, spec.DefaultPriority, spec.SpecId, entityId, null, Direction.None, 0, 0, 0, spec.DefaultCostTicks)
+            .WithEffectParams(effectSpecId, stackKey, expireTick);
+        actions.Add(action);
+        return action;
+    }
+
+    public WorldAction EnqueueDebugRemoveEffect(long entityId, RuntimeEffectId runtimeEffectId)
+    {
+        var spec = registry.Get("debug_remove_effect");
+        var action = new WorldAction(nextActionId++, spec.DefaultPriority, spec.SpecId, entityId, null, Direction.None, 0, 0, 0, spec.DefaultCostTicks)
+            .WithRuntimeEffectId(runtimeEffectId);
+        actions.Add(action);
+        return action;
+    }
+
+    public WorldAction EnqueueDebugSetTag(long entityId, WorldTag tag, bool enabled)
+    {
+        var spec = registry.Get("debug_set_tag");
+        var action = new WorldAction(nextActionId++, spec.DefaultPriority, spec.SpecId, entityId, null, Direction.None, 0, 0, 0, spec.DefaultCostTicks)
+            .WithTagParams(tag, enabled);
+        actions.Add(action);
+        return action;
+    }
+
     public WorldAction EnqueueAutoMove(long entityId, long createdTick, int costTicks)
     {
         var spec = registry.Get("auto_move");
         int resolvedCost = costTicks > 0 ? costTicks : spec.DefaultCostTicks;
-        var action = new WorldAction(nextActionId++, spec.DefaultPriority, spec.SpecId, entityId, null, Direction.None, 0, createdTick, createdTick + Math.Max(1, resolvedCost), resolvedCost);
+        var action = new WorldAction(nextActionId++, spec.DefaultPriority, spec.SpecId, entityId, null, Direction.None, 0, createdTick, createdTick, resolvedCost);
         actions.Add(action);
         return action;
     }
@@ -291,7 +361,7 @@ public sealed class WorldActionQueue
     {
         var spec = registry.Get(specId);
         int resolvedCost = costTicks > 0 ? costTicks : spec.DefaultCostTicks;
-        var action = new WorldAction(nextActionId++, spec.DefaultPriority, specId, entityId, null, direction, 0, createdTick, createdTick + Math.Max(1, resolvedCost), resolvedCost);
+        var action = new WorldAction(nextActionId++, spec.DefaultPriority, specId, entityId, null, direction, 0, createdTick, createdTick, resolvedCost);
         actions.Add(action);
         return action;
     }
@@ -300,7 +370,7 @@ public sealed class WorldActionQueue
     {
         var spec = registry.Get(deferred.SpecId);
         int resolvedCost = deferred.CostTicks > 0 ? deferred.CostTicks : spec.DefaultCostTicks;
-        long readyTick = deferred.ReadyTick > deferred.CreatedTick ? deferred.ReadyTick : deferred.CreatedTick + Math.Max(1, resolvedCost);
+        long readyTick = deferred.ReadyTick >= deferred.CreatedTick ? deferred.ReadyTick : deferred.CreatedTick;
         string equivalenceKey = BuildDeferredEquivalenceKey(deferred, readyTick);
         for (int i = 0; i < actions.Count; i++)
         {
@@ -383,7 +453,12 @@ public readonly struct DeferredEnqueueResult
 
 public static class ExplicitOutputPolicies
 {
+    private static readonly Func<long, long, bool> NoRunningMovementClaim = (_, _) => false;
+
     public static int EnqueuePushOnEnterActions(GameWorld world, WorldActionQueue actionQueue, long serverTick)
+        => EnqueuePushOnEnterActions(world, actionQueue, serverTick, NoRunningMovementClaim);
+
+    public static int EnqueuePushOnEnterActions(GameWorld world, WorldActionQueue actionQueue, long serverTick, Func<long, long, bool> hasRunningMovementClaim)
     {
         int count = 0;
         var moved = new HashSet<long>();
@@ -402,7 +477,9 @@ public static class ExplicitOutputPolicies
             {
                 GameEntity target = targets[targetIndex];
                 if (target.EntityId == trigger.EntityId ||
-                    moved.Contains(target.EntityId))
+                    moved.Contains(target.EntityId) ||
+                    actionQueue.HasPendingMove(target.EntityId, output.OutputSpecId, trigger.Direction) ||
+                    hasRunningMovementClaim(target.EntityId, serverTick))
                 {
                     continue;
                 }

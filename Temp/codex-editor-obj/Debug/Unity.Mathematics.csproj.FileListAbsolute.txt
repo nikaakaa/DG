@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Mathematics.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Mathematics.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Mathematics.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Mathematics.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Ma.BF07E5D8.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Mathematics.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Mathematics.pdb

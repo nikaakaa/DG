@@ -10,7 +10,7 @@ namespace DG.Map
     {
         protected override async FTask Run(Session session, G2C_WorldDeltaNotify message)
         {
-            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(message.ServerTick, message.Entities, message.RemovedEntityIds, message.AnimationMetadata);
+            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(message.ServerTick, message.Entities, message.RemovedEntityIds, message.PresentationFacts);
             if (!applied)
             {
                 Debug.LogWarning($"[ClientWorldDelta] apply failed serverTick:{message.ServerTick} entities:{message.Entities.Count} removed:{message.RemovedEntityIds.Count}");

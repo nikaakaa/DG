@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Fantasy.Unity.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Fantasy.Unity.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Fantasy.Unity.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Fantasy.Unity.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Fantasy..6F0C40CD.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Fantasy.Unity.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Fantasy.Unity.pdb

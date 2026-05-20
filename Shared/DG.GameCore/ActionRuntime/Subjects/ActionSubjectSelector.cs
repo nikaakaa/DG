@@ -10,11 +10,6 @@ public sealed class ActionSubjectSelector
 
     public bool TryResolve(GameWorld world, ActionRequest request, GameEntity entity, ActionSpec spec, out BehaviorBody body, out string reason)
     {
-        if (spec.AllowsConnectedBodySubject)
-        {
-            return bodyResolver.TryResolve(world, entity, out body, out reason);
-        }
-
         if (request.SubjectEntityIds.Count > 1)
         {
             var members = new List<GameEntity>();
@@ -33,6 +28,11 @@ public sealed class ActionSubjectSelector
             body = new BehaviorBody(BodyResolver.BuildBodyId(members), BehaviorBodyKind.PortConnected, members);
             reason = string.Empty;
             return true;
+        }
+
+        if (spec.AllowsConnectedBodySubject)
+        {
+            return bodyResolver.TryResolve(world, entity, out body, out reason);
         }
 
         body = new BehaviorBody(entity.EntityId, BehaviorBodyKind.SingleEntity, new[] { entity });

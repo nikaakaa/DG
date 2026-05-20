@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UniTask.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UniTask.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.csproj.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.pdb

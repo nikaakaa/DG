@@ -12,18 +12,19 @@ public sealed class C2G_DebugRemoveRuntimeEffectRequestHandler : MessageRPC<C2G_
     protected override async FTask Run(Session session, C2G_DebugRemoveRuntimeEffectRequest request, G2C_DebugRemoveRuntimeEffectResponse response, Action reply)
     {
         RuntimeEffectKind kind = (RuntimeEffectKind)request.EffectKind;
-        bool success = AuthoritativeMoveWorldProvider.DebugEdit.TryRemoveRuntimeEffect(
+        RuntimeEffectId requestedEffectId = new RuntimeEffectId(request.RuntimeEffectId);
+        AuthoritativeDebugActionInput input = AuthoritativeMoveWorldProvider.DebugEdit.EnqueueRemoveRuntimeEffect(
             request.EntityId,
             kind,
-            new RuntimeEffectId(request.RuntimeEffectId),
-            out RuntimeEffectId removedEffectId,
-            out string reason);
+            requestedEffectId);
+        RuntimeEffectId removedEffectId = input.Action.RuntimeEffectId;
+        MoveResult result = await input.WaitAsync();
 
-        response.Success = success;
+        response.Success = result.Success;
         response.EntityId = request.EntityId;
         response.EffectKind = request.EffectKind;
-        response.RuntimeEffectId = removedEffectId.Value;
-        response.Reason = reason;
+        response.RuntimeEffectId = result.Success ? removedEffectId.Value : 0;
+        response.Reason = result.Reason;
 
         Log.Info(
             "[C2G_DebugRemoveRuntimeEffectRequestHandler] success:{0} entity:{1} effect:{2} effectId:{3} reason:{4}",

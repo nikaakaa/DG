@@ -54,6 +54,14 @@
         <var name="Auto" value="4"/>
     </enum>
 
+    <enum name="ActionPrimitive">
+        <var name="Move" value="1"/>
+        <var name="Spawn" value="2"/>
+        <var name="Remove" value="3"/>
+        <var name="SetComponentResult" value="4"/>
+        <var name="ApplyRuntimeEffect" value="5"/>
+    </enum>
+
     <enum name="TargetDirectionSource">
         <var name="None" value="0"/>
         <var name="Request" value="1"/>
@@ -234,7 +242,7 @@
 
     <bean name="ActionSpec">
         <var name="spec_id" type="string"/>
-        <var name="strategy_id" type="string"/>
+        <var name="primitive" type="ActionPrimitive"/>
         <var name="source" type="ActionSourceKind"/>
         <var name="priority" type="ActionPriority"/>
         <var name="source_tag" type="string"/>
@@ -254,7 +262,6 @@
         <var name="plan_rule" type="ActionPlanRule"/>
         <var name="commit_rules" type="(list#sep=,),ActionCommitRule"/>
         <var name="default_cost_ticks" type="int"/>
-        <var name="effect_spec_id" type="string"/>
     </bean>
 
     <bean name="EffectSpec">
@@ -284,6 +291,11 @@
         <var name="instant" type="bool"/>
     </bean>
 
+    <bean name="ActionPresentation">
+        <var name="action_spec_id" type="string"/>
+        <var name="fact_type" type="string"/>
+    </bean>
+
     <table name="TbEntityArchetype" index="config_id" value="EntityArchetype" input="gamecore/entity_archetype.xlsx"/>
     <table name="TbWorldSpawn" mode="list" value="WorldSpawn" input="gamecore/world_spawn.xlsx"/>
     <table name="TbPlayerSpawnRule" index="rule_id" value="PlayerSpawnRule" input="gamecore/player_spawn_rule.xlsx"/>
@@ -296,4 +308,5 @@
     <table name="TbActionSpec" index="spec_id" value="ActionSpec" input="gamecore/action_spec.xlsx"/>
     <table name="TbEffectSpec" index="effect_id" value="EffectSpec" input="*@gamecore/effect_spec.json"/>
     <table name="TbAnimationStyle" index="style_id" value="AnimationStyle" input="*@gamecore/animation_style.json"/>
+    <table name="TbActionPresentation" index="action_spec_id" value="ActionPresentation" input="*@gamecore/action_presentation.json"/>
 </module>

@@ -63,7 +63,7 @@ public sealed class DeriveActionBlockedOutcomeHandler : IBlockedOutcomeHandler
                 continue;
             }
 
-            result.Add(new DeferredAction(handoffSpecId, blocking.EntityId, subjectEntityIds, direction, serverTick, serverTick + spec.DefaultCostTicks, spec.DefaultCostTicks, request.OwnerActionId, BlockedOutcomeUtility.BuildDeferredDedupeKey(request, blocking.EntityId, subjectEntityIds, direction, serverTick)));
+            result.Add(new DeferredAction(handoffSpecId, blocking.EntityId, subjectEntityIds, direction, serverTick, serverTick, spec.DefaultCostTicks, request.OwnerActionId, BlockedOutcomeUtility.BuildDeferredDedupeKey(request, blocking.EntityId, subjectEntityIds, direction, serverTick)));
         }
 
         deferredActions = result;

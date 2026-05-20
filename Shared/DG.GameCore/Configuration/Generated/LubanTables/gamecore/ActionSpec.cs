@@ -21,7 +21,7 @@ public sealed partial class ActionSpec : Luban.BeanBase
     {
         JObject _obj = _buf as JObject;
         SpecId = (string)_obj.GetValue("spec_id");
-        StrategyId = (string)_obj.GetValue("strategy_id");
+        Primitive = (gamecore.ActionPrimitive)(int)_obj.GetValue("primitive");
         Source = (gamecore.ActionSourceKind)(int)_obj.GetValue("source");
         Priority = (gamecore.ActionPriority)(int)_obj.GetValue("priority");
         SourceTag = (string)_obj.GetValue("source_tag");
@@ -41,7 +41,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
         PlanRule = (gamecore.ActionPlanRule)(int)_obj.GetValue("plan_rule");
         { var __json0 = _obj.GetValue("commit_rules"); CommitRules = new System.Collections.Generic.List<gamecore.ActionCommitRule>((__json0 as JArray).Count); foreach(JToken __e0 in __json0) { gamecore.ActionCommitRule __v0;  __v0 = (gamecore.ActionCommitRule)(int)__e0;  CommitRules.Add(__v0); }   }
         DefaultCostTicks = (int)_obj.GetValue("default_cost_ticks");
-        EffectSpecId = (string)(_obj.GetValue("effect_spec_id") ?? "");
     }
 
     public static ActionSpec DeserializeActionSpec(JToken _buf)
@@ -50,7 +49,7 @@ public sealed partial class ActionSpec : Luban.BeanBase
     }
 
     public readonly string SpecId;
-    public readonly string StrategyId;
+    public readonly gamecore.ActionPrimitive Primitive;
     public readonly gamecore.ActionSourceKind Source;
     public readonly gamecore.ActionPriority Priority;
     public readonly string SourceTag;
@@ -70,7 +69,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
     public readonly gamecore.ActionPlanRule PlanRule;
     public readonly System.Collections.Generic.List<gamecore.ActionCommitRule> CommitRules;
     public readonly int DefaultCostTicks;
-    public readonly string EffectSpecId;
 
 
     public const int __ID__ = 645042862;
@@ -84,7 +82,7 @@ public sealed partial class ActionSpec : Luban.BeanBase
     {
         return "{ "
         + "specId:" + SpecId + ","
-        + "strategyId:" + StrategyId + ","
+        + "primitive:" + Primitive + ","
         + "source:" + Source + ","
         + "priority:" + Priority + ","
         + "sourceTag:" + SourceTag + ","
@@ -104,7 +102,6 @@ public sealed partial class ActionSpec : Luban.BeanBase
         + "planRule:" + PlanRule + ","
         + "commitRules:" + Luban.StringUtil.CollectionToString(CommitRules) + ","
         + "defaultCostTicks:" + DefaultCostTicks + ","
-        + "effectSpecId:" + EffectSpecId + ","
         + "}";
     }
 }

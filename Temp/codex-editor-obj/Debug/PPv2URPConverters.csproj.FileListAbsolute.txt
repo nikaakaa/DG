@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\PPv2URPConverters.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\PPv2URPConverters.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\PPv2URPConverters.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\PPv2URPConverters.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\PPv2URPC.3B11B184.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\PPv2URPConverters.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\PPv2URPConverters.pdb

@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.TextMeshPro.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.TextMeshPro.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.TextMeshPro.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.TextMeshPro.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Te.CCFCADDC.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.TextMeshPro.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.TextMeshPro.pdb

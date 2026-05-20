@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Burst.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Burst.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Burst.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Burst.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Bu.D7A766B9.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Burst.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Burst.pdb

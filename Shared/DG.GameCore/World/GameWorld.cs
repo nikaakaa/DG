@@ -580,9 +580,9 @@ public sealed class GameWorld
         }
     }
 
-    public void AddAnimationMetadata(WorldDeltaAnimationMetadata metadata)
+    public void AddPresentationFact(PresentationFact presentationFact)
     {
-        dirtyJournal.AddAnimationMetadata(metadata);
+        dirtyJournal.AddPresentationFact(presentationFact);
     }
 
     public WorldDelta FlushDelta()
@@ -608,9 +608,9 @@ public sealed class GameWorld
             removed.Add(removedEntityIds[i]);
         }
 
-        IReadOnlyList<WorldDeltaAnimationMetadata> metadata = dirtyJournal.PeekAnimationMetadata();
+        IReadOnlyList<PresentationFact> presentationFacts = dirtyJournal.PeekPresentationFacts();
         dirtyJournal.Clear();
-        return new WorldDelta(ServerTick, snapshots, removed, metadata);
+        return new WorldDelta(ServerTick, snapshots, removed, presentationFacts);
     }
 
     public IReadOnlyList<EntitySnapshot> CreateSnapshot()

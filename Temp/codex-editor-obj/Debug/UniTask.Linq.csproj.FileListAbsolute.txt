@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UniTask.Linq.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UniTask.Linq.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Linq.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Linq.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask..E223475B.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Linq.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Linq.pdb

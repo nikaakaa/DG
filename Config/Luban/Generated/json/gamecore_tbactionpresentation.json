@@ -1,0 +1,26 @@
+[
+  {
+    "action_spec_id": "player_move",
+    "fact_type": "EntityMoved"
+  },
+  {
+    "action_spec_id": "mechanism_push",
+    "fact_type": "EntityPushed"
+  },
+  {
+    "action_spec_id": "auto_move",
+    "fact_type": "EntityMoved"
+  },
+  {
+    "action_spec_id": "debug_move",
+    "fact_type": "EntityMoved"
+  },
+  {
+    "action_spec_id": "debug_spawn",
+    "fact_type": "EntitySpawned"
+  },
+  {
+    "action_spec_id": "debug_remove",
+    "fact_type": "EntityRemoved"
+  }
+]

@@ -125,24 +125,54 @@ message G2C_WorldEntityState
 	int32 AutoMoveIntervalTicks = 18;
 	bool RotatePivot = 19;
 }
-message G2C_WorldDeltaAnimationMetadata
+message G2C_PresentationFactMember
 {
 	int64 EntityId = 1;
+	int32 FromX = 2;
+	int32 FromY = 3;
+	int32 ToX = 4;
+	int32 ToY = 5;
+	int32 FromDirection = 6;
+	int32 ToDirection = 7;
+	int32 FromPortLocalPorts = 8;
+	int32 ToPortLocalPorts = 9;
+}
+message G2C_PresentationFactImpact
+{
+	int64 BlockerEntityId = 1;
+	int64 ImpactMemberId = 2;
+	int32 ImpactFromX = 3;
+	int32 ImpactFromY = 4;
+	int32 ImpactToX = 5;
+	int32 ImpactToY = 6;
+	int32 PushDirection = 7;
+}
+message G2C_PresentationFact
+{
+	int64 FactId = 1;
 	int64 ServerTick = 2;
-	int32 MotionKind = 3;
-	string StyleKey = 4;
-	int32 Direction = 5;
-	int64 PivotEntityId = 6;
-	int32 PivotX = 7;
-	int32 PivotY = 8;
+	int32 FactType = 3;
+	int32 ResultKind = 4;
+	int64 SourceActionId = 5;
+	int64 ClientInputId = 6;
+	int64 SourceEntityId = 7;
+	repeated int64 SubjectEntityIds = 8;
 	int32 FromX = 9;
 	int32 FromY = 10;
 	int32 ToX = 11;
 	int32 ToY = 12;
-	int32 RotateDirection = 13;
-	bool Bounce = 14;
-	int32 ImpactX = 15;
-	int32 ImpactY = 16;
+	int32 Direction = 13;
+	int64 StartTick = 14;
+	int64 ContactTick = 15;
+	int64 EndTick = 16;
+	double ContactProgress = 17;
+	int32 EffectiveCostTicks = 18;
+	int64 PivotEntityId = 19;
+	int32 PivotX = 20;
+	int32 PivotY = 21;
+	int32 RotateDirection = 22;
+	repeated G2C_PresentationFactMember Members = 23;
+	repeated G2C_PresentationFactImpact Impacts = 24;
 }
 message G2C_WorldSnapshotNotify // IMessage
 {
@@ -154,7 +184,7 @@ message G2C_WorldDeltaNotify // IMessage
 	int64 ServerTick = 1;
 	repeated G2C_WorldEntityState Entities = 2;
 	repeated int64 RemovedEntityIds = 3;
-	repeated G2C_WorldDeltaAnimationMetadata AnimationMetadata = 4;
+	repeated G2C_PresentationFact PresentationFacts = 4;
 }
 message C2G_DebugSpawnEntityRequest // IRequest,G2C_DebugSpawnEntityResponse
 {

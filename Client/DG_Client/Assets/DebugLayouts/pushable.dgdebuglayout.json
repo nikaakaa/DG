@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "name": "pushable_",
+  "anchorX": 0,
+  "anchorY": 3,
+  "entries": [
+    {
+      "alias": "entity_800000002",
+      "configId": 1002,
+      "offsetX": 0,
+      "offsetY": 0,
+      "direction": "None",
+      "playerId": 0,
+      "autoMoveIntervalTicks": 1,
+      "portLocalPorts": 0,
+      "rotatePivot": false,
+      "runtimeBlocking": false,
+      "runtimeAutoMove": false,
+      "runtimePushable": true,
+      "runtimePortLocalPorts": 0,
+      "runtimeImmobile": false
+    }
+  ]
+}

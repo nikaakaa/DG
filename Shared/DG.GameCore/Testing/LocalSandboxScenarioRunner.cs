@@ -11,7 +11,7 @@ public sealed class LocalSandboxScenarioRunner
     private readonly IGameConfigProvider provider;
     private readonly GameWorld world;
     private readonly WorldActionQueue actionQueue = new();
-    private readonly StateDrivenRuleExecutionSystem ruleSystem = new();
+    private readonly BehaviorRuntime ruleSystem = new();
     private readonly Dictionary<string, long> aliases = new(StringComparer.OrdinalIgnoreCase);
     private long nextEntityId = 700000000;
     private SandboxOperationResult lastResult = new(true, string.Empty, 0);
@@ -230,19 +230,31 @@ public sealed class LocalSandboxScenarioRunner
     {
         long serverTick = world.NextTick();
         EnqueueAutoMoveActions(serverTick);
-        ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, actionQueue, serverTick);
+        ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, actionQueue, serverTick, ruleSystem.HasRunningMovementClaim);
         IReadOnlyList<WorldAction> actions = actionQueue.DrainReady(serverTick);
-        StateDrivenRuleExecutionResult result = ruleSystem.Tick(world, actions, serverTick);
+        IReadOnlyList<WorldAction> lastInputActions = actions;
+        BehaviorRuntimeTickResult result = ruleSystem.Tick(world, actions, serverTick);
         foreach (DeferredAction deferredAction in result.DeferredActions)
         {
             actionQueue.EnqueueDeferred(deferredAction);
         }
 
-        lastResult = ResolveLastResult(actions, result);
+        for (int i = 0; i < 8 && ruleSystem.RunningBehaviorCount != 0 && result.ActionResults.Count == 0; i++)
+        {
+            serverTick = world.NextTick();
+            actions = actionQueue.DrainReady(serverTick);
+            result = ruleSystem.Tick(world, actions, serverTick);
+            foreach (DeferredAction deferredAction in result.DeferredActions)
+            {
+                actionQueue.EnqueueDeferred(deferredAction);
+            }
+        }
+
+        lastResult = ResolveLastResult(lastInputActions.Count == 0 ? actions : lastInputActions, result);
         world.FlushDelta();
     }
 
-    private SandboxOperationResult ResolveLastResult(IReadOnlyList<WorldAction> actions, StateDrivenRuleExecutionResult result)
+    private SandboxOperationResult ResolveLastResult(IReadOnlyList<WorldAction> actions, BehaviorRuntimeTickResult result)
     {
         if (actions.Count == 0)
         {

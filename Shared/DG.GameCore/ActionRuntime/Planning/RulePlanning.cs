@@ -53,6 +53,16 @@ public enum BehaviorPlanKind
 public sealed class MovePlan
 {
     public MovePlan(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, long serverTick, long bodyId, BehaviorBodyKind bodyKind, Direction direction, IReadOnlyList<BodyMember> members)
+        : this(priority, sourceActionId, sourceStateId, entityId, serverTick, bodyId, bodyKind, direction, members, System.Array.Empty<ResourceKey>(), PresentationFactType.Unknown)
+    {
+    }
+
+    public MovePlan(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, long serverTick, long bodyId, BehaviorBodyKind bodyKind, Direction direction, IReadOnlyList<BodyMember> members, IReadOnlyList<ResourceKey> resources)
+        : this(priority, sourceActionId, sourceStateId, entityId, serverTick, bodyId, bodyKind, direction, members, resources, PresentationFactType.Unknown)
+    {
+    }
+
+    public MovePlan(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, long serverTick, long bodyId, BehaviorBodyKind bodyKind, Direction direction, IReadOnlyList<BodyMember> members, IReadOnlyList<ResourceKey> resources, PresentationFactType presentationHint)
     {
         Priority = priority;
         SourceActionId = sourceActionId;
@@ -63,6 +73,8 @@ public sealed class MovePlan
         BodyKind = bodyKind;
         Direction = direction;
         Members = members;
+        Resources = resources ?? System.Array.Empty<ResourceKey>();
+        PresentationHint = presentationHint;
     }
 
     public WorldActionPriority Priority { get; }
@@ -74,6 +86,8 @@ public sealed class MovePlan
     public BehaviorBodyKind BodyKind { get; }
     public Direction Direction { get; }
     public IReadOnlyList<BodyMember> Members { get; }
+    public IReadOnlyList<ResourceKey> Resources { get; }
+    public PresentationFactType PresentationHint { get; }
     public BehaviorPlanKind Kind => BehaviorPlanKind.Move;
 }
 
@@ -142,6 +156,9 @@ public sealed class BodyResolver
 public sealed class OccupancyResolver
 {
     public bool TryCreateMovePlan(GameWorld world, ActionRequest request, Direction direction, GridCoord? targetCoord, BehaviorBody body, long serverTick, out MovePlan plan, out PlanResult result)
+        => TryCreateMovePlan(world, request, direction, targetCoord, body, serverTick, PresentationFactType.Unknown, out plan, out result);
+
+    public bool TryCreateMovePlan(GameWorld world, ActionRequest request, Direction direction, GridCoord? targetCoord, BehaviorBody body, long serverTick, PresentationFactType presentationHint, out MovePlan plan, out PlanResult result)
     {
         if (direction == Direction.None && !targetCoord.HasValue)
         {
@@ -213,7 +230,7 @@ public sealed class OccupancyResolver
             return false;
         }
 
-        plan = new MovePlan(request.Priority, request.ActionId, request.Source.SourceStateId, request.EntityId, serverTick, body.BodyId, body.Kind, direction, resolvedMembers);
+        plan = new MovePlan(request.Priority, request.ActionId, request.Source.SourceStateId, request.EntityId, serverTick, body.BodyId, body.Kind, direction, resolvedMembers, System.Array.Empty<ResourceKey>(), presentationHint);
         result = PlanResult.AcceptedResult;
         return true;
     }
@@ -230,6 +247,7 @@ public sealed class RulePlanner
     private readonly BodyResolver bodyResolver;
     private readonly OccupancyResolver occupancyResolver;
     private readonly ActionSpecRegistry actionSpecs;
+    private readonly ActionPresentationRegistry presentationRegistry;
 
     public RulePlanner() : this(new BodyResolver(), new OccupancyResolver())
     {
@@ -239,16 +257,26 @@ public sealed class RulePlanner
     {
     }
 
+    public RulePlanner(ActionSpecRegistry actionSpecs, ActionPresentationRegistry presentationRegistry) : this(new BodyResolver(), new OccupancyResolver(), actionSpecs, presentationRegistry)
+    {
+    }
+
     public RulePlanner(BodyResolver bodyResolver, OccupancyResolver occupancyResolver)
         : this(bodyResolver, occupancyResolver, ActionSpecRegistry.Default)
     {
     }
 
     public RulePlanner(BodyResolver bodyResolver, OccupancyResolver occupancyResolver, ActionSpecRegistry actionSpecs)
+        : this(bodyResolver, occupancyResolver, actionSpecs, ActionPresentationRegistry.Default)
+    {
+    }
+
+    public RulePlanner(BodyResolver bodyResolver, OccupancyResolver occupancyResolver, ActionSpecRegistry actionSpecs, ActionPresentationRegistry presentationRegistry)
     {
         this.bodyResolver = bodyResolver;
         this.occupancyResolver = occupancyResolver;
         this.actionSpecs = actionSpecs;
+        this.presentationRegistry = presentationRegistry ?? new ActionPresentationRegistry(System.Array.Empty<ActionPresentationConfig>());
     }
 
     public bool TryPlanMove(GameWorld world, ActionRequest request, Direction direction, GridCoord? targetCoord, long serverTick, out MovePlan plan, out PlanResult result)
@@ -287,7 +315,8 @@ public sealed class RulePlanner
             body = new BehaviorBody(entity.EntityId, BehaviorBodyKind.SingleEntity, new[] { entity });
         }
 
-        return occupancyResolver.TryCreateMovePlan(world, request, direction, targetCoord, body, serverTick, out plan, out result);
+        PresentationFactType hint = MovePresentationResolver.ResolveForMove(request, spec, presentationRegistry);
+        return occupancyResolver.TryCreateMovePlan(world, request, direction, targetCoord, body, serverTick, hint, out plan, out result);
     }
 
     public bool TryPlanMove(GameWorld world, AcceptedAction action, out MovePlan plan, out PlanResult result)
@@ -318,7 +347,8 @@ public sealed class RulePlanner
             return false;
         }
 
-        plan = new MovePlan(action.Request.Priority, action.Request.ActionId, action.Request.Source.SourceStateId, action.Request.EntityId, action.ServerTick, action.Body.BodyId, action.Body.Kind, action.Direction, members);
+        PresentationFactType hint = MovePresentationResolver.ResolveForMove(action.Request, action.Spec, presentationRegistry);
+        plan = new MovePlan(action.Request.Priority, action.Request.ActionId, action.Request.Source.SourceStateId, action.Request.EntityId, action.ServerTick, action.Body.BodyId, action.Body.Kind, action.Direction, members, System.Array.Empty<ResourceKey>(), hint);
         result = PlanResult.AcceptedResult;
         return true;
     }

@@ -491,49 +491,135 @@ namespace Fantasy
 
     [Serializable]
     [ProtoContract]
-    public partial class G2C_WorldDeltaAnimationMetadata : AMessage
+    public partial class G2C_PresentationFactMember : AMessage
     {
-        public static G2C_WorldDeltaAnimationMetadata Create()
+        public static G2C_PresentationFactMember Create()
         {
-            return MessageObjectPool<G2C_WorldDeltaAnimationMetadata>.Rent();
+            return MessageObjectPool<G2C_PresentationFactMember>.Rent();
         }
 
         public void Dispose()
         {
             EntityId = default;
-            ServerTick = default;
-            MotionKind = default;
-            StyleKey = default;
-            Direction = default;
-            PivotEntityId = default;
-            PivotX = default;
-            PivotY = default;
             FromX = default;
             FromY = default;
             ToX = default;
             ToY = default;
-            RotateDirection = default;
-            Bounce = default;
-            ImpactX = default;
-            ImpactY = default;
-            MessageObjectPool<G2C_WorldDeltaAnimationMetadata>.Return(this);
+            FromDirection = default;
+            ToDirection = default;
+            FromPortLocalPorts = default;
+            ToPortLocalPorts = default;
+            MessageObjectPool<G2C_PresentationFactMember>.Return(this);
         }
         [ProtoMember(1)]
         public long EntityId { get; set; }
         [ProtoMember(2)]
+        public int FromX { get; set; }
+        [ProtoMember(3)]
+        public int FromY { get; set; }
+        [ProtoMember(4)]
+        public int ToX { get; set; }
+        [ProtoMember(5)]
+        public int ToY { get; set; }
+        [ProtoMember(6)]
+        public int FromDirection { get; set; }
+        [ProtoMember(7)]
+        public int ToDirection { get; set; }
+        [ProtoMember(8)]
+        public int FromPortLocalPorts { get; set; }
+        [ProtoMember(9)]
+        public int ToPortLocalPorts { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class G2C_PresentationFactImpact : AMessage
+    {
+        public static G2C_PresentationFactImpact Create()
+        {
+            return MessageObjectPool<G2C_PresentationFactImpact>.Rent();
+        }
+
+        public void Dispose()
+        {
+            BlockerEntityId = default;
+            ImpactMemberId = default;
+            ImpactFromX = default;
+            ImpactFromY = default;
+            ImpactToX = default;
+            ImpactToY = default;
+            PushDirection = default;
+            MessageObjectPool<G2C_PresentationFactImpact>.Return(this);
+        }
+        [ProtoMember(1)]
+        public long BlockerEntityId { get; set; }
+        [ProtoMember(2)]
+        public long ImpactMemberId { get; set; }
+        [ProtoMember(3)]
+        public int ImpactFromX { get; set; }
+        [ProtoMember(4)]
+        public int ImpactFromY { get; set; }
+        [ProtoMember(5)]
+        public int ImpactToX { get; set; }
+        [ProtoMember(6)]
+        public int ImpactToY { get; set; }
+        [ProtoMember(7)]
+        public int PushDirection { get; set; }
+    }
+
+    [Serializable]
+    [ProtoContract]
+    public partial class G2C_PresentationFact : AMessage
+    {
+        public static G2C_PresentationFact Create()
+        {
+            return MessageObjectPool<G2C_PresentationFact>.Rent();
+        }
+
+        public void Dispose()
+        {
+            FactId = default;
+            ServerTick = default;
+            FactType = default;
+            ResultKind = default;
+            SourceActionId = default;
+            ClientInputId = default;
+            SourceEntityId = default;
+            SubjectEntityIds.Clear();
+            FromX = default;
+            FromY = default;
+            ToX = default;
+            ToY = default;
+            Direction = default;
+            StartTick = default;
+            ContactTick = default;
+            EndTick = default;
+            ContactProgress = default;
+            EffectiveCostTicks = default;
+            PivotEntityId = default;
+            PivotX = default;
+            PivotY = default;
+            RotateDirection = default;
+            Members.Clear();
+            Impacts.Clear();
+            MessageObjectPool<G2C_PresentationFact>.Return(this);
+        }
+        [ProtoMember(1)]
+        public long FactId { get; set; }
+        [ProtoMember(2)]
         public long ServerTick { get; set; }
         [ProtoMember(3)]
-        public int MotionKind { get; set; }
+        public int FactType { get; set; }
         [ProtoMember(4)]
-        public string StyleKey { get; set; }
+        public int ResultKind { get; set; }
         [ProtoMember(5)]
-        public int Direction { get; set; }
+        public long SourceActionId { get; set; }
         [ProtoMember(6)]
-        public long PivotEntityId { get; set; }
+        public long ClientInputId { get; set; }
         [ProtoMember(7)]
-        public int PivotX { get; set; }
+        public long SourceEntityId { get; set; }
         [ProtoMember(8)]
-        public int PivotY { get; set; }
+        public List<long> SubjectEntityIds { get; set; } = new List<long>();
         [ProtoMember(9)]
         public int FromX { get; set; }
         [ProtoMember(10)]
@@ -543,13 +629,29 @@ namespace Fantasy
         [ProtoMember(12)]
         public int ToY { get; set; }
         [ProtoMember(13)]
-        public int RotateDirection { get; set; }
+        public int Direction { get; set; }
         [ProtoMember(14)]
-        public bool Bounce { get; set; }
+        public long StartTick { get; set; }
         [ProtoMember(15)]
-        public int ImpactX { get; set; }
+        public long ContactTick { get; set; }
         [ProtoMember(16)]
-        public int ImpactY { get; set; }
+        public long EndTick { get; set; }
+        [ProtoMember(17)]
+        public double ContactProgress { get; set; }
+        [ProtoMember(18)]
+        public int EffectiveCostTicks { get; set; }
+        [ProtoMember(19)]
+        public long PivotEntityId { get; set; }
+        [ProtoMember(20)]
+        public int PivotX { get; set; }
+        [ProtoMember(21)]
+        public int PivotY { get; set; }
+        [ProtoMember(22)]
+        public int RotateDirection { get; set; }
+        [ProtoMember(23)]
+        public List<G2C_PresentationFactMember> Members { get; set; } = new List<G2C_PresentationFactMember>();
+        [ProtoMember(24)]
+        public List<G2C_PresentationFactImpact> Impacts { get; set; } = new List<G2C_PresentationFactImpact>();
     }
 
     [Serializable]
@@ -588,7 +690,7 @@ namespace Fantasy
             ServerTick = default;
             Entities.Clear();
             RemovedEntityIds.Clear();
-            AnimationMetadata.Clear();
+            PresentationFacts.Clear();
             MessageObjectPool<G2C_WorldDeltaNotify>.Return(this);
         }
         public uint OpCode() { return OuterOpcode.G2C_WorldDeltaNotify; } 
@@ -599,7 +701,7 @@ namespace Fantasy
         [ProtoMember(3)]
         public List<long> RemovedEntityIds { get; set; } = new List<long>();
         [ProtoMember(4)]
-        public List<G2C_WorldDeltaAnimationMetadata> AnimationMetadata { get; set; } = new List<G2C_WorldDeltaAnimationMetadata>();
+        public List<G2C_PresentationFact> PresentationFacts { get; set; } = new List<G2C_PresentationFact>();
     }
 
     [Serializable]

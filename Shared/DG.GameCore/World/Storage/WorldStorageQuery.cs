@@ -275,7 +275,7 @@ internal sealed class DirtyWorldJournal
 {
     private readonly List<DirtyChange> changed = new();
     private readonly List<long> removed = new();
-    private readonly List<WorldDeltaAnimationMetadata> animationMetadata = new();
+    private readonly List<PresentationFact> presentationFacts = new();
 
     public void MarkChanged(long entityId, long serverTick)
     {
@@ -312,9 +312,9 @@ internal sealed class DirtyWorldJournal
         }
     }
 
-    public void AddAnimationMetadata(WorldDeltaAnimationMetadata metadata)
+    public void AddPresentationFact(PresentationFact presentationFact)
     {
-        animationMetadata.Add(metadata);
+        presentationFacts.Add(presentationFact);
     }
 
     public IReadOnlyList<DirtyChange> PeekChanges()
@@ -327,16 +327,16 @@ internal sealed class DirtyWorldJournal
         return removed.ToArray();
     }
 
-    public IReadOnlyList<WorldDeltaAnimationMetadata> PeekAnimationMetadata()
+    public IReadOnlyList<PresentationFact> PeekPresentationFacts()
     {
-        return animationMetadata.ToArray();
+        return presentationFacts.ToArray();
     }
 
     public void Clear()
     {
         changed.Clear();
         removed.Clear();
-        animationMetadata.Clear();
+        presentationFacts.Clear();
     }
 }
 

@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.VisualScripting.Flow.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.VisualScripting.Flow.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.Flow.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.Flow.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Vi.1C6A4B9F.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.Flow.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.Flow.pdb

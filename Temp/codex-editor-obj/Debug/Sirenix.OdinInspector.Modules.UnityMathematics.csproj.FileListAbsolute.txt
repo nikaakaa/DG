@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Sirenix.OdinInspector.Modules.UnityMathematics.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Sirenix.OdinInspector.Modules.UnityMathematics.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Sirenix.OdinInspector.Modules.UnityMathematics.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Sirenix.OdinInspector.Modules.UnityMathematics.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Sirenix..97525372.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Sirenix.OdinInspector.Modules.UnityMathematics.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Sirenix.OdinInspector.Modules.UnityMathematics.pdb

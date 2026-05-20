@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.RenderPipeline.Universal.ShaderLibrary.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.RenderPipeline.Universal.ShaderLibrary.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipeline.Universal.ShaderLibrary.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipeline.Universal.ShaderLibrary.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Re.D059AC1F.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipeline.Universal.ShaderLibrary.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipeline.Universal.ShaderLibrary.pdb

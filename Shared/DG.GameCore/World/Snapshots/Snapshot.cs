@@ -16,59 +16,121 @@ public readonly struct DirtyChange
     public long ServerTick { get; }
 }
 
-public enum WorldDeltaMotionKind
+public enum PresentationFactType
 {
     Unknown = 0,
-    PlayerMove = 1,
-    MechanismPush = 2,
-    AutoMove = 3,
-    DebugDrag = 4,
-    Spawn = 5,
-    Remove = 6,
-    RotatePivot = 7,
-    RotatePivotBounce = 8
+    EntityMoved = 1,
+    EntityPushed = 2,
+    EntitySpawned = 3,
+    EntityRemoved = 4,
+    RotatePivotGroup = 5,
+    RotatePivotImpact = 6,
+    BodyMoved = 7
 }
 
-public readonly struct WorldDeltaAnimationMetadata
+public enum PresentationFactResultKind
 {
-    public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey)
-        : this(entityId, serverTick, motionKind, styleKey, Direction.None)
-    {
-    }
+    None = 0,
+    Success = 1,
+    Bounce = 2,
+    Impact = 3
+}
 
-    public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Direction direction)
-        : this(entityId, serverTick, motionKind, styleKey, direction, 0, default, default, default, RotatePivotDirection.None, false, default)
-    {
-    }
-
-    public WorldDeltaAnimationMetadata(long entityId, long serverTick, WorldDeltaMotionKind motionKind, string styleKey, Direction direction, long pivotEntityId, GridCoord pivotCoord, GridCoord fromCoord, GridCoord toCoord, RotatePivotDirection rotateDirection, bool bounce, GridCoord impactCoord)
+public readonly struct PresentationFactMember
+{
+    public PresentationFactMember(long entityId, GridCoord from, GridCoord to, Direction fromDirection, Direction toDirection, DirectionMask fromPortLocalPorts, DirectionMask toPortLocalPorts)
     {
         EntityId = entityId;
-        ServerTick = serverTick;
-        MotionKind = motionKind;
-        StyleKey = styleKey ?? string.Empty;
-        Direction = direction;
-        PivotEntityId = pivotEntityId;
-        PivotCoord = pivotCoord;
-        FromCoord = fromCoord;
-        ToCoord = toCoord;
-        RotateDirection = rotateDirection;
-        Bounce = bounce;
-        ImpactCoord = impactCoord;
+        From = from;
+        To = to;
+        FromDirection = fromDirection;
+        ToDirection = toDirection;
+        FromPortLocalPorts = fromPortLocalPorts;
+        ToPortLocalPorts = toPortLocalPorts;
     }
 
     public long EntityId { get; }
+    public GridCoord From { get; }
+    public GridCoord To { get; }
+    public Direction FromDirection { get; }
+    public Direction ToDirection { get; }
+    public DirectionMask FromPortLocalPorts { get; }
+    public DirectionMask ToPortLocalPorts { get; }
+}
+
+public readonly struct PresentationFactImpact
+{
+    public PresentationFactImpact(long blockerEntityId, long impactMemberId, GridCoord impactFrom, GridCoord impactTo, Direction pushDirection)
+    {
+        BlockerEntityId = blockerEntityId;
+        ImpactMemberId = impactMemberId;
+        ImpactFrom = impactFrom;
+        ImpactTo = impactTo;
+        PushDirection = pushDirection;
+    }
+
+    public long BlockerEntityId { get; }
+    public long ImpactMemberId { get; }
+    public GridCoord ImpactFrom { get; }
+    public GridCoord ImpactTo { get; }
+    public Direction PushDirection { get; }
+}
+
+public readonly struct PresentationFact
+{
+    public PresentationFact(long factId, long serverTick, PresentationFactType factType, PresentationFactResultKind resultKind, long sourceActionId, long clientInputId, long sourceEntityId, IReadOnlyList<long> subjectEntityIds, GridCoord from, GridCoord to, Direction direction, long startTick, long endTick, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection rotateDirection, IReadOnlyList<PresentationFactMember> members, IReadOnlyList<PresentationFactImpact> impacts)
+        : this(factId, serverTick, factType, resultKind, sourceActionId, clientInputId, sourceEntityId, subjectEntityIds, from, to, direction, startTick, 0, endTick, 0d, Math.Max(0, (int)(endTick - startTick)), pivotEntityId, pivotCoord, rotateDirection, members, impacts)
+    {
+    }
+
+    public PresentationFact(long factId, long serverTick, PresentationFactType factType, PresentationFactResultKind resultKind, long sourceActionId, long clientInputId, long sourceEntityId, IReadOnlyList<long> subjectEntityIds, GridCoord from, GridCoord to, Direction direction, long startTick, long contactTick, long endTick, double contactProgress, int effectiveCostTicks, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection rotateDirection, IReadOnlyList<PresentationFactMember> members, IReadOnlyList<PresentationFactImpact> impacts)
+    {
+        FactId = factId;
+        ServerTick = serverTick;
+        FactType = factType;
+        ResultKind = resultKind;
+        SourceActionId = sourceActionId;
+        ClientInputId = clientInputId;
+        SourceEntityId = sourceEntityId;
+        SubjectEntityIds = subjectEntityIds == null || subjectEntityIds.Count == 0 ? Array.Empty<long>() : subjectEntityIds.ToArray();
+        From = from;
+        To = to;
+        Direction = direction;
+        StartTick = startTick;
+        ContactTick = contactTick;
+        EndTick = endTick;
+        ContactProgress = contactProgress;
+        EffectiveCostTicks = effectiveCostTicks;
+        PivotEntityId = pivotEntityId;
+        PivotCoord = pivotCoord;
+        RotateDirection = rotateDirection;
+        Members = members == null || members.Count == 0 ? Array.Empty<PresentationFactMember>() : members.ToArray();
+        Impacts = impacts == null || impacts.Count == 0 ? Array.Empty<PresentationFactImpact>() : impacts.ToArray();
+    }
+
+    public long FactId { get; }
     public long ServerTick { get; }
-    public WorldDeltaMotionKind MotionKind { get; }
-    public string StyleKey { get; }
+    public PresentationFactType FactType { get; }
+    public PresentationFactResultKind ResultKind { get; }
+    public long SourceActionId { get; }
+    public long ClientInputId { get; }
+    public long SourceEntityId { get; }
+    public IReadOnlyList<long> SubjectEntityIds { get; }
+    public GridCoord From { get; }
+    public GridCoord To { get; }
     public Direction Direction { get; }
+    public long StartTick { get; }
+    public long ContactTick { get; }
+    public long EndTick { get; }
+    public double ContactProgress { get; }
+    public int EffectiveCostTicks { get; }
     public long PivotEntityId { get; }
     public GridCoord PivotCoord { get; }
-    public GridCoord FromCoord { get; }
-    public GridCoord ToCoord { get; }
     public RotatePivotDirection RotateDirection { get; }
-    public bool Bounce { get; }
-    public GridCoord ImpactCoord { get; }
+    public IReadOnlyList<PresentationFactMember> Members { get; }
+    public IReadOnlyList<PresentationFactImpact> Impacts { get; }
+
+    public long PrimarySubjectEntityId => SubjectEntityIds.Count == 0 ? 0 : SubjectEntityIds[0];
 }
 
 public readonly struct EntitySnapshot
@@ -137,22 +199,22 @@ public readonly struct WorldDelta
     }
 
     public WorldDelta(long serverTick, IReadOnlyList<EntitySnapshot> changedEntities, IReadOnlyList<long> removedEntityIds)
-        : this(serverTick, changedEntities, removedEntityIds, Array.Empty<WorldDeltaAnimationMetadata>())
+        : this(serverTick, changedEntities, removedEntityIds, Array.Empty<PresentationFact>())
     {
     }
 
-    public WorldDelta(long serverTick, IReadOnlyList<EntitySnapshot> changedEntities, IReadOnlyList<long> removedEntityIds, IReadOnlyList<WorldDeltaAnimationMetadata> animationMetadata)
+    public WorldDelta(long serverTick, IReadOnlyList<EntitySnapshot> changedEntities, IReadOnlyList<long> removedEntityIds, IReadOnlyList<PresentationFact> presentationFacts)
     {
         ServerTick = serverTick;
         ChangedEntities = changedEntities;
         RemovedEntityIds = removedEntityIds;
-        AnimationMetadata = animationMetadata;
+        PresentationFacts = presentationFacts;
     }
 
     public long ServerTick { get; }
     public IReadOnlyList<EntitySnapshot> ChangedEntities { get; }
     public IReadOnlyList<long> RemovedEntityIds { get; }
-    public IReadOnlyList<WorldDeltaAnimationMetadata> AnimationMetadata { get; }
+    public IReadOnlyList<PresentationFact> PresentationFacts { get; }
 }
 }
 

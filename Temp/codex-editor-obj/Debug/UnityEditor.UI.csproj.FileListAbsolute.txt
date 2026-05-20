@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UnityEditor.UI.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UnityEditor.UI.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEditor.UI.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEditor.UI.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEdi.F134638D.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEditor.UI.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEditor.UI.pdb

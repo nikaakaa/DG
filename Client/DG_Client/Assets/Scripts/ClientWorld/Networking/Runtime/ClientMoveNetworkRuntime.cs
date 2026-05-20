@@ -36,9 +36,14 @@ namespace DG.Map
 
         public static bool ApplyMovedNotify(long entityId, int finalX, int finalY)
         {
-            if (Runner == null)
+            if (Runner == null || Runner.Context == null)
             {
                 return false;
+            }
+
+            if (Runner.Context.ClientMapWorld.TryGetCoreEntity(entityId, out _))
+            {
+                return true;
             }
 
             return Runner.ApplyServerMovementOrCreate(entityId, new Vector2Int(finalX, finalY), DefaultWorldConfig.PlayerConfigId, Direction.None, entityId, 1);
@@ -58,10 +63,10 @@ namespace DG.Map
 
         public static bool ApplyWorldSnapshot(long serverTick, IReadOnlyList<G2C_WorldEntityState> entities)
         {
-            return ApplyWorldSnapshot(serverTick, entities, Array.Empty<G2C_WorldDeltaAnimationMetadata>());
+            return ApplyWorldSnapshot(serverTick, entities, Array.Empty<G2C_PresentationFact>());
         }
 
-        public static bool ApplyWorldSnapshot(long serverTick, IReadOnlyList<G2C_WorldEntityState> entities, IReadOnlyList<G2C_WorldDeltaAnimationMetadata> animationMetadata)
+        public static bool ApplyWorldSnapshot(long serverTick, IReadOnlyList<G2C_WorldEntityState> entities, IReadOnlyList<G2C_PresentationFact> presentationFacts)
         {
             if (Runner == null || Runner.Context == null)
             {
@@ -71,7 +76,7 @@ namespace DG.Map
             IReadOnlyList<EntitySnapshot> before = Runner.Context.ClientMapWorld.CreateSnapshot();
             bool allApplied = ApplyWorldEntities(serverTick, entities);
             IReadOnlyList<EntitySnapshot> after = Runner.Context.ClientMapWorld.CreateSnapshot();
-            Runner.Context.AnimationLayer.CaptureSnapshotApply(serverTick, before, after, ConvertAnimationMetadata(animationMetadata));
+            Runner.Context.AnimationLayer.CaptureSnapshotApplyFacts(serverTick, before, after, ClientPresentationFactTranslator.Translate(presentationFacts));
             return allApplied;
         }
 
@@ -82,10 +87,10 @@ namespace DG.Map
 
         public static bool ApplyWorldDelta(long serverTick, IReadOnlyList<G2C_WorldEntityState> entities, IReadOnlyList<long> removedEntityIds)
         {
-            return ApplyWorldDelta(serverTick, entities, removedEntityIds, Array.Empty<G2C_WorldDeltaAnimationMetadata>());
+            return ApplyWorldDelta(serverTick, entities, removedEntityIds, Array.Empty<G2C_PresentationFact>());
         }
 
-        public static bool ApplyWorldDelta(long serverTick, IReadOnlyList<G2C_WorldEntityState> entities, IReadOnlyList<long> removedEntityIds, IReadOnlyList<G2C_WorldDeltaAnimationMetadata> animationMetadata)
+        public static bool ApplyWorldDelta(long serverTick, IReadOnlyList<G2C_WorldEntityState> entities, IReadOnlyList<long> removedEntityIds, IReadOnlyList<G2C_PresentationFact> presentationFacts)
         {
             if (Runner == null || Runner.Context == null)
             {
@@ -96,8 +101,8 @@ namespace DG.Map
             bool allApplied = ApplyRemovedEntities(serverTick, removedEntityIds);
             allApplied &= ApplyWorldEntities(serverTick, entities);
             IReadOnlyList<EntitySnapshot> after = Runner.Context.ClientMapWorld.CreateSnapshot();
-            IReadOnlyList<ClientAnimationMetadata> convertedMetadata = ConvertAnimationMetadata(animationMetadata);
-            Runner.Context.AnimationLayer.CaptureSnapshotApply(serverTick, before, after, convertedMetadata);
+            IReadOnlyList<ClientPresentationFact> convertedFacts = ClientPresentationFactTranslator.Translate(presentationFacts);
+            Runner.Context.AnimationLayer.CaptureSnapshotApplyFacts(serverTick, before, after, convertedFacts);
             ClearResolvedInputs(serverTick);
             return allApplied;
         }
@@ -205,51 +210,6 @@ namespace DG.Map
             }
 
             return true;
-        }
-
-        private static IReadOnlyList<ClientAnimationMetadata> ConvertAnimationMetadata(IReadOnlyList<G2C_WorldDeltaAnimationMetadata> metadata)
-        {
-            if (metadata == null || metadata.Count == 0)
-            {
-                return Array.Empty<ClientAnimationMetadata>();
-            }
-
-            var result = new List<ClientAnimationMetadata>(metadata.Count);
-            for (int i = 0; i < metadata.Count; i++)
-            {
-                G2C_WorldDeltaAnimationMetadata item = metadata[i];
-                result.Add(new ClientAnimationMetadata(
-                    item.EntityId,
-                    item.ServerTick,
-                    ConvertMotionKind(item.MotionKind),
-                    item.StyleKey,
-                    (Direction)item.Direction,
-                    item.PivotEntityId,
-                    new Vector2Int(item.PivotX, item.PivotY),
-                    new Vector2Int(item.FromX, item.FromY),
-                    new Vector2Int(item.ToX, item.ToY),
-                    (RotatePivotDirection)item.RotateDirection,
-                    item.Bounce,
-                    new Vector2Int(item.ImpactX, item.ImpactY)));
-            }
-
-            return result;
-        }
-
-        private static ClientAnimationMotionKind ConvertMotionKind(int motionKind)
-        {
-            return motionKind switch
-            {
-                (int)WorldDeltaMotionKind.PlayerMove => ClientAnimationMotionKind.PlayerMove,
-                (int)WorldDeltaMotionKind.MechanismPush => ClientAnimationMotionKind.MechanismPush,
-                (int)WorldDeltaMotionKind.AutoMove => ClientAnimationMotionKind.AutoMove,
-                (int)WorldDeltaMotionKind.DebugDrag => ClientAnimationMotionKind.DebugDrag,
-                (int)WorldDeltaMotionKind.Spawn => ClientAnimationMotionKind.Spawn,
-                (int)WorldDeltaMotionKind.Remove => ClientAnimationMotionKind.Remove,
-                (int)WorldDeltaMotionKind.RotatePivot => ClientAnimationMotionKind.RotatePivot,
-                (int)WorldDeltaMotionKind.RotatePivotBounce => ClientAnimationMotionKind.RotatePivotBounce,
-                _ => ClientAnimationMotionKind.Unknown
-            };
         }
 
         public static void Clear()

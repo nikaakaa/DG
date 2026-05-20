@@ -12,20 +12,21 @@ public sealed class C2G_DebugApplyRuntimeEffectRequestHandler : MessageRPC<C2G_D
     protected override async FTask Run(Session session, C2G_DebugApplyRuntimeEffectRequest request, G2C_DebugApplyRuntimeEffectResponse response, Action reply)
     {
         RuntimeEffectKind kind = (RuntimeEffectKind)request.EffectKind;
-        bool success = AuthoritativeMoveWorldProvider.DebugEdit.TryApplyRuntimeEffect(
+        AuthoritativeDebugActionInput input = AuthoritativeMoveWorldProvider.DebugEdit.EnqueueApplyRuntimeEffect(
             request.EntityId,
             kind,
-            request.AutoMoveIntervalTicks,
             (DirectionMask)request.PortLocalPorts,
-            request.ExpireTick,
-            out RuntimeEffectId effectId,
-            out string reason);
+            request.ExpireTick);
+        MoveResult result = await input.WaitAsync();
+        RuntimeEffectId effectId = result.Success
+            ? AuthoritativeMoveWorldProvider.DebugEdit.FindLatestRuntimeEffect(request.EntityId, kind)
+            : default;
 
-        response.Success = success;
+        response.Success = result.Success;
         response.EntityId = request.EntityId;
         response.EffectKind = request.EffectKind;
         response.RuntimeEffectId = effectId.Value;
-        response.Reason = reason;
+        response.Reason = result.Reason;
 
         Log.Info(
             "[C2G_DebugApplyRuntimeEffectRequestHandler] success:{0} entity:{1} effect:{2} effectId:{3} reason:{4}",

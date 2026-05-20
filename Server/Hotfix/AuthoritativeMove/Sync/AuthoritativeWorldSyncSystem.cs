@@ -54,7 +54,7 @@ public sealed class AuthoritativeWorldSyncSystem
         LastDeltaObserverCount = observers.Count;
         LastDeltaBroadcasted = false;
         LastDeltaSkippedNoObservers = false;
-        if (delta.ChangedEntities.Count == 0 && delta.RemovedEntityIds.Count == 0 && delta.AnimationMetadata.Count == 0)
+        if (delta.ChangedEntities.Count == 0 && delta.RemovedEntityIds.Count == 0 && delta.PresentationFacts.Count == 0)
         {
             return delta;
         }
@@ -137,35 +137,76 @@ internal static class AuthoritativeWorldProtocolSender
         {
             notify.RemovedEntityIds.Add(delta.RemovedEntityIds[i]);
         }
-        for (int i = 0; i < delta.AnimationMetadata.Count; i++)
+        for (int i = 0; i < delta.PresentationFacts.Count; i++)
         {
-            notify.AnimationMetadata.Add(CreateAnimationMetadata(delta.AnimationMetadata[i]));
+            notify.PresentationFacts.Add(CreatePresentationFact(delta.PresentationFacts[i]));
         }
 
         return notify;
     }
 
-    private static G2C_WorldDeltaAnimationMetadata CreateAnimationMetadata(WorldDeltaAnimationMetadata metadata)
+    private static G2C_PresentationFact CreatePresentationFact(PresentationFact presentationFact)
     {
-        return new G2C_WorldDeltaAnimationMetadata
+        var message = new G2C_PresentationFact
         {
-            EntityId = metadata.EntityId,
-            ServerTick = metadata.ServerTick,
-            MotionKind = (int)metadata.MotionKind,
-            StyleKey = metadata.StyleKey,
-            Direction = (int)metadata.Direction,
-            PivotEntityId = metadata.PivotEntityId,
-            PivotX = metadata.PivotCoord.X,
-            PivotY = metadata.PivotCoord.Y,
-            FromX = metadata.FromCoord.X,
-            FromY = metadata.FromCoord.Y,
-            ToX = metadata.ToCoord.X,
-            ToY = metadata.ToCoord.Y,
-            RotateDirection = (int)metadata.RotateDirection,
-            Bounce = metadata.Bounce,
-            ImpactX = metadata.ImpactCoord.X,
-            ImpactY = metadata.ImpactCoord.Y
+            FactId = presentationFact.FactId,
+            ServerTick = presentationFact.ServerTick,
+            FactType = (int)presentationFact.FactType,
+            ResultKind = (int)presentationFact.ResultKind,
+            SourceActionId = presentationFact.SourceActionId,
+            ClientInputId = presentationFact.ClientInputId,
+            SourceEntityId = presentationFact.SourceEntityId,
+            FromX = presentationFact.From.X,
+            FromY = presentationFact.From.Y,
+            ToX = presentationFact.To.X,
+            ToY = presentationFact.To.Y,
+            Direction = (int)presentationFact.Direction,
+            StartTick = presentationFact.StartTick,
+            ContactTick = presentationFact.ContactTick,
+            EndTick = presentationFact.EndTick,
+            ContactProgress = presentationFact.ContactProgress,
+            EffectiveCostTicks = presentationFact.EffectiveCostTicks,
+            PivotEntityId = presentationFact.PivotEntityId,
+            PivotX = presentationFact.PivotCoord.X,
+            PivotY = presentationFact.PivotCoord.Y,
+            RotateDirection = (int)presentationFact.RotateDirection
         };
+        for (int i = 0; i < presentationFact.SubjectEntityIds.Count; i++)
+        {
+            message.SubjectEntityIds.Add(presentationFact.SubjectEntityIds[i]);
+        }
+        for (int i = 0; i < presentationFact.Members.Count; i++)
+        {
+            PresentationFactMember member = presentationFact.Members[i];
+            message.Members.Add(new G2C_PresentationFactMember
+            {
+                EntityId = member.EntityId,
+                FromX = member.From.X,
+                FromY = member.From.Y,
+                ToX = member.To.X,
+                ToY = member.To.Y,
+                FromDirection = (int)member.FromDirection,
+                ToDirection = (int)member.ToDirection,
+                FromPortLocalPorts = (int)member.FromPortLocalPorts,
+                ToPortLocalPorts = (int)member.ToPortLocalPorts
+            });
+        }
+        for (int i = 0; i < presentationFact.Impacts.Count; i++)
+        {
+            PresentationFactImpact impact = presentationFact.Impacts[i];
+            message.Impacts.Add(new G2C_PresentationFactImpact
+            {
+                BlockerEntityId = impact.BlockerEntityId,
+                ImpactMemberId = impact.ImpactMemberId,
+                ImpactFromX = impact.ImpactFrom.X,
+                ImpactFromY = impact.ImpactFrom.Y,
+                ImpactToX = impact.ImpactTo.X,
+                ImpactToY = impact.ImpactTo.Y,
+                PushDirection = (int)impact.PushDirection
+            });
+        }
+
+        return message;
     }
 
     private static G2C_WorldEntityState CreateState(EntitySnapshot snapshot)

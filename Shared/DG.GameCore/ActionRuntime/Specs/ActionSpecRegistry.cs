@@ -28,63 +28,12 @@ public sealed class ActionSpec
         TargetingSpec? targeting = null,
         EffectSpecId effectSpecId = default)
     {
-        return new ActionSpec(specId, new ActionStrategyId(primitive), defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId);
+        return new ActionSpec(specId, primitive, defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId);
     }
 
     public ActionSpec(
         ActionSpecId specId,
         ActionPrimitive primitive,
-        ActionSourceKind defaultSource,
-        WorldActionPriority defaultPriority,
-        WorldTag sourceTag,
-        WorldTag abilityTag,
-        WorldTag requiredTags,
-        WorldTag blockedTags,
-        ActionTargetRule targetRule,
-        BlockedResultPolicyId blockedResultPolicyId,
-        ActionConflictPolicy conflictPolicy,
-        ActionInterruptPolicy interruptPolicy,
-        ActionMergePolicy mergePolicy,
-        ActionPlanRule planRule,
-        ActionCommitRule commitRules,
-        ActionSubjectKind subjectKind = ActionSubjectKind.HitEntity,
-        ActionHandoffSpec handoff = default,
-        int defaultCostTicks = 1,
-        TargetingSpec? targeting = null,
-        EffectSpecId effectSpecId = default)
-        : this(specId, new ActionStrategyId(primitive), defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId)
-    {
-    }
-
-    public ActionSpec(
-        ActionSpecId specId,
-        ActionPrimitive primitive,
-        ActionStrategyId strategyId,
-        ActionSourceKind defaultSource,
-        WorldActionPriority defaultPriority,
-        WorldTag sourceTag,
-        WorldTag abilityTag,
-        WorldTag requiredTags,
-        WorldTag blockedTags,
-        ActionTargetRule targetRule,
-        BlockedResultPolicyId blockedResultPolicyId,
-        ActionConflictPolicy conflictPolicy,
-        ActionInterruptPolicy interruptPolicy,
-        ActionMergePolicy mergePolicy,
-        ActionPlanRule planRule,
-        ActionCommitRule commitRules,
-        ActionSubjectKind subjectKind = ActionSubjectKind.HitEntity,
-        ActionHandoffSpec handoff = default,
-        int defaultCostTicks = 1,
-        TargetingSpec? targeting = null,
-        EffectSpecId effectSpecId = default)
-        : this(specId, strategyId, defaultSource, defaultPriority, sourceTag, abilityTag, requiredTags, blockedTags, targetRule, blockedResultPolicyId, conflictPolicy, interruptPolicy, mergePolicy, planRule, commitRules, subjectKind, handoff, defaultCostTicks, targeting, effectSpecId)
-    {
-    }
-
-    public ActionSpec(
-        ActionSpecId specId,
-        ActionStrategyId strategyId,
         ActionSourceKind defaultSource,
         WorldActionPriority defaultPriority,
         WorldTag sourceTag,
@@ -105,7 +54,7 @@ public sealed class ActionSpec
         EffectSpecId effectSpecId = default)
     {
         SpecId = specId;
-        StrategyId = strategyId.IsValid ? strategyId : throw new ArgumentException("Action strategy id is empty.", nameof(strategyId));
+        Primitive = primitive;
         DefaultSource = defaultSource;
         DefaultPriority = defaultPriority;
         SourceTag = sourceTag;
@@ -120,14 +69,19 @@ public sealed class ActionSpec
         PlanRule = planRule;
         CommitRules = commitRules;
         SubjectKind = subjectKind;
+        if (defaultCostTicks < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(defaultCostTicks), defaultCostTicks, "Action spec default cost ticks must be at least 1.");
+        }
+
         Handoff = handoff.Policy == ActionHandoffPolicy.None && !handoff.SpecId.IsValid ? ActionHandoffSpec.None : handoff;
-        DefaultCostTicks = Math.Max(1, defaultCostTicks);
+        DefaultCostTicks = defaultCostTicks;
         Targeting = targeting ?? TargetingSpec.FromLegacyRule(targetRule);
         EffectSpecId = effectSpecId;
     }
 
     public ActionSpecId SpecId { get; }
-    public ActionStrategyId StrategyId { get; }
+    public ActionPrimitive Primitive { get; }
     public ActionSourceKind DefaultSource { get; }
     public WorldActionPriority DefaultPriority { get; }
     public WorldTag SourceTag { get; }

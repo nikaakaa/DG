@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Cinemachine.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Cinemachine.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Cinemachine.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Cinemachine.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Cinemach.A08EBA98.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Cinemachine.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Cinemachine.pdb

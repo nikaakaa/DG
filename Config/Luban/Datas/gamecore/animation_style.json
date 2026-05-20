@@ -72,7 +72,7 @@
     "instant": false
   },
   {
-    "style_id": "rotate_pivot_impact",
+    "style_id": "pivot.impact",
     "motion_kind": "mechanism_push",
     "duration_seconds": 0.54,
     "easing": "EaseOut",

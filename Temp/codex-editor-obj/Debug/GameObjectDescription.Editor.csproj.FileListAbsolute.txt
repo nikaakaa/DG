@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\GameObjectDescription.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\GameObjectDescription.Editor.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\GameObjectDescription.Editor.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\GameObjectDescription.Editor.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\GameObje.E4EF4D91.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\GameObjectDescription.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\GameObjectDescription.Editor.pdb

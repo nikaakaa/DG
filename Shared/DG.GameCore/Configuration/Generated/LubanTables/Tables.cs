@@ -25,6 +25,7 @@ public partial class Tables
     public gamecore.TbActionSpec TbActionSpec {get; }
     public gamecore.TbEffectSpec TbEffectSpec {get; }
     public gamecore.TbAnimationStyle TbAnimationStyle {get; }
+    public gamecore.TbActionPresentation TbActionPresentation {get; }
 
 
       public Tables(System.Func<string, JArray> loader)
@@ -41,6 +42,7 @@ public partial class Tables
         TbActionSpec = new gamecore.TbActionSpec(loader("gamecore_tbactionspec"));
         TbEffectSpec = new gamecore.TbEffectSpec(loader("gamecore_tbeffectspec"));
         TbAnimationStyle = new gamecore.TbAnimationStyle(loader("gamecore_tbanimationstyle"));
+        TbActionPresentation = new gamecore.TbActionPresentation(loader("gamecore_tbactionpresentation"));
         ResolveRef();
     }
     
@@ -58,6 +60,7 @@ public partial class Tables
         TbActionSpec.ResolveRef(this);
         TbEffectSpec.ResolveRef(this);
         TbAnimationStyle.ResolveRef(this);
+        TbActionPresentation.ResolveRef(this);
     }
 }
 

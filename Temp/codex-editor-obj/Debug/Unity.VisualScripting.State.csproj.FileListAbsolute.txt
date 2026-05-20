@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.VisualScripting.State.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.VisualScripting.State.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.State.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.State.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Vi.33F36D84.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.State.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.VisualScripting.State.pdb

@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "Config" / "Luban" / "Defines" / "gamecore.xml"
-TARGET = ROOT / "Shared" / "DG.GameCore" / "Config" / "ComponentKind.cs"
+TARGET = ROOT / "Shared" / "DG.GameCore" / "Configuration" / "ComponentKind.cs"
 
 
 def read_component_kind() -> list[tuple[str, str]]:
@@ -46,11 +46,60 @@ public enum ComponentKind
 {{
 {body}
 }}
+
+public readonly struct ComponentId : IEquatable<ComponentId>
+{{
+    public ComponentId(string value)
+        : this(RuntimeKeyUtility.StableRuntimeKey(value), value)
+    {{
+    }}
+
+    public ComponentId(ComponentKind kind)
+        : this(kind.ToString())
+    {{
+    }}
+
+    public ComponentId(int runtimeKey, string debugName)
+    {{
+        RuntimeKey = runtimeKey;
+        Value = debugName ?? string.Empty;
+    }}
+
+    public string Value {{ get; }}
+    public int RuntimeKey {{ get; }}
+    public bool IsValid => RuntimeKey != 0;
+
+    public bool Equals(ComponentId other)
+    {{
+        return RuntimeKey == other.RuntimeKey;
+    }}
+
+    public override bool Equals(object obj)
+    {{
+        return obj is ComponentId other && Equals(other);
+    }}
+
+    public override int GetHashCode()
+    {{
+        return RuntimeKey;
+    }}
+
+    public override string ToString()
+    {{
+        return Value;
+    }}
+
+    public static implicit operator ComponentId(string value)
+    {{
+        return new ComponentId(value);
+    }}
+}}
 }}
 """
     old_text = TARGET.read_text(encoding="utf-8-sig") if TARGET.exists() else ""
     if new_text == old_text:
         return False
+    TARGET.parent.mkdir(parents=True, exist_ok=True)
     TARGET.write_text(new_text, encoding="utf-8")
     return True
 

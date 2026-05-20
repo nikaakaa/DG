@@ -1,6 +1,7 @@
 [
   {
     "spec_id": "player_move",
+    "primitive": 1,
     "source": 1,
     "priority": 2,
     "source_tag": "SourcePlayer",
@@ -23,11 +24,11 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "move"
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "auto_move",
+    "primitive": 1,
     "source": 2,
     "priority": 4,
     "source_tag": "SourceAuto",
@@ -49,11 +50,11 @@
       1,
       2
     ],
-    "default_cost_ticks": 1,
-    "strategy_id": "move"
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "mechanism_push",
+    "primitive": 1,
     "source": 3,
     "priority": 3,
     "source_tag": "SourceMechanism",
@@ -74,11 +75,11 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 3,
-    "strategy_id": "move"
+    "default_cost_ticks": 3
   },
   {
     "spec_id": "debug_move",
+    "primitive": 1,
     "source": 4,
     "priority": 1,
     "source_tag": "SourceDebug",
@@ -97,11 +98,11 @@
     "subject_policy": 1,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "move"
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "debug_spawn",
+    "primitive": 2,
     "source": 4,
     "priority": 1,
     "source_tag": "SourceDebug",
@@ -120,11 +121,11 @@
     "subject_policy": 1,
     "plan_rule": 2,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "spawn"
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "debug_remove",
+    "primitive": 3,
     "source": 4,
     "priority": 1,
     "source_tag": "SourceDebug",
@@ -143,11 +144,80 @@
     "subject_policy": 1,
     "plan_rule": 3,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "remove"
+    "default_cost_ticks": 1
+  },
+  {
+    "spec_id": "debug_apply_effect",
+    "primitive": 5,
+    "source": 4,
+    "priority": 1,
+    "source_tag": "SourceDebug",
+    "ability_tag": "",
+    "required_tags": [],
+    "blocked_tags": [],
+    "targeting_id": "legacy_self",
+    "handoff_policy": 0,
+    "blocked_result_policy_id": "reject_only",
+    "handoff_spec_id": "",
+    "handoff_subject_policy": 1,
+    "max_chain_depth": 0,
+    "conflict_policy": 0,
+    "interrupt_policy": 0,
+    "merge_policy": 0,
+    "subject_policy": 1,
+    "plan_rule": 0,
+    "commit_rules": [],
+    "default_cost_ticks": 1
+  },
+  {
+    "spec_id": "debug_remove_effect",
+    "primitive": 6,
+    "source": 4,
+    "priority": 1,
+    "source_tag": "SourceDebug",
+    "ability_tag": "",
+    "required_tags": [],
+    "blocked_tags": [],
+    "targeting_id": "legacy_self",
+    "handoff_policy": 0,
+    "blocked_result_policy_id": "reject_only",
+    "handoff_spec_id": "",
+    "handoff_subject_policy": 1,
+    "max_chain_depth": 0,
+    "conflict_policy": 0,
+    "interrupt_policy": 0,
+    "merge_policy": 0,
+    "subject_policy": 1,
+    "plan_rule": 0,
+    "commit_rules": [],
+    "default_cost_ticks": 1
+  },
+  {
+    "spec_id": "debug_set_tag",
+    "primitive": 7,
+    "source": 4,
+    "priority": 1,
+    "source_tag": "SourceDebug",
+    "ability_tag": "",
+    "required_tags": [],
+    "blocked_tags": [],
+    "targeting_id": "legacy_self",
+    "handoff_policy": 0,
+    "blocked_result_policy_id": "reject_only",
+    "handoff_spec_id": "",
+    "handoff_subject_policy": 1,
+    "max_chain_depth": 0,
+    "conflict_policy": 0,
+    "interrupt_policy": 0,
+    "merge_policy": 0,
+    "subject_policy": 1,
+    "plan_rule": 0,
+    "commit_rules": [],
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "player_push",
+    "primitive": 1,
     "source": 1,
     "priority": 2,
     "source_tag": "SourcePlayer",
@@ -168,11 +238,11 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "move"
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "configured_wind_push",
+    "primitive": 1,
     "source": 3,
     "priority": 3,
     "source_tag": "SourceMechanism",
@@ -193,11 +263,11 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "move"
+    "default_cost_ticks": 1
   },
   {
     "spec_id": "connected_body_move",
+    "primitive": 1,
     "source": 3,
     "priority": 3,
     "source_tag": "SourceMechanism",
@@ -216,7 +286,6 @@
     "subject_policy": 2,
     "plan_rule": 1,
     "commit_rules": [],
-    "default_cost_ticks": 1,
-    "strategy_id": "move"
+    "default_cost_ticks": 1
   }
 ]

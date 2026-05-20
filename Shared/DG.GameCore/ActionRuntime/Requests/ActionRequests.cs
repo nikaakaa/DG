@@ -7,16 +7,21 @@ namespace DG.GameCore
 public readonly struct ActionRuntimeParams
 {
     public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
-        : this(configId, playerId, autoMoveIntervalTicks, false, default, string.Empty, costTicks, causalityId, dedupeKey)
+        : this(configId, playerId, autoMoveIntervalTicks, false, default, string.Empty, default, 0L, WorldTag.None, false, costTicks, causalityId, dedupeKey)
     {
     }
 
     public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, EffectSpecId effectSpecId, string stackKey, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
-        : this(configId, playerId, autoMoveIntervalTicks, false, effectSpecId, stackKey, costTicks, causalityId, dedupeKey)
+        : this(configId, playerId, autoMoveIntervalTicks, false, effectSpecId, stackKey, default, 0L, WorldTag.None, false, costTicks, causalityId, dedupeKey)
     {
     }
 
     public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, bool rotatePivot, EffectSpecId effectSpecId, string stackKey, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
+        : this(configId, playerId, autoMoveIntervalTicks, rotatePivot, effectSpecId, stackKey, default, 0L, WorldTag.None, false, costTicks, causalityId, dedupeKey)
+    {
+    }
+
+    public ActionRuntimeParams(int configId, long playerId, int autoMoveIntervalTicks, bool rotatePivot, EffectSpecId effectSpecId, string stackKey, RuntimeEffectId runtimeEffectId, long expireTick, WorldTag tag, bool tagEnabled, int costTicks = 1, long causalityId = 0, string dedupeKey = "")
     {
         ConfigId = configId;
         PlayerId = playerId;
@@ -24,6 +29,10 @@ public readonly struct ActionRuntimeParams
         RotatePivot = rotatePivot;
         EffectSpecId = effectSpecId;
         StackKey = stackKey ?? string.Empty;
+        RuntimeEffectId = runtimeEffectId;
+        ExpireTick = expireTick;
+        Tag = tag;
+        TagEnabled = tagEnabled;
         CostTicks = Math.Max(1, costTicks);
         CausalityId = causalityId;
         DedupeKey = dedupeKey ?? string.Empty;
@@ -35,13 +44,17 @@ public readonly struct ActionRuntimeParams
     public bool RotatePivot { get; }
     public EffectSpecId EffectSpecId { get; }
     public string StackKey { get; }
+    public RuntimeEffectId RuntimeEffectId { get; }
+    public long ExpireTick { get; }
+    public WorldTag Tag { get; }
+    public bool TagEnabled { get; }
     public int CostTicks { get; }
     public long CausalityId { get; }
     public string DedupeKey { get; }
 
     public static ActionRuntimeParams FromWorldAction(WorldAction action)
     {
-        return new ActionRuntimeParams(action.ConfigId, action.PlayerId, action.AutoMoveIntervalTicks, action.RotatePivot, default, string.Empty, action.CostTicks, action.CausalityId, action.DedupeKey);
+        return new ActionRuntimeParams(action.ConfigId, action.PlayerId, action.AutoMoveIntervalTicks, action.RotatePivot, action.EffectSpecId, action.StackKey, action.RuntimeEffectId, action.ExpireTick, action.Tag, action.TagEnabled, action.CostTicks, action.CausalityId, action.DedupeKey);
     }
 }
 

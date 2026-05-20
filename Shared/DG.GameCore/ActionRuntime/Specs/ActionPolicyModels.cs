@@ -10,7 +10,28 @@ public enum ActionPrimitive
     Spawn = 2,
     Remove = 3,
     SetComponentResult = 4,
-    ApplyRuntimeEffect = 5
+    ApplyRuntimeEffect = 5,
+    RemoveRuntimeEffect = 6,
+    SetTag = 7
+}
+
+
+public static class ActionPrimitiveNames
+{
+    public static string NameOf(ActionPrimitive primitive)
+    {
+        switch (primitive)
+        {
+            case ActionPrimitive.Move: return "move";
+            case ActionPrimitive.Spawn: return "spawn";
+            case ActionPrimitive.Remove: return "remove";
+            case ActionPrimitive.SetComponentResult: return "set_component_result";
+            case ActionPrimitive.ApplyRuntimeEffect: return "runtime_effect";
+            case ActionPrimitive.RemoveRuntimeEffect: return "remove_runtime_effect";
+            case ActionPrimitive.SetTag: return "set_tag";
+            default: return primitive.ToString();
+        }
+    }
 }
 
 

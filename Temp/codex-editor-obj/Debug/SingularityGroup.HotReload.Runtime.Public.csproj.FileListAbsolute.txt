@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\SingularityGroup.HotReload.Runtime.Public.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\SingularityGroup.HotReload.Runtime.Public.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\SingularityGroup.HotReload.Runtime.Public.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\SingularityGroup.HotReload.Runtime.Public.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Singular.018F97C1.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\SingularityGroup.HotReload.Runtime.Public.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\SingularityGroup.HotReload.Runtime.Public.pdb

@@ -104,7 +104,6 @@ public sealed class ActionArbitrationResult
     private readonly List<CommitProposal> commitProposals = new();
     private readonly Dictionary<long, MoveResult> actionResults = new();
     private readonly List<string> reasons = new();
-    private readonly List<ActionUnitTransition> transitions = new();
 
     public IReadOnlyList<AcceptedAction> AcceptedActions => acceptedActions;
     public IReadOnlyList<RejectedAction> RejectedActions => rejectedActions;
@@ -113,12 +112,10 @@ public sealed class ActionArbitrationResult
     public IReadOnlyList<CommitProposal> CommitProposals => commitProposals;
     public IReadOnlyDictionary<long, MoveResult> ActionResults => actionResults;
     public IReadOnlyList<string> Reasons => reasons;
-    public IReadOnlyList<ActionUnitTransition> Transitions => transitions;
 
     public void Accept(AcceptedAction action, MoveResult? result)
     {
         acceptedActions.Add(action);
-        transitions.Add(new ActionUnitTransition(action.Request.ActionId, ActionUnitLifecycleState.CandidateBuilt, ActionUnitLifecycleState.Accepted, string.Empty));
         if (result.HasValue && action.Request.Source.SourceStateId == 0)
         {
             actionResults[action.Request.ActionId] = result.Value;
@@ -128,7 +125,6 @@ public sealed class ActionArbitrationResult
     public void Reject(RejectedAction action)
     {
         rejectedActions.Add(action);
-        transitions.Add(new ActionUnitTransition(action.Request.ActionId, ActionUnitLifecycleState.CandidateBuilt, ActionUnitLifecycleState.Rejected, action.Reason));
         if (action.Request.Source.SourceStateId == 0)
         {
             actionResults[action.Request.ActionId] = action.Result;
@@ -140,7 +136,6 @@ public sealed class ActionArbitrationResult
     public void Derive(DerivedAction action, MoveResult? result)
     {
         derivedActions.Add(action);
-        transitions.Add(new ActionUnitTransition(action.Request.ActionId, ActionUnitLifecycleState.CandidateBuilt, ActionUnitLifecycleState.DeferredOutputEmitted, action.Reason));
         if (result.HasValue && action.Request.Source.SourceStateId == 0)
         {
             actionResults[action.Request.ActionId] = result.Value;
@@ -157,11 +152,6 @@ public sealed class ActionArbitrationResult
     public void AddDeferred(DeferredAction action)
     {
         deferredActions.Add(action);
-    }
-
-    public void RecordTransition(ActionUnitTransition transition)
-    {
-        transitions.Add(transition);
     }
 
     public void AddReason(string reason)

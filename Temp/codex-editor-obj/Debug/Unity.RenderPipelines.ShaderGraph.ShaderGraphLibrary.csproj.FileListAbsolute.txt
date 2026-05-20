@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Re.AFC7AF73.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.RenderPipelines.ShaderGraph.ShaderGraphLibrary.pdb

@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Searcher.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Unity.Searcher.Editor.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Searcher.Editor.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Searcher.Editor.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Se.5E4EE494.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Searcher.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Unity.Searcher.Editor.pdb

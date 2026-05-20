@@ -484,7 +484,6 @@ namespace DG.Map
                     if (success)
                     {
                         successCount++;
-                        ApplyStructureRuntimeEffects(entityId, request);
                     }
                     else
                     {
@@ -494,6 +493,10 @@ namespace DG.Map
 
                     lastResult = "batch spawn ok:" + successCount + " fail:" + failCount + (string.IsNullOrEmpty(lastReason) ? string.Empty : " " + lastReason);
                     Rebuild();
+                    if (success)
+                    {
+                        ApplyStructureRuntimeEffects(entityId, request);
+                    }
                 });
             }
         }

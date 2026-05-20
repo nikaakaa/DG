@@ -71,6 +71,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        if (!VerifyPresentationFactRegistry(out reason))
+        {
+            return false;
+        }
+
         if (!VerifyParallelCandidateBoundary(out reason))
         {
             return false;
@@ -123,6 +128,78 @@ public static class AuthoritativeMoveWorldVerification
 
         if (!VerifyEffectApplicationLayer(out reason))
         {
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool VerifyPresentationFactRegistry(out string reason)
+    {
+        var registry = new ActionPresentationRegistry(new[]
+        {
+            new ActionPresentationConfig("registry_fact_action", PresentationFactType.EntityMoved)
+        });
+        var composer = new PresentationFactComposer(registry);
+        var action = new WorldAction(930001, WorldActionPriority.Player, new ActionSpecId("registry_fact_action"), 930101, new GridCoord(1, 0), Direction.Right, 77, 1, 1, 1);
+        var proposal = CommitProposal.Move(WorldActionPriority.Player, 930001, 930201, 930101, new GridCoord(0, 0), new GridCoord(1, 0), 9);
+
+        var explicitResult = new BehaviorRuntimeTickResult(
+            new Dictionary<long, MoveResult>
+            {
+                [action.ActionId] = new MoveResult(true, action.EntityId, new GridCoord(1, 0), Direction.Right, MoveErrorCode.None, string.Empty, false, default, action.ClientTick)
+            },
+            new[] { new CommitProposalResult(proposal, true, string.Empty) },
+            Array.Empty<string>(),
+            Array.Empty<DeferredAction>(),
+            new[]
+            {
+                ActionFact.WithProjection(
+                    ActionFactType.EntityMoved,
+                    9,
+                    PresentationFactType.EntityMoved,
+                    PresentationFactResultKind.Success,
+                    action.ActionId,
+                    action.ClientTick,
+                    action.EntityId,
+                    new[] { action.EntityId },
+                    new GridCoord(0, 0),
+                    new GridCoord(1, 0),
+                    Direction.Right,
+                    9,
+                    0,
+                    9,
+                    0d,
+                    0,
+                    0,
+                    default,
+                    RotatePivotDirection.None,
+                    Array.Empty<PresentationFactMember>(),
+                    Array.Empty<PresentationFactImpact>())
+            });
+        IReadOnlyList<PresentationFact> explicitFacts = composer.Compose(9, new[] { action }, explicitResult);
+        if (explicitFacts.Count != 1 ||
+            explicitFacts[0].FactType != PresentationFactType.EntityMoved ||
+            PrimarySubject(explicitFacts[0]) != action.EntityId)
+        {
+            reason = "presentation fact composer duplicated explicit ActionFact fallback:" + string.Join(",", explicitFacts.Select(PresentationFactKey));
+            return false;
+        }
+
+        var rotateNamedResult = new BehaviorRuntimeTickResult(
+            new Dictionary<long, MoveResult>
+            {
+                [action.ActionId] = new MoveResult(true, action.EntityId, new GridCoord(1, 0), Direction.Right, MoveErrorCode.None, "rotate-pivot-deferred-output", false, default, action.ClientTick)
+            },
+            new[] { new CommitProposalResult(proposal, true, "rotate-pivot-impact") },
+            new[] { "rotate-pivot-deferred-output" },
+            Array.Empty<DeferredAction>(),
+            Array.Empty<ActionFact>());
+        IReadOnlyList<PresentationFact> rotateNamedFacts = composer.Compose(9, new[] { action }, rotateNamedResult);
+        if (rotateNamedFacts.Any(item => item.FactType == PresentationFactType.RotatePivotGroup || item.FactType == PresentationFactType.RotatePivotImpact))
+        {
+            reason = "presentation fact composer inferred rotate fact from reason or transition:" + string.Join(",", rotateNamedFacts.Select(PresentationFactKey));
             return false;
         }
 
@@ -275,12 +352,12 @@ public static class AuthoritativeMoveWorldVerification
         world.FlushDelta();
         world.ResetObservations();
         world.SetComponent(reusedPlayer, new DirectionComponent(Direction.Up));
-        world.AddAnimationMetadata(new WorldDeltaAnimationMetadata(reusedPlayer.EntityId, world.ServerTick, WorldDeltaMotionKind.PlayerMove, "player_move", Direction.Up));
+        world.AddPresentationFact(TestFact(1, world.ServerTick, PresentationFactType.EntityMoved, reusedPlayer.EntityId, Direction.Up));
         world.RecordTouchedDiagnostics(new[] { reusedPlayer.EntityId });
         WorldDelta dirtyDelta = world.FlushDelta();
         if (dirtyDelta.ChangedEntities.Count != 1 ||
             dirtyDelta.ChangedEntities[0].EntityId != reusedPlayer.EntityId ||
-            dirtyDelta.AnimationMetadata.Count != 1 ||
+            dirtyDelta.PresentationFacts.Count != 1 ||
             world.Observations.TouchedDiagnosticCount != 1)
         {
             reason = "dirty responsibility boundary failed";
@@ -493,15 +570,15 @@ public static class AuthoritativeMoveWorldVerification
 
     private static bool VerifyComponentSystemWorkflow(out string reason)
     {
-        IReadOnlyDictionary<string, int> runtimeValues = Enum.GetValues(typeof(ComponentKind))
-            .Cast<ComponentKind>()
-            .ToDictionary(kind => kind.ToString(), kind => (int)kind);
-        IReadOnlyDictionary<string, int> lubanValues = Enum.GetValues(typeof(cfg.gamecore.ComponentKind))
-            .Cast<cfg.gamecore.ComponentKind>()
-            .ToDictionary(kind => kind.ToString(), kind => (int)kind);
-        if (!runtimeValues.OrderBy(pair => pair.Key).SequenceEqual(lubanValues.OrderBy(pair => pair.Key)))
+        IGameConfigProvider provider = CreateLubanProvider();
+        IReadOnlyList<ComponentId> unknownLubanIds = provider.GetEntityArchetypes()
+            .SelectMany(archetype => archetype.ComponentIds)
+            .Where(id => !ComponentApplicationRegistry.Default.IsRegistered(id))
+            .Distinct()
+            .ToArray();
+        if (unknownLubanIds.Count != 0)
         {
-            reason = "component kind runtime and luban generated enum drifted";
+            reason = "luban entity archetype references unknown component id";
             return false;
         }
 
@@ -577,7 +654,7 @@ public static class AuthoritativeMoveWorldVerification
 
         if (!luban.TryGetPushOnEnter(DefaultWorldConfig.ConveyorConfigId, out PushOnEnterConfig conveyorOutput) ||
             !conveyorOutput.OutputSpecId.Equals(new ActionSpecId("mechanism_push")) ||
-            conveyorOutput.OutputCostTicks != 3)
+            conveyorOutput.OutputCostTicks != 1)
         {
             reason = "formal conveyor push on enter config invalid";
             return false;
@@ -673,7 +750,10 @@ public static class AuthoritativeMoveWorldVerification
         world.NextTick();
         var queue = new WorldActionQueue();
         queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        var system = new BehaviorRuntime();
+        BehaviorRuntimeTickResult start = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        world.NextTick();
+        BehaviorRuntimeTickResult result = system.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
         if (result.ActionResults.Count != 1 ||
             !result.ActionResults.Values.First().Success ||
             !world.TryGetEntity(1, out GameEntity player) ||
@@ -692,7 +772,14 @@ public static class AuthoritativeMoveWorldVerification
         blockedWorld.NextTick();
         var blockedQueue = new WorldActionQueue();
         blockedQueue.EnqueueConfiguredMove("mechanism_push", 2, Direction.Right, blockedWorld.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), blockedWorld.ServerTick);
+        var blockedSystem = new BehaviorRuntime();
+        BehaviorRuntimeTickResult blockedStart = blockedSystem.Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), blockedWorld.ServerTick);
+        blockedWorld.NextTick();
+        BehaviorRuntimeTickResult blockedResult = blockedSystem.Tick(blockedWorld, Array.Empty<WorldAction>(), blockedWorld.ServerTick);
+        if (blockedResult.ActionResults.Count == 0)
+        {
+            blockedResult = blockedStart;
+        }
         if (blockedResult.ActionResults.Count != 1 ||
             blockedResult.ActionResults.Values.First().Success ||
             !blockedWorld.TryGetEntity(2, out GameEntity blockedPlayer) ||
@@ -791,47 +878,57 @@ public static class AuthoritativeMoveWorldVerification
     private static bool VerifyDebugWorldEdit(out string reason)
     {
         var world = new GameWorld();
-        var service = new DebugWorldEditService(world);
+        var inputQueue = new AuthoritativeInputQueue();
+        var syncSystem = new AuthoritativeWorldSyncSystem(world);
+        var tickRunner = new AuthoritativeWorldTickRunner(world, inputQueue, syncSystem, 200);
+        var service = new DebugWorldEditService(world, inputQueue);
         service.Enabled = false;
-        if (service.TrySpawn(100, DefaultWorldConfig.BlockerConfigId, new GridCoord(0, 0), Direction.None, 0, 1, out _, out _) ||
-            world.EntityCount != 0)
+
+        AuthoritativeDebugActionInput disabledSpawn = service.EnqueueSpawn(100, DefaultWorldConfig.BlockerConfigId, new GridCoord(0, 0), Direction.None, 0, 1);
+        tickRunner.Tick();
+        if (disabledSpawn.Result.Success || world.EntityCount != 0)
         {
             reason = "disabled debug spawn modified world";
             return false;
         }
 
-        if (service.TryMove(100, new GridCoord(1, 0), out _, out _) ||
-            service.TryRemove(100, out _))
+        AuthoritativeDebugActionInput disabledMove = service.EnqueueMove(100, new GridCoord(1, 0));
+        AuthoritativeDebugActionInput disabledRemove = service.EnqueueRemove(100);
+        tickRunner.Tick();
+        if (disabledMove.Result.Success || disabledRemove.Result.Success)
         {
             reason = "disabled debug move or remove succeeded";
             return false;
         }
 
         service.Enabled = true;
-        if (!service.TrySpawn(100, DefaultWorldConfig.BlockerConfigId, new GridCoord(0, 0), Direction.None, 0, 1, out long spawnedEntityId, out string spawnReason) ||
-            spawnedEntityId != 100 ||
-            !string.IsNullOrEmpty(spawnReason))
+        AuthoritativeDebugActionInput spawnInput = service.EnqueueSpawn(100, DefaultWorldConfig.BlockerConfigId, new GridCoord(0, 0), Direction.None, 0, 1);
+        WorldDelta spawnDelta = tickRunner.Tick();
+        if (!spawnInput.Result.Success ||
+            spawnInput.Result.EntityId != 100 ||
+            !string.IsNullOrEmpty(spawnInput.Result.Reason))
         {
             reason = "debug spawn failed";
             return false;
         }
 
-        WorldDelta spawnDelta = world.FlushDelta();
         if (spawnDelta.ChangedEntities.Count != 1 || spawnDelta.ChangedEntities[0].EntityId != 100)
         {
             reason = "debug spawn did not create changed delta";
             return false;
         }
 
-        if (!service.TryMove(100, new GridCoord(2, 3), out GridCoord finalCoord, out string moveReason) ||
-            finalCoord != new GridCoord(2, 3) ||
-            !string.IsNullOrEmpty(moveReason))
+        AuthoritativeDebugActionInput moveInput = service.EnqueueMove(100, new GridCoord(2, 3));
+        WorldDelta moveEnqueueDelta = tickRunner.Tick();
+        WorldDelta moveDelta = moveInput.IsCompleted ? moveEnqueueDelta : tickRunner.Tick();
+        if (!moveInput.Result.Success ||
+            moveInput.Result.FinalCoord != new GridCoord(2, 3) ||
+            !string.IsNullOrEmpty(moveInput.Result.Reason))
         {
             reason = "debug move failed";
             return false;
         }
 
-        WorldDelta moveDelta = world.FlushDelta();
         if (moveDelta.ChangedEntities.Count != 1 ||
             moveDelta.ChangedEntities[0].EntityId != 100 ||
             moveDelta.ChangedEntities[0].X != 2 ||
@@ -841,37 +938,54 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        if (!service.TrySetTag(100, WorldTag.ImmuneMechanismPush, true, out string tagReason) ||
-            !string.IsNullOrEmpty(tagReason) ||
-            !world.TryGetEntity(100, out GameEntity taggedEntity) ||
-            !world.HasTag(taggedEntity, WorldTag.ImmuneMechanismPush))
+        AuthoritativeDebugActionInput tagInput = service.EnqueueSetTag(100, WorldTag.ImmuneMechanismPush, true);
+        WorldDelta tagDelta = tickRunner.Tick();
+        if (!tagInput.Result.Success)
         {
-            reason = "debug set tag failed";
+            reason = "debug set tag rejected: " + tagInput.Result.Reason;
+            return false;
+        }
+        if (!string.IsNullOrEmpty(tagInput.Result.Reason))
+        {
+            reason = "debug set tag had reason: " + tagInput.Result.Reason;
+            return false;
+        }
+        if (!world.TryGetEntity(100, out GameEntity taggedEntity))
+        {
+            reason = "debug set tag missing entity 100";
+            return false;
+        }
+        if (!world.HasTag(taggedEntity, WorldTag.ImmuneMechanismPush))
+        {
+            reason = "debug set tag did not apply tag";
             return false;
         }
 
-        WorldDelta tagDelta = world.FlushDelta();
         if (tagDelta.ChangedEntities.Count != 1 || tagDelta.ChangedEntities[0].EntityId != 100)
         {
             reason = "debug set tag did not create changed delta";
             return false;
         }
 
-        if (service.TrySetTag(100, WorldTag.None, true, out _) ||
-            service.TrySetTag(404, WorldTag.BlockPlayerMove, true, out _) ||
-            world.FlushDelta().ChangedEntities.Count != 0)
+        AuthoritativeDebugActionInput invalidTagInput = service.EnqueueSetTag(100, WorldTag.None, true);
+        AuthoritativeDebugActionInput unknownEntityTagInput = service.EnqueueSetTag(404, WorldTag.BlockPlayerMove, true);
+        WorldDelta failedTagDelta = tickRunner.Tick();
+        if (invalidTagInput.Result.Success ||
+            unknownEntityTagInput.Result.Success ||
+            failedTagDelta.ChangedEntities.Count != 0)
         {
             reason = "failed debug set tag produced delta";
             return false;
         }
 
-        if (!service.TryRemove(100, out string removeReason) || !string.IsNullOrEmpty(removeReason))
+        AuthoritativeDebugActionInput removeInput = service.EnqueueRemove(100);
+        WorldDelta removeDelta = tickRunner.Tick();
+        if (!removeInput.Result.Success || !string.IsNullOrEmpty(removeInput.Result.Reason))
         {
             reason = "debug remove failed";
             return false;
         }
 
-        WorldDelta removeDelta = world.FlushDelta();
         if (removeDelta.ChangedEntities.Count != 0 || removeDelta.RemovedEntityIds.Count != 1 || removeDelta.RemovedEntityIds[0] != 100)
         {
             reason = "debug remove did not create removed delta";
@@ -973,19 +1087,30 @@ public static class AuthoritativeMoveWorldVerification
         pushBlockedWorld.FlushDelta();
         pushBlockedWorld.NextTick();
         var pushBlockedQueue = new WorldActionQueue();
-        var pushBlockedSystem = new StateDrivenRuleExecutionSystem();
+        var pushBlockedSystem = new BehaviorRuntime();
         WorldAction pushBlockedAction = pushBlockedQueue.EnqueuePlayerMove(950, new GridCoord(1, 0), 15);
-        StateDrivenRuleExecutionResult pushBlockedFirst = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
+        BehaviorRuntimeTickResult pushBlockedFirst = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
         for (int i = 0; i < pushBlockedFirst.DeferredActions.Count; i++)
         {
             pushBlockedQueue.EnqueueDeferred(pushBlockedFirst.DeferredActions[i]);
         }
         pushBlockedWorld.NextTick();
-        StateDrivenRuleExecutionResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
-        if (!pushBlockedFirst.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlockedSource) ||
+        BehaviorRuntimeTickResult pushBlockedRelease = pushBlockedSystem.Tick(pushBlockedWorld, Array.Empty<WorldAction>(), pushBlockedWorld.ServerTick);
+        BehaviorRuntimeTickResult pushBlockedSourceResult = pushBlockedRelease.ActionResults.Count != 0 ? pushBlockedRelease : pushBlockedFirst;
+        IReadOnlyList<DeferredAction> pushBlockedDeferred = pushBlockedRelease.DeferredActions.Count != 0 ? pushBlockedRelease.DeferredActions : pushBlockedFirst.DeferredActions;
+        for (int i = 0; i < pushBlockedDeferred.Count; i++)
+        {
+            pushBlockedQueue.EnqueueDeferred(pushBlockedDeferred[i]);
+        }
+        pushBlockedWorld.NextTick();
+        BehaviorRuntimeTickResult pushBlockedDeferredStart = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
+        pushBlockedWorld.NextTick();
+        BehaviorRuntimeTickResult pushBlockedSecond = pushBlockedSystem.Tick(pushBlockedWorld, pushBlockedQueue.DrainReady(pushBlockedWorld.ServerTick), pushBlockedWorld.ServerTick);
+        BehaviorRuntimeTickResult pushBlockedDownstream = pushBlockedSecond.ActionResults.Count != 0 ? pushBlockedSecond : pushBlockedDeferredStart;
+        if (!pushBlockedSourceResult.ActionResults.TryGetValue(pushBlockedAction.ActionId, out MoveResult pushBlockedSource) ||
             !pushBlockedSource.Success ||
-            !pushBlockedFirst.Reasons.Contains("bounded/deferred-output") ||
-            !pushBlockedSecond.Reasons.Contains("blocked cell") ||
+            !pushBlockedSourceResult.Reasons.Contains("bounded/deferred-output") ||
+            !pushBlockedDownstream.Reasons.Contains("blocked cell") ||
             pushBlockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
             !pushBlockedWorld.TryGetEntity(950, out GameEntity pushBlockedPlayer) ||
             !pushBlockedWorld.TryGetEntity(951, out GameEntity pushBlockedBox) ||
@@ -1052,6 +1177,15 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
+        WorldDelta legalStartDelta = runner.Tick();
+        if (legal.IsCompleted ||
+            legalStartDelta.ChangedEntities.Count != 0 ||
+            legalStartDelta.RemovedEntityIds.Count != 0)
+        {
+            reason = "queued move resolved before completion tick";
+            return false;
+        }
+
         WorldDelta legalDelta = runner.Tick();
         MoveResult legalResult = legal.WaitAsync().GetResult();
         if (!legalResult.Success ||
@@ -1092,6 +1226,7 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(autoWorld),
             1);
         autoRunner.Tick();
+        autoRunner.Tick();
         if (!autoWorld.TryGetEntity(10, out GameEntity ball) ||
             !autoWorld.TryGetComponent(ball, out PositionComponent ballPosition) ||
             ballPosition.Coord != new GridCoord(1, 0))
@@ -1111,14 +1246,6 @@ public static class AuthoritativeMoveWorldVerification
             1);
         pushRunner.Tick();
         pushRunner.Tick();
-        if (pushWorld.TryGetEntity(21, out GameEntity tooEarlyPlayer) &&
-            pushWorld.TryGetComponent(tooEarlyPlayer, out PositionComponent tooEarlyPosition) &&
-            tooEarlyPosition.Coord != new GridCoord(0, 0))
-        {
-            reason = "push on enter ignored configured cost ticks";
-            return false;
-        }
-
         pushRunner.Tick();
         if (!pushWorld.TryGetEntity(21, out GameEntity pushedPlayer) ||
             !pushWorld.TryGetComponent(pushedPlayer, out PositionComponent pushedPosition) ||
@@ -1167,12 +1294,16 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        AuthoritativeMoveInput expired = queue.EnqueueMove(12, 4, Direction.Down, 4, 103, 5);
-        if (!expired.IsCompleted ||
-            expired.Status != AuthoritativePlayerInputStatus.Expired ||
+        AuthoritativeMoveInput beatOnly = queue.EnqueueMove(12, 4, Direction.Down, 4, 103, 5);
+        IReadOnlyList<AuthoritativeMoveInput> beatOnlyDrained = queue.DrainMoves(6);
+        if (beatOnly.IsCompleted ||
+            beatOnly.ConsumeTick != 6 ||
+            beatOnly.BeatTick != 4 ||
+            beatOnlyDrained.Count != 1 ||
+            beatOnlyDrained[0].EntityId != 12 ||
             queue.PendingMoveCount != 0)
         {
-            reason = "expired beat input entered queue";
+            reason = "client beat tick incorrectly controlled consume window";
             return false;
         }
 
@@ -1185,7 +1316,10 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(world),
             1);
         AuthoritativeMoveInput right = queue.EnqueueMove(20, 1, Direction.Right, 5, 104, world.ServerTick);
-        runner.Tick();
+        for (int i = 0; i < 16; i++)
+        {
+            runner.Tick();
+        }
         MoveResult result = right.WaitAsync().GetResult();
         if (!result.Success ||
             result.FinalCoord != new GridCoord(4, 3) ||
@@ -1202,20 +1336,23 @@ public static class AuthoritativeMoveWorldVerification
     private static bool VerifyInputIntentLayer(out string reason)
     {
         var queue = new AuthoritativeInputQueue();
-        InputIntent firstIntent = InputIntent.PlayerMove(10, Direction.Left, 5, 7001, 100, 4);
-        InputIntent secondIntent = InputIntent.PlayerMove(10, Direction.Right, 5, 7002, 101, 4);
+        InputIntent firstIntent = InputIntent.PlayerMove(10, Direction.Left, 100, 7001, 100, 4);
+        InputIntent secondIntent = InputIntent.PlayerMove(10, Direction.Right, 200, 7002, 101, 4);
         AuthoritativeMoveInput first = queue.EnqueueIntent(firstIntent, 4);
-        AuthoritativeMoveInput second = queue.EnqueueIntent(secondIntent, 4);
+        AuthoritativeMoveInput second = queue.EnqueueIntent(secondIntent, 5);
         if (!first.IsCompleted ||
             first.Status != AuthoritativePlayerInputStatus.Replaced ||
             second.IsCompleted ||
+            first.ConsumeTick != 5 ||
+            second.ConsumeTick != 5 ||
+            second.BeatTick != 200 ||
             queue.PendingMoveCount != 1)
         {
-            reason = "input intent replacement failed";
+            reason = "same consume window input intent replacement failed";
             return false;
         }
 
-        AuthoritativeMoveInput otherActor = queue.EnqueueIntent(InputIntent.PlayerMove(11, Direction.Up, 5, 7003, 102, 4), 4);
+        AuthoritativeMoveInput otherActor = queue.EnqueueIntent(InputIntent.PlayerMove(11, Direction.Up, 300, 7003, 102, 4), 4);
         IReadOnlyList<AuthoritativeMoveInput> drained = queue.DrainMoves(5);
         if (drained.Count != 2 ||
             drained[0].Intent.InputKind != InputKind.Move ||
@@ -1231,6 +1368,37 @@ public static class AuthoritativeMoveWorldVerification
         if (!duplicate.IsCompleted || duplicate.Status != AuthoritativePlayerInputStatus.Rejected)
         {
             reason = "duplicate input intent was not rejected";
+            return false;
+        }
+
+        var windowQueue = new AuthoritativeInputQueue();
+        AuthoritativeMoveInput rapidA = windowQueue.EnqueueIntent(InputIntent.PlayerMove(30, Direction.Left, 1000, 7201, 1, 4), 4);
+        AuthoritativeMoveInput rapidB = windowQueue.EnqueueIntent(InputIntent.PlayerMove(30, Direction.Up, 1001, 7202, 2, 5), 5);
+        AuthoritativeMoveInput rapidC = windowQueue.EnqueueIntent(InputIntent.PlayerMove(30, Direction.Right, 1002, 7203, 3, 6), 6);
+        IReadOnlyList<AuthoritativeMoveInput> rapidDrain = windowQueue.DrainMoves(5);
+        if (!rapidA.IsCompleted ||
+            rapidA.Status != AuthoritativePlayerInputStatus.Replaced ||
+            !rapidB.IsCompleted ||
+            rapidB.Status != AuthoritativePlayerInputStatus.Replaced ||
+            rapidC.IsCompleted ||
+            rapidA.ConsumeTick != 5 ||
+            rapidB.ConsumeTick != 5 ||
+            rapidC.ConsumeTick != 5 ||
+            rapidDrain.Count != 1 ||
+            rapidDrain[0].Direction != Direction.Right)
+        {
+            reason = "rapid inputs were split by server tick instead of consume window";
+            return false;
+        }
+
+        var beatQueue = new AuthoritativeInputQueue();
+        AuthoritativeMoveInput farBeat = beatQueue.EnqueueIntent(InputIntent.PlayerMove(31, Direction.Down, 9999, 7301, 1, 4), 4);
+        if (farBeat.ConsumeTick != 5 ||
+            beatQueue.DrainMoves(9999).Count != 0 ||
+            beatQueue.PendingMoveCount != 1 ||
+            beatQueue.DrainMoves(5).Count != 1)
+        {
+            reason = "client-declared beat tick scheduled ordinary input into future server tick";
             return false;
         }
 
@@ -1263,7 +1431,10 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(blockedWorld),
             1);
         AuthoritativeMoveInput blocked = blockedQueue.EnqueueIntent(InputIntent.PlayerMove(20, Direction.Right, blockedWorld.ServerTick + 1, 7103, 1, blockedWorld.ServerTick), blockedWorld.ServerTick);
-        runner.Tick();
+        for (int i = 0; i < 6; i++)
+        {
+            runner.Tick();
+        }
         MoveResult blockedResult = blocked.WaitAsync().GetResult();
         if (blockedResult.Success ||
             blockedResult.ErrorCode == MoveErrorCode.None ||
@@ -1292,12 +1463,15 @@ public static class AuthoritativeMoveWorldVerification
 
         WorldDelta first = autoRunner.Tick();
         WorldDelta second = autoRunner.Tick();
+        if (second.ChangedEntities.Count == 0)
+        {
+            second = autoRunner.Tick();
+        }
         GameWorldObservation autoObservation = autoWorld.Observations;
-        if (first.ChangedEntities.Count != 1 ||
+        if (first.ChangedEntities.Any(entity => entity.EntityId == 5000 && (entity.X != 0 || entity.Y != 0)) ||
             second.ChangedEntities.Count != 1 ||
             first.ServerTick >= second.ServerTick ||
-            !first.ChangedEntities.Any(entity => entity.EntityId == 5000 && entity.X == 1 && entity.Y == 0) ||
-            !second.ChangedEntities.Any(entity => entity.EntityId == 5000 && entity.X == 2 && entity.Y == 0) ||
+            !second.ChangedEntities.Any(entity => entity.EntityId == 5000 && entity.X == 1 && entity.Y == 0) ||
             sync.LastDelta.ServerTick != second.ServerTick ||
             !sync.LastDeltaSkippedNoObservers ||
             sync.LastDeltaBroadcasted ||
@@ -1318,10 +1492,11 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeInputQueue(),
             pushSync,
             1);
-        pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
+        WorldDelta pushFirst = pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
         WorldDelta pushDelta = pushRunner.Tick(Array.Empty<Fantasy.Network.Session>());
         GameWorldObservation pushObservation = pushWorld.Observations;
-        if (pushDelta.ChangedEntities.Count != 1 ||
+        if (pushFirst.ChangedEntities.Any(entity => entity.EntityId == 5011) ||
+            pushDelta.ChangedEntities.Count != 1 ||
             !pushDelta.ChangedEntities.Any(entity => entity.EntityId == 5011 && entity.X == 1 && entity.Y == 0) ||
             pushSync.LastDelta.ServerTick != pushDelta.ServerTick ||
             !pushSync.LastDeltaSkippedNoObservers ||
@@ -1335,16 +1510,16 @@ public static class AuthoritativeMoveWorldVerification
         var metadataOnlyWorld = new GameWorld();
         metadataOnlyWorld.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(5020, new GridCoord(0, 0), Direction.Right));
         metadataOnlyWorld.FlushDelta();
-        metadataOnlyWorld.AddAnimationMetadata(new WorldDeltaAnimationMetadata(5020, metadataOnlyWorld.ServerTick, WorldDeltaMotionKind.MechanismPush, "mechanism_push", Direction.Up));
+        metadataOnlyWorld.AddPresentationFact(TestFact(1, metadataOnlyWorld.ServerTick, PresentationFactType.EntityPushed, 5020, Direction.Up));
         var metadataOnlySync = new AuthoritativeWorldSyncSystem(metadataOnlyWorld);
         WorldDelta metadataOnlyDelta = metadataOnlySync.BroadcastDelta(Array.Empty<Fantasy.Network.Session>());
         if (metadataOnlyDelta.ChangedEntities.Count != 0 ||
-            metadataOnlyDelta.AnimationMetadata.Count != 1 ||
-            metadataOnlyDelta.AnimationMetadata[0].EntityId != 5020 ||
-            metadataOnlyDelta.AnimationMetadata[0].Direction != Direction.Up ||
+            metadataOnlyDelta.PresentationFacts.Count != 1 ||
+            PrimarySubject(metadataOnlyDelta.PresentationFacts[0]) != 5020 ||
+            metadataOnlyDelta.PresentationFacts[0].Direction != Direction.Up ||
             !metadataOnlySync.LastDeltaSkippedNoObservers)
         {
-            reason = "metadata-only delta was not retained for observer broadcast path";
+            reason = "presentation-only delta was not retained for observer broadcast path";
             return false;
         }
 
@@ -1454,6 +1629,9 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput singleInput = singleQueue.EnqueueMove(930, new GridCoord(1, 0), 13);
         WorldDelta singleFirstDelta = singleRunner.Tick();
+        TickUntilCompleted(singleRunner, singleInput);
+        singleRunner.Tick();
+        WorldDelta singleSecondDelta = singleRunner.Tick();
         MoveResult singleResult = singleInput.WaitAsync().GetResult();
         if (!singleResult.Success ||
             singleResult.FinalCoord != new GridCoord(0, 0) ||
@@ -1463,7 +1641,6 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        WorldDelta singleSecondDelta = singleRunner.Tick();
         if (singleSecondDelta.ChangedEntities.Count != 1 ||
             !singleSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 931 && snapshot.X == 2 && snapshot.Y == 0))
         {
@@ -1495,22 +1672,23 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput bodyPushInput = bodyPushQueue.EnqueueMove(933, new GridCoord(1, 0), 17);
         WorldDelta bodyPushFirstDelta = bodyPushRunner.Tick();
-        MoveResult bodyPushResult = bodyPushInput.WaitAsync().GetResult();
+        TickUntilCompleted(bodyPushRunner, bodyPushInput);
+        bodyPushRunner.Tick();
         WorldDelta bodyPushSecondDelta = bodyPushRunner.Tick();
+        MoveResult bodyPushResult = bodyPushInput.WaitAsync().GetResult();
         if (!bodyPushResult.Success ||
             bodyPushResult.FinalCoord != new GridCoord(0, 0) ||
             bodyPushFirstDelta.ChangedEntities.Count != 0 ||
             bodyPushSecondDelta.ChangedEntities.Count != 2 ||
             !bodyPushSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 934 && snapshot.X == 2 && snapshot.Y == 0) ||
             !bodyPushSecondDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 935 && snapshot.X == 3 && snapshot.Y == 0) ||
-            bodyPushSecondDelta.AnimationMetadata.Count != 2 ||
-            !bodyPushSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 934 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush) ||
-            !bodyPushSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 935 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush))
+            bodyPushSecondDelta.PresentationFacts.Count != 1 ||
+            !bodyPushSecondDelta.PresentationFacts.Any(PresentationFact => PresentationFact.FactType == PresentationFactType.BodyMoved && PresentationFact.SubjectEntityIds.Contains(934) && PresentationFact.SubjectEntityIds.Contains(935) && PresentationFact.Members.Count == 2))
         {
-            reason = "state deferred push did not move connected body members with metadata changed=" +
+            reason = "state deferred push did not move connected body members with PresentationFact changed=" +
                 string.Join(",", bodyPushSecondDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
-                " metadata=" +
-                string.Join(",", bodyPushSecondDelta.AnimationMetadata.Select(metadata => metadata.EntityId + ":" + metadata.MotionKind));
+                " presentation=" +
+                string.Join(",", bodyPushSecondDelta.PresentationFacts.Select(PresentationFactKey));
             return false;
         }
 
@@ -1529,21 +1707,21 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput intermediateInput = intermediateQueue.EnqueueMove(936, new GridCoord(1, 0), 18);
         WorldDelta intermediateFirstDelta = intermediateRunner.Tick();
-        MoveResult intermediateResult = intermediateInput.WaitAsync().GetResult();
+        TickUntilCompleted(intermediateRunner, intermediateInput);
+        intermediateRunner.Tick();
         WorldDelta intermediateSecondDelta = intermediateRunner.Tick();
+        MoveResult intermediateResult = intermediateInput.WaitAsync().GetResult();
         WorldDelta intermediateThirdDelta = intermediateRunner.Tick();
         WorldDelta intermediateFourthDelta = intermediateRunner.Tick();
+        WorldDelta intermediateFifthDelta = intermediateRunner.Tick();
+        IReadOnlyList<WorldDelta> intermediateDeltas = new[] { intermediateSecondDelta, intermediateThirdDelta, intermediateFourthDelta, intermediateFifthDelta };
+        WorldDelta intermediateMoveDelta = intermediateDeltas.First(delta => delta.ChangedEntities.Any(snapshot => snapshot.EntityId == 939));
         if (!intermediateResult.Success ||
             intermediateResult.FinalCoord != new GridCoord(0, 0) ||
             intermediateFirstDelta.ChangedEntities.Count != 0 ||
             intermediateSecondDelta.ChangedEntities.Count != 0 ||
-            intermediateSecondDelta.AnimationMetadata.Count != 2 ||
-            !intermediateSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 937 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.Direction == Direction.Right) ||
-            !intermediateSecondDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 938 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.Direction == Direction.Right) ||
-            intermediateThirdDelta.ChangedEntities.Count != 1 ||
-            !intermediateThirdDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 939 && snapshot.X == 4 && snapshot.Y == 0) ||
-            intermediateFourthDelta.ChangedEntities.Count != 0 ||
-            intermediateFourthDelta.AnimationMetadata.Count != 0 ||
+            intermediateMoveDelta.ChangedEntities.Count != 1 ||
+            !intermediateMoveDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 939 && snapshot.X == 4 && snapshot.Y == 0) ||
             !intermediateWorld.TryGetEntity(937, out GameEntity intermediateFirstMember) ||
             !intermediateWorld.TryGetEntity(938, out GameEntity intermediateSecondMember) ||
             !intermediateWorld.TryGetComponent(intermediateFirstMember, out PositionComponent intermediateFirstPosition) ||
@@ -1554,13 +1732,15 @@ public static class AuthoritativeMoveWorldVerification
             reason = "intermediate connected body push should feedback without moving middle body secondChanged=" +
                 string.Join(",", intermediateSecondDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
                 " secondMetadata=" +
-                string.Join(",", intermediateSecondDelta.AnimationMetadata.Select(metadata => metadata.EntityId + ":" + metadata.MotionKind + ":" + metadata.Direction)) +
+                string.Join(",", intermediateSecondDelta.PresentationFacts.Select(PresentationFactKey)) +
                 " thirdChanged=" +
                 string.Join(",", intermediateThirdDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
                 " fourthChanged=" +
                 string.Join(",", intermediateFourthDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y)) +
                 " fourthMetadata=" +
-                string.Join(",", intermediateFourthDelta.AnimationMetadata.Select(metadata => metadata.EntityId + ":" + metadata.MotionKind));
+                string.Join(",", intermediateFourthDelta.PresentationFacts.Select(PresentationFactKey)) +
+                " fifthChanged=" +
+                string.Join(",", intermediateFifthDelta.ChangedEntities.Select(snapshot => snapshot.EntityId + ":" + snapshot.X + "," + snapshot.Y));
             return false;
         }
 
@@ -1578,8 +1758,12 @@ public static class AuthoritativeMoveWorldVerification
         AuthoritativeMoveInput firstRepeatedInput = repeatedQueue.EnqueueMove(960, new GridCoord(1, 0), 21);
         repeatedRunner.Tick();
         AuthoritativeMoveInput secondRepeatedInput = repeatedQueue.EnqueueMove(960, new GridCoord(1, 0), 22);
-        repeatedRunner.Tick();
-        repeatedRunner.Tick();
+        TickUntilCompleted(repeatedRunner, firstRepeatedInput);
+        TickUntilCompleted(repeatedRunner, secondRepeatedInput);
+        for (int i = 0; i < 6; i++)
+        {
+            repeatedRunner.Tick();
+        }
         MoveResult firstRepeatedResult = firstRepeatedInput.WaitAsync().GetResult();
         MoveResult secondRepeatedResult = secondRepeatedInput.WaitAsync().GetResult();
         PositionComponent repeatedBoxPosition = default;
@@ -1613,11 +1797,11 @@ public static class AuthoritativeMoveWorldVerification
             1);
 
         AuthoritativeMoveInput chainInput = chainQueue.EnqueueMove(940, new GridCoord(1, 0), 14);
-        chainRunner.Tick();
-        chainRunner.Tick();
-        chainRunner.Tick();
-        chainRunner.Tick();
-        chainRunner.Tick();
+        TickUntilCompleted(chainRunner, chainInput);
+        for (int i = 0; i < 8; i++)
+        {
+            chainRunner.Tick();
+        }
         MoveResult chainResult = chainInput.WaitAsync().GetResult();
         if (!chainWorld.TryGetEntity(941, out GameEntity chainBoxA) ||
             !chainWorld.TryGetEntity(942, out GameEntity chainBoxB) ||
@@ -1639,8 +1823,8 @@ public static class AuthoritativeMoveWorldVerification
         loopWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(970, new GridCoord(0, 0)));
         loopWorld.FlushDelta();
         loopWorld.NextTick();
-        var loopSystem = new StateDrivenRuleExecutionSystem();
-        StateDrivenRuleExecutionResult loopResult = loopSystem.Tick(loopWorld, new[]
+        var loopSystem = new BehaviorRuntime();
+        BehaviorRuntimeTickResult loopResult = loopSystem.Tick(loopWorld, new[]
         {
             new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 970, null, Direction.Up, 0, loopWorld.ServerTick - 1, loopWorld.ServerTick, 1),
             new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 970, null, Direction.Down, 0, loopWorld.ServerTick - 1, loopWorld.ServerTick, 1)
@@ -1773,7 +1957,7 @@ public static class AuthoritativeMoveWorldVerification
         return left.ServerTick == right.ServerTick &&
             left.RemovedEntityIds.SequenceEqual(right.RemovedEntityIds) &&
             left.ChangedEntities.Select(DeltaSnapshotKey).OrderBy(item => item).SequenceEqual(right.ChangedEntities.Select(DeltaSnapshotKey).OrderBy(item => item)) &&
-            left.AnimationMetadata.Select(MetadataKey).OrderBy(item => item).SequenceEqual(right.AnimationMetadata.Select(MetadataKey).OrderBy(item => item));
+            left.PresentationFacts.Select(PresentationFactKey).OrderBy(item => item).SequenceEqual(right.PresentationFacts.Select(PresentationFactKey).OrderBy(item => item));
     }
 
     private static string DeltaSnapshotKey(EntitySnapshot snapshot)
@@ -1781,9 +1965,90 @@ public static class AuthoritativeMoveWorldVerification
         return snapshot.EntityId + ":" + snapshot.X + ":" + snapshot.Y + ":" + snapshot.Direction + ":" + snapshot.ServerTick;
     }
 
-    private static string MetadataKey(WorldDeltaAnimationMetadata metadata)
+    private static string PresentationFactKey(PresentationFact PresentationFact)
     {
-        return metadata.EntityId + ":" + metadata.ServerTick + ":" + metadata.MotionKind + ":" + metadata.Direction + ":" + metadata.StyleKey;
+        return PrimarySubject(PresentationFact) + ":" + PresentationFact.ServerTick + ":" + PresentationFact.FactType + ":" + PresentationFact.ResultKind + ":" + PresentationFact.Direction;
+    }
+
+    private static int PayloadInt(PresentationFact PresentationFact, string name)
+    {
+        if (name == "rotateDirection")
+        {
+            return (int)PresentationFact.RotateDirection;
+        }
+        if (name == "fromDirection")
+        {
+            return PresentationFact.Members.Count == 0 ? 0 : (int)PresentationFact.Members[0].FromDirection;
+        }
+        if (name == "fromPortLocalPorts")
+        {
+            return PresentationFact.Members.Count == 0 ? 0 : (int)PresentationFact.Members[0].FromPortLocalPorts;
+        }
+
+        return 0;
+    }
+
+    private static long PayloadLong(PresentationFact PresentationFact, string name)
+    {
+        if (name == "pivotEntityId")
+        {
+            return PresentationFact.PivotEntityId;
+        }
+        if (name == "startTick")
+        {
+            return PresentationFact.StartTick;
+        }
+        if (name == "endTick")
+        {
+            return PresentationFact.EndTick;
+        }
+
+        return 0;
+    }
+
+    private static bool PayloadBool(PresentationFact PresentationFact, string name)
+    {
+        return name == "bounce" && PresentationFact.ResultKind == PresentationFactResultKind.Bounce;
+    }
+
+    private static GridCoord PayloadCoord(PresentationFact PresentationFact, string xName, string yName)
+    {
+        if (xName == "pivotX" && yName == "pivotY")
+        {
+            return PresentationFact.PivotCoord;
+        }
+
+        if (xName == "impactX" && yName == "impactY" && PresentationFact.Impacts.Count != 0)
+        {
+            return PresentationFact.Impacts[0].ImpactTo;
+        }
+
+        return default;
+    }
+
+    private static bool PayloadMembersContain(PresentationFact PresentationFact, params long[] entityIds)
+    {
+        for (int i = 0; i < entityIds.Length; i++)
+        {
+            long entityId = entityIds[i];
+            bool found = PresentationFact.Members.Any(member => member.EntityId == entityId);
+            if (!found)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static long PrimarySubject(PresentationFact fact)
+    {
+        return fact.SubjectEntityIds.Count == 0 ? 0 : fact.SubjectEntityIds[0];
+    }
+
+    private static PresentationFact TestFact(long factId, long serverTick, PresentationFactType factType, long entityId, Direction direction)
+    {
+        return new PresentationFact(factId, serverTick, factType, PresentationFactResultKind.Success, 0, 0, entityId, new[] { entityId }, default, default, direction, serverTick, serverTick, 0, default, RotatePivotDirection.None, Array.Empty<PresentationFactMember>(), Array.Empty<PresentationFactImpact>());
     }
 
     private static bool VerifyPortConnectedPush(out string reason)
@@ -1875,22 +2140,77 @@ public static class AuthoritativeMoveWorldVerification
 
         SetRotatePivot(world, 80000100);
         world.NextTick();
-        StateDrivenRuleExecutionResult rotate = new StateDrivenRuleExecutionSystem().Tick(world, new[] { WorldMove(1, 80000101, Direction.Down) }, world.ServerTick);
-        if (!rotate.ActionResults.TryGetValue(1, out MoveResult rotateResult) ||
+        var rotateSystem = new BehaviorRuntime();
+        BehaviorRuntimeTickResult rotate = rotateSystem.Tick(world, new[] { WorldMove(1, 80000101, Direction.Down) }, world.ServerTick);
+        if (rotate.ActionResults.ContainsKey(1) ||
+            !HasPosition(world, 80000100, new GridCoord(0, 0)) ||
+            !HasPosition(world, 80000101, new GridCoord(1, 0)) ||
+            !rotate.BehaviorInstances.Any(instance => instance.SourceActionId == 1 && instance.State == BehaviorInstanceState.Running))
+        {
+            reason = "rotate pivot committed before lifecycle end";
+            return false;
+        }
+
+        world.NextTick();
+        BehaviorRuntimeTickResult rotateCommit = rotateSystem.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
+        if (!rotateCommit.ActionResults.TryGetValue(1, out MoveResult rotateResult) ||
             !rotateResult.Success ||
             !HasPosition(world, 80000100, new GridCoord(0, 0)) ||
             !HasPosition(world, 80000101, new GridCoord(0, -1)) ||
             !HasDirection(world, 80000101, Direction.Down))
         {
-            reason = "rotate pivot body did not rotate from single push";
+            reason = "rotate pivot body did not commit on lifecycle end";
             return false;
         }
 
-        if (rotate.AnimationMetadata.Count != 2 ||
-            !rotate.AnimationMetadata.Any(metadata => metadata.EntityId == 80000100 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivot && metadata.StyleKey == "rotate_pivot" && metadata.FromCoord.Equals(new GridCoord(0, 0)) && metadata.ToCoord.Equals(new GridCoord(0, 0)) && metadata.RotateDirection == RotatePivotDirection.Clockwise) ||
-            !rotate.AnimationMetadata.Any(metadata => metadata.EntityId == 80000101 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivot && metadata.StyleKey == "rotate_pivot" && metadata.PivotEntityId == 80000100 && metadata.PivotCoord.Equals(new GridCoord(0, 0)) && metadata.FromCoord.Equals(new GridCoord(1, 0)) && metadata.ToCoord.Equals(new GridCoord(0, -1)) && !metadata.Bounce))
+        IReadOnlyList<PresentationFact> rotatePresentationFacts = ActionFactProjection.ToPresentationFacts(rotate.ActionFacts);
+        if (rotatePresentationFacts.Count != 1 ||
+            !rotatePresentationFacts.Any(PresentationFact =>
+                PresentationFact.FactType == PresentationFactType.RotatePivotGroup &&
+                PresentationFact.ResultKind == PresentationFactResultKind.Success &&
+                PresentationFact.SubjectEntityIds.Contains(80000100) &&
+                PresentationFact.SubjectEntityIds.Contains(80000101) &&
+                PresentationFact.PivotEntityId == 80000100 &&
+                PresentationFact.PivotCoord.Equals(new GridCoord(0, 0)) &&
+                PresentationFact.RotateDirection == RotatePivotDirection.Clockwise &&
+                PresentationFact.StartTick == rotatePresentationFacts[0].ServerTick &&
+                PresentationFact.EndTick == rotatePresentationFacts[0].ServerTick + 1 &&
+                PresentationFact.Members.Any(member => member.EntityId == 80000100 && member.From.Equals(new GridCoord(0, 0)) && member.To.Equals(new GridCoord(0, 0))) &&
+                PresentationFact.Members.Any(member => member.EntityId == 80000101 && member.From.Equals(new GridCoord(1, 0)) && member.To.Equals(new GridCoord(0, -1)) && member.FromDirection == Direction.Right && member.FromPortLocalPorts == DirectionMask.All)))
         {
-            reason = "rotate pivot success metadata incomplete:" + string.Join(",", rotate.AnimationMetadata.Select(MetadataKey));
+            reason = "rotate pivot success PresentationFact incomplete:" + string.Join(",", rotatePresentationFacts.Select(PresentationFactKey));
+            return false;
+        }
+
+        var runnerWorld = new GameWorld();
+        AddPort(runnerWorld, 80000102, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(runnerWorld, 80000103, new GridCoord(1, 0), DirectionMask.All);
+        SetRotatePivot(runnerWorld, 80000102);
+        runnerWorld.FlushDelta();
+        var runnerQueue = new AuthoritativeInputQueue();
+        var runner = new AuthoritativeWorldTickRunner(
+            runnerWorld,
+            runnerQueue,
+            new AuthoritativeWorldSyncSystem(runnerWorld),
+            1);
+        runnerQueue.ActionQueue.EnqueueConfiguredMove("mechanism_push", 80000103, Direction.Down, runnerWorld.ServerTick, 1);
+        WorldDelta rotateDelta = runner.Tick();
+        if (rotateDelta.PresentationFacts.Any(PresentationFact =>
+                PresentationFact.FactType == PresentationFactType.EntityPushed &&
+                PresentationFact.SubjectEntityIds.Any(entityId => entityId == 80000102 || entityId == 80000103)) ||
+            rotateDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 80000102 || snapshot.EntityId == 80000103) ||
+            rotateDelta.PresentationFacts.Count(PresentationFact => PresentationFact.FactType == PresentationFactType.RotatePivotGroup && PresentationFact.ResultKind == PresentationFactResultKind.Success && PresentationFact.SubjectEntityIds.Contains(80000102) && PresentationFact.SubjectEntityIds.Contains(80000103)) != 1 ||
+            !PayloadMembersContain(rotateDelta.PresentationFacts.Single(PresentationFact => PresentationFact.FactType == PresentationFactType.RotatePivotGroup && PresentationFact.ResultKind == PresentationFactResultKind.Success), 80000102, 80000103))
+        {
+            reason = "rotate pivot delta emitted duplicate movement presentation:" + string.Join(",", rotateDelta.PresentationFacts.Select(PresentationFactKey));
+            return false;
+        }
+
+        WorldDelta rotateCommitDelta = runner.Tick();
+        if (!rotateCommitDelta.ChangedEntities.Any(snapshot => snapshot.EntityId == 80000103 && snapshot.X == 0 && snapshot.Y == -1) ||
+            rotateCommitDelta.PresentationFacts.Count != 0)
+        {
+            reason = "rotate pivot runner commit emitted duplicate presentation count:" + rotateCommitDelta.PresentationFacts.Count + " facts:" + string.Join(",", rotateCommitDelta.PresentationFacts.Select(PresentationFactKey));
             return false;
         }
 
@@ -1900,7 +2220,7 @@ public static class AuthoritativeMoveWorldVerification
         AddPort(cancelWorld, 80000112, new GridCoord(-1, 0), DirectionMask.All);
         SetRotatePivot(cancelWorld, 80000110);
         cancelWorld.NextTick();
-        StateDrivenRuleExecutionResult cancelled = new StateDrivenRuleExecutionSystem().Tick(cancelWorld, new[]
+        BehaviorRuntimeTickResult cancelled = new BehaviorRuntime().Tick(cancelWorld, new[]
         {
             WorldMove(2, 80000111, Direction.Down),
             WorldMove(3, 80000112, Direction.Down)
@@ -1925,19 +2245,38 @@ public static class AuthoritativeMoveWorldVerification
         blockedWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(80000123, new GridCoord(0, -1)));
         blockedWorld.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(80000124, new GridCoord(0, 1)));
         blockedWorld.NextTick();
-        StateDrivenRuleExecutionResult blocked = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, new[] { WorldMove(4, 80000121, Direction.Down) }, blockedWorld.ServerTick);
-        if (!blocked.ActionResults.TryGetValue(4, out MoveResult blockedResult) ||
-            !blockedResult.Success)
+        var blockedSystem = new BehaviorRuntime();
+        BehaviorRuntimeTickResult blocked = blockedSystem.Tick(blockedWorld, new[] { WorldMove(4, 80000121, Direction.Down) }, blockedWorld.ServerTick);
+        if (blocked.ActionResults.ContainsKey(4) ||
+            blocked.DeferredActions.Count != 0 ||
+            !blocked.BehaviorInstances.Any(instance => instance.SourceActionId == 4 && instance.State == BehaviorInstanceState.Running))
         {
-            reason = "rotate pivot blocked result failed";
+            reason = "rotate pivot blocked lifecycle did not wait";
             return false;
         }
 
-        if (blocked.DeferredActions.Count != 2 ||
-            !blocked.DeferredActions.Any(action => action.EntityId == 80000123) ||
-            !blocked.DeferredActions.Any(action => action.EntityId == 80000124))
+        blockedWorld.NextTick();
+        BehaviorRuntimeTickResult blockedContact = blockedSystem.Tick(blockedWorld, Array.Empty<WorldAction>(), blockedWorld.ServerTick);
+        if (blockedContact.ActionResults.ContainsKey(4))
         {
-            reason = "rotate pivot deferred mismatch count:" + blocked.DeferredActions.Count + " ids:" + string.Join(",", blocked.DeferredActions.Select(action => action.EntityId));
+            reason = "rotate pivot blocked completed at contact tick";
+            return false;
+        }
+
+        if (blockedContact.DeferredActions.Count != 2 ||
+            !blockedContact.DeferredActions.Any(action => action.EntityId == 80000123) ||
+            !blockedContact.DeferredActions.Any(action => action.EntityId == 80000124))
+        {
+            reason = "rotate pivot deferred mismatch count:" + blockedContact.DeferredActions.Count + " ids:" + string.Join(",", blockedContact.DeferredActions.Select(action => action.EntityId));
+            return false;
+        }
+
+        blockedWorld.NextTick();
+        BehaviorRuntimeTickResult blockedRelease = blockedSystem.Tick(blockedWorld, Array.Empty<WorldAction>(), blockedWorld.ServerTick);
+        if (!blockedRelease.ActionResults.TryGetValue(4, out MoveResult blockedResult) ||
+            !blockedResult.Success)
+        {
+            reason = "rotate pivot blocked result failed";
             return false;
         }
 
@@ -1948,30 +2287,52 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        DeferredAction lowerImpact = blocked.DeferredActions.Single(action => action.EntityId == 80000123);
-        DeferredAction upperImpact = blocked.DeferredActions.Single(action => action.EntityId == 80000124);
+        DeferredAction lowerImpact = blockedContact.DeferredActions.Single(action => action.EntityId == 80000123);
+        DeferredAction upperImpact = blockedContact.DeferredActions.Single(action => action.EntityId == 80000124);
+        int impactCostTicks = ActionSpecRegistry.Default.Get("mechanism_push").DefaultCostTicks;
+        long contactServerTick = blockedContact.DeferredActions[0].CreatedTick;
         if (lowerImpact.Direction != Direction.Left ||
-            upperImpact.Direction != Direction.Right)
+            upperImpact.Direction != Direction.Right ||
+            lowerImpact.CreatedTick != contactServerTick ||
+            upperImpact.CreatedTick != contactServerTick ||
+            lowerImpact.ReadyTick != contactServerTick ||
+            upperImpact.ReadyTick != contactServerTick ||
+            lowerImpact.CostTicks != impactCostTicks ||
+            upperImpact.CostTicks != impactCostTicks)
         {
-            reason = "rotate pivot blocker directions were lower:" + lowerImpact.Direction + " upper:" + upperImpact.Direction;
+            reason = "rotate pivot blocker output timing/directions were lower:" + lowerImpact.Direction + " created:" + lowerImpact.CreatedTick + " ready:" + lowerImpact.ReadyTick + " upper:" + upperImpact.Direction + " created:" + upperImpact.CreatedTick + " ready:" + upperImpact.ReadyTick;
             return false;
         }
 
-        if (blocked.DeferredActions.Any(action => action.OriginContexts.Count != 1) ||
-            blocked.DeferredActions.Any(action => action.OriginContexts[0].Kind != PushOriginKind.RotatePivotImpact))
+        if (blockedContact.DeferredActions.Any(action => action.OriginContexts.Count != 1) ||
+            blockedContact.DeferredActions.Any(action => action.OriginContexts[0].Kind != PushOriginKind.RotatePivotImpact))
         {
-            reason = "rotate pivot impact context missing counts:" + string.Join(",", blocked.DeferredActions.Select(action => action.EntityId + ":" + action.OriginContexts.Count));
+            reason = "rotate pivot impact context missing counts:" + string.Join(",", blockedContact.DeferredActions.Select(action => action.EntityId + ":" + action.OriginContexts.Count));
             return false;
         }
 
-        if (blocked.AnimationMetadata.Count != 5 ||
-            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000120 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivotBounce && metadata.Bounce && metadata.StyleKey == "rotate_pivot_bounce") ||
-            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000121 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivotBounce && metadata.Bounce && metadata.ImpactCoord.Equals(new GridCoord(0, -1))) ||
-            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000122 && metadata.MotionKind == WorldDeltaMotionKind.RotatePivotBounce && metadata.Bounce && metadata.ImpactCoord.Equals(new GridCoord(0, 1))) ||
-            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000123 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.StyleKey == "rotate_pivot_impact" && metadata.Direction == Direction.Left) ||
-            !blocked.AnimationMetadata.Any(metadata => metadata.EntityId == 80000124 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush && metadata.StyleKey == "rotate_pivot_impact" && metadata.Direction == Direction.Right))
+        long blockedEndTick = blockedWorld.ServerTick;
+        long blockedContactTick = blockedEndTick - 1;
+        long blockedStartTick = blockedEndTick - 2;
+        IReadOnlyList<PresentationFact> blockedPresentationFacts = ActionFactProjection.ToPresentationFacts(blocked.ActionFacts);
+        IReadOnlyList<PresentationFact> blockedContactPresentationFacts = ActionFactProjection.ToPresentationFacts(blockedContact.ActionFacts);
+        if (blockedPresentationFacts.Count != 1 ||
+            !blockedPresentationFacts.Any(PresentationFact =>
+                PresentationFact.FactType == PresentationFactType.RotatePivotGroup &&
+                PresentationFact.ResultKind == PresentationFactResultKind.Bounce &&
+                PresentationFact.StartTick == blockedStartTick &&
+                PresentationFact.ContactTick == blockedContactTick &&
+                PresentationFact.EndTick == blockedEndTick &&
+                PresentationFact.SubjectEntityIds.Contains(80000120) &&
+                PresentationFact.SubjectEntityIds.Contains(80000121) &&
+                PresentationFact.SubjectEntityIds.Contains(80000122) &&
+                PresentationFact.Impacts.Any(impact => impact.BlockerEntityId == 80000123 && impact.ImpactTo.Equals(new GridCoord(0, -1))) &&
+                PresentationFact.Impacts.Any(impact => impact.BlockerEntityId == 80000124 && impact.ImpactTo.Equals(new GridCoord(0, 1)))) ||
+            blockedContactPresentationFacts.Count != 2 ||
+            !blockedContactPresentationFacts.Any(PresentationFact => PrimarySubject(PresentationFact) == 80000123 && PresentationFact.FactType == PresentationFactType.RotatePivotImpact && PresentationFact.Direction == Direction.Left && PresentationFact.ServerTick == blockedContactTick) ||
+            !blockedContactPresentationFacts.Any(PresentationFact => PrimarySubject(PresentationFact) == 80000124 && PresentationFact.FactType == PresentationFactType.RotatePivotImpact && PresentationFact.Direction == Direction.Right && PresentationFact.ServerTick == blockedContactTick))
         {
-            reason = "rotate pivot blocked metadata incomplete:" + string.Join(",", blocked.AnimationMetadata.Select(MetadataKey));
+            reason = "rotate pivot blocked PresentationFact incomplete:" + string.Join(",", blockedPresentationFacts.Select(PresentationFactKey));
             return false;
         }
 
@@ -1982,7 +2343,10 @@ public static class AuthoritativeMoveWorldVerification
         AddPort(handoffWorld, 80000132, new GridCoord(0, -1), DirectionMask.Right);
         AddPort(handoffWorld, 80000133, new GridCoord(1, -1), DirectionMask.Left);
         handoffWorld.NextTick();
-        StateDrivenRuleExecutionResult handoff = new StateDrivenRuleExecutionSystem().Tick(handoffWorld, new[] { WorldMove(5, 80000131, Direction.Down) }, handoffWorld.ServerTick);
+        var handoffSystem = new BehaviorRuntime();
+        handoffSystem.Tick(handoffWorld, new[] { WorldMove(5, 80000131, Direction.Down) }, handoffWorld.ServerTick);
+        handoffWorld.NextTick();
+        BehaviorRuntimeTickResult handoff = handoffSystem.Tick(handoffWorld, Array.Empty<WorldAction>(), handoffWorld.ServerTick);
         if (handoff.DeferredActions.Count != 1 ||
             !handoff.DeferredActions[0].SubjectEntityIds.Contains(80000132) ||
             !handoff.DeferredActions[0].SubjectEntityIds.Contains(80000133))
@@ -1997,12 +2361,51 @@ public static class AuthoritativeMoveWorldVerification
         var runtimePivotSpec = new EffectSpec("runtime_pivot_verification", EffectKind.RotatePivot, EffectTargetBinding.TargetEntity, EffectDurationPolicy.InfiniteUntilRemove, EffectStackPolicy.AllowMultiple, EffectRemovePolicy.ExplicitOnly, 0, 1, DirectionMask.None, true, true, WorldTag.None);
         AddVerificationEffect(runtimePivotWorld, runtimePivotSpec, 80000140, 0, "pivot");
         runtimePivotWorld.NextTick();
-        StateDrivenRuleExecutionResult runtimePivot = new StateDrivenRuleExecutionSystem().Tick(runtimePivotWorld, new[] { WorldMove(6, 80000141, Direction.Down) }, runtimePivotWorld.ServerTick);
+        var runtimePivotSystem = new BehaviorRuntime();
+        runtimePivotSystem.Tick(runtimePivotWorld, new[] { WorldMove(6, 80000141, Direction.Down) }, runtimePivotWorld.ServerTick);
+        runtimePivotWorld.NextTick();
+        BehaviorRuntimeTickResult runtimePivot = runtimePivotSystem.Tick(runtimePivotWorld, Array.Empty<WorldAction>(), runtimePivotWorld.ServerTick);
         if (!runtimePivot.ActionResults.TryGetValue(6, out MoveResult runtimePivotResult) ||
             !runtimePivotResult.Success ||
             !HasPosition(runtimePivotWorld, 80000141, new GridCoord(0, -1)))
         {
             reason = "runtime effect rotate pivot did not enter rotate response";
+            return false;
+        }
+
+        var inFlightWorld = new GameWorld();
+        AddPort(inFlightWorld, 80000150, new GridCoord(0, 0), DirectionMask.All);
+        AddPort(inFlightWorld, 80000151, new GridCoord(1, 0), DirectionMask.All);
+        SetRotatePivot(inFlightWorld, 80000150);
+        inFlightWorld.NextTick();
+        var inFlightSystem = new BehaviorRuntime();
+        BehaviorRuntimeTickResult inFlightStart = inFlightSystem.Tick(inFlightWorld, new[] { new WorldAction(7, WorldActionPriority.Mechanism, "mechanism_push", 80000151, null, Direction.Down, 0, 0, 0, 2) }, inFlightWorld.ServerTick);
+        if (inFlightStart.ActionResults.ContainsKey(7) ||
+            !inFlightStart.BehaviorInstances.Any(instance => instance.SourceActionId == 7 && instance.State == BehaviorInstanceState.Running))
+        {
+            reason = "rotate pivot long lifecycle did not enter in-flight state";
+            return false;
+        }
+
+        inFlightWorld.NextTick();
+        BehaviorRuntimeTickResult inFlightRejected = inFlightSystem.Tick(inFlightWorld, new[] { WorldMove(8, 80000150, Direction.Right) }, inFlightWorld.ServerTick);
+        if (!inFlightRejected.ActionResults.TryGetValue(8, out MoveResult rejectedResult) ||
+            rejectedResult.Success ||
+            rejectedResult.Reason != "running-subject-in-flight" ||
+            !HasPosition(inFlightWorld, 80000150, new GridCoord(0, 0)) ||
+            !HasPosition(inFlightWorld, 80000151, new GridCoord(1, 0)))
+        {
+            reason = "rotate pivot in-flight body input was not explicitly rejected";
+            return false;
+        }
+
+        inFlightWorld.NextTick();
+        BehaviorRuntimeTickResult inFlightCommit = inFlightSystem.Tick(inFlightWorld, Array.Empty<WorldAction>(), inFlightWorld.ServerTick);
+        if (!inFlightCommit.ActionResults.TryGetValue(7, out MoveResult inFlightCommitResult) ||
+            !inFlightCommitResult.Success ||
+            !HasPosition(inFlightWorld, 80000151, new GridCoord(0, -1)))
+        {
+            reason = "rotate pivot in-flight rejection prevented original commit";
             return false;
         }
 
@@ -2047,7 +2450,10 @@ public static class AuthoritativeMoveWorldVerification
         world.NextTick();
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueueConfiguredMove("connected_body_move", 1325, Direction.Right, world.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        var system = new BehaviorRuntime();
+        system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        world.NextTick();
+        BehaviorRuntimeTickResult result = system.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
         WorldDelta delta = world.FlushDelta();
         if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
             !moveResult.Success ||
@@ -2067,7 +2473,11 @@ public static class AuthoritativeMoveWorldVerification
         blockedWorld.NextTick();
         var blockedQueue = new WorldActionQueue();
         WorldAction blockedAction = blockedQueue.EnqueueConfiguredMove("connected_body_move", 1327, Direction.Right, blockedWorld.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult blockedResult = new StateDrivenRuleExecutionSystem().Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), blockedWorld.ServerTick);
+        var blockedSystem = new BehaviorRuntime();
+        BehaviorRuntimeTickResult blockedStart = blockedSystem.Tick(blockedWorld, blockedQueue.DrainReady(blockedWorld.ServerTick), blockedWorld.ServerTick);
+        blockedWorld.NextTick();
+        BehaviorRuntimeTickResult blockedCompletion = blockedSystem.Tick(blockedWorld, Array.Empty<WorldAction>(), blockedWorld.ServerTick);
+        BehaviorRuntimeTickResult blockedResult = blockedCompletion.ActionResults.Count == 0 ? blockedStart : blockedCompletion;
         if (!blockedResult.ActionResults.TryGetValue(blockedAction.ActionId, out MoveResult blockedMoveResult) ||
             blockedMoveResult.Success ||
             blockedWorld.FlushDelta().ChangedEntities.Count != 0 ||
@@ -2099,7 +2509,10 @@ public static class AuthoritativeMoveWorldVerification
         world.NextTick();
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueuePlayerMove(1332, new GridCoord(1, 0), 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        var system = new BehaviorRuntime();
+        system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        world.NextTick();
+        BehaviorRuntimeTickResult result = system.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
         if (!result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult) ||
             !moveResult.Success ||
             !world.TryGetEntity(1332, out GameEntity first) ||
@@ -2189,15 +2602,14 @@ public static class AuthoritativeMoveWorldVerification
             inputQueue,
             new AuthoritativeWorldSyncSystem(tickWorld),
             1);
-        WorldDelta tickDelta = runner.Tick();
+        WorldDelta tickDelta = TickUntilChanged(runner, 1312, 1313);
         if (tickDelta.ChangedEntities.Count != 2 ||
             !tickDelta.ChangedEntities.Any(entity => entity.EntityId == 1312 && entity.X == 1 && entity.Y == 0) ||
             !tickDelta.ChangedEntities.Any(entity => entity.EntityId == 1313 && entity.X == 2 && entity.Y == 0) ||
-            tickDelta.AnimationMetadata.Count != 2 ||
-            !tickDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 1312 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush) ||
-            !tickDelta.AnimationMetadata.Any(metadata => metadata.EntityId == 1313 && metadata.MotionKind == WorldDeltaMotionKind.MechanismPush))
+            tickDelta.PresentationFacts.Count != 1 ||
+            !tickDelta.PresentationFacts.Any(PresentationFact => PresentationFact.FactType == PresentationFactType.BodyMoved && PresentationFact.SubjectEntityIds.Contains(1312) && PresentationFact.SubjectEntityIds.Contains(1313) && PresentationFact.Members.Count == 2))
         {
-            reason = "authoritative tick did not sync group move delta and metadata for every member";
+            reason = "authoritative tick did not sync group move delta and BodyMoved PresentationFact";
             return false;
         }
 
@@ -2309,6 +2721,11 @@ public static class AuthoritativeMoveWorldVerification
 
         AuthoritativeMoveInput input = queue.EnqueueMove(1380, new GridCoord(1, 0), 88);
         WorldDelta delta = runner.Tick();
+        if (!input.IsCompleted)
+        {
+            delta = TickUntilCompleted(runner, input);
+        }
+
         MoveResult result = input.WaitAsync().GetResult();
         if (result.Success ||
             result.Reason != "blocked by tag" ||
@@ -2338,8 +2755,7 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(world),
             1);
 
-        runner.Tick();
-        WorldDelta delta = runner.Tick();
+        WorldDelta delta = TickUntilChanged(runner, 1341, 1342);
         if (!world.TryGetEntity(1341, out GameEntity first) ||
             !world.TryGetEntity(1342, out GameEntity second) ||
             !world.TryGetComponent(first, out PositionComponent firstPosition) ||
@@ -2391,7 +2807,7 @@ public static class AuthoritativeMoveWorldVerification
             1);
 
         AuthoritativeMoveInput input = queue.EnqueueMove(973, new GridCoord(1, 0), 31);
-        runner.Tick();
+        TickUntilCompleted(runner, input);
         MoveResult result = input.WaitAsync().GetResult();
         if (!result.Success ||
             result.FinalCoord != new GridCoord(0, 0) ||
@@ -2409,7 +2825,10 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        runner.Tick();
+        for (int i = 0; i < 16; i++)
+        {
+            runner.Tick();
+        }
         if (!world.TryGetComponent(player, out playerPosition) ||
             !world.TryGetComponent(first, out firstPosition) ||
             !world.TryGetComponent(second, out secondPosition) ||
@@ -2440,7 +2859,7 @@ public static class AuthoritativeMoveWorldVerification
             1);
 
         AuthoritativeMoveInput input = queue.EnqueueMove(976, new GridCoord(1, 0), 32);
-        runner.Tick();
+        TickUntilCompleted(runner, input);
         MoveResult result = input.WaitAsync().GetResult();
         if (!result.Success ||
             result.FinalCoord != new GridCoord(0, 0) ||
@@ -2493,7 +2912,7 @@ public static class AuthoritativeMoveWorldVerification
             1);
 
         AuthoritativeMoveInput input = queue.EnqueueMove(979, new GridCoord(1, 0), 33);
-        runner.Tick();
+        TickUntilCompleted(runner, input);
         MoveResult result = input.WaitAsync().GetResult();
         if (!result.Success ||
             result.FinalCoord != new GridCoord(0, 0))
@@ -2540,20 +2959,13 @@ public static class AuthoritativeMoveWorldVerification
     {
         var queue = new WorldActionQueue();
         WorldAction auto = queue.EnqueueAutoMove(1, 1, 3);
-        IReadOnlyList<WorldAction> early = queue.DrainReady(3);
-        if (early.Count != 0)
-        {
-            reason = "action ran before ready tick";
-            return false;
-        }
-
-        IReadOnlyList<WorldAction> ready = queue.DrainReady(4);
+        IReadOnlyList<WorldAction> ready = queue.DrainReady(1);
         if (ready.Count != 1 ||
             ready[0].ActionId != auto.ActionId ||
-            ready[0].ReadyTick != 4 ||
+            ready[0].ReadyTick != 1 ||
             ready[0].CostTicks != 3)
         {
-            reason = "action did not run on ready tick";
+            reason = "action did not enter behavior at created tick";
             return false;
         }
 
@@ -2573,6 +2985,17 @@ public static class AuthoritativeMoveWorldVerification
             readyDeferred[0].CostTicks != 2)
         {
             reason = "deferred output did not run on ready tick";
+            return false;
+        }
+
+        var immediateDeferredQueue = new WorldActionQueue();
+        immediateDeferredQueue.EnqueueDeferred(new DeferredAction("player_push", 2, new[] { 2L }, Direction.Right, 1, 1, 2, 11, "immediate"));
+        IReadOnlyList<WorldAction> immediateDeferred = immediateDeferredQueue.DrainReady(1);
+        if (immediateDeferred.Count != 1 ||
+            immediateDeferred[0].ReadyTick != 1 ||
+            immediateDeferred[0].CostTicks != 2)
+        {
+            reason = "deferred output consumed cost as implicit ready delay";
             return false;
         }
 
@@ -2649,11 +3072,11 @@ public static class AuthoritativeMoveWorldVerification
             return false;
         }
 
-        WorldDelta moveDelta = runner.Tick();
+        WorldDelta moveStartDelta = runner.Tick();
+        WorldDelta moveDelta = move.IsCompleted ? moveStartDelta : runner.Tick();
         MoveResult moveResult = move.WaitAsync().GetResult();
         if (!moveResult.Success ||
             moveResult.FinalCoord != new GridCoord(2, 0) ||
-            moveDelta.ChangedEntities.Count != 1 ||
             !world.TryGetComponent(spawned, out PositionComponent afterMove) ||
             afterMove.Coord != new GridCoord(2, 0))
         {
@@ -2687,7 +3110,13 @@ public static class AuthoritativeMoveWorldVerification
     {
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueuePlayerMove(entityId, target, clientTick);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        var system = new BehaviorRuntime();
+        BehaviorRuntimeTickResult result = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        if (!result.ActionResults.ContainsKey(action.ActionId))
+        {
+            world.NextTick();
+            result = system.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
+        }
         return result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult)
             ? moveResult
             : new MoveResult(false, entityId, default, Direction.None, MoveErrorCode.UnknownEntity, "action not resolved", false, default, clientTick);
@@ -2697,10 +3126,42 @@ public static class AuthoritativeMoveWorldVerification
     {
         var queue = new WorldActionQueue();
         WorldAction action = queue.EnqueueAutoMove(entityId, world.ServerTick - 1, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        var system = new BehaviorRuntime();
+        BehaviorRuntimeTickResult result = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        if (!result.ActionResults.ContainsKey(action.ActionId))
+        {
+            world.NextTick();
+            result = system.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
+        }
         return result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult)
             ? moveResult
             : new MoveResult(false, entityId, default, Direction.None, MoveErrorCode.UnknownEntity, "action not resolved", false, default, clientTick);
+    }
+
+    private static WorldDelta TickUntilChanged(AuthoritativeWorldTickRunner runner, params long[] entityIds)
+    {
+        WorldDelta delta = default;
+        for (int i = 0; i < 16; i++)
+        {
+            delta = runner.Tick();
+            if (delta.ChangedEntities.Any(entity => entityIds.Contains(entity.EntityId)))
+            {
+                return delta;
+            }
+        }
+
+        return delta;
+    }
+
+    private static WorldDelta TickUntilCompleted(AuthoritativeWorldTickRunner runner, AuthoritativeMoveInput input, int maxTicks = 16)
+    {
+        WorldDelta delta = default;
+        for (int i = 0; i < maxTicks && !input.IsCompleted; i++)
+        {
+            delta = runner.Tick();
+        }
+
+        return delta;
     }
 
     private static bool VerifyGeneratedRegisteredStrategyRuntimePath(out string reason)
@@ -2709,7 +3170,7 @@ public static class AuthoritativeMoveWorldVerification
         {
             new ActionSpec("verification_runtime_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Runtime, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None)
         }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
-        ActionStrategyRegistry strategies = VerificationGeneratedActionStrategyRegistration.CreateDefault();
+        PrimitiveRunnerRegistry primitiveRunners = VerificationGeneratedPrimitiveRunnerRegistration.CreateDefault();
         var world = new GameWorld();
         world.AddEntity(DefaultWorldConfig.PlayerSpawn(88, 88, new GridCoord(0, 0)));
         world.NextTick();
@@ -2721,8 +3182,11 @@ public static class AuthoritativeMoveWorldVerification
             new AuthoritativeWorldSyncSystem(world),
             1,
             actionSpecs,
-            strategies);
+            primitiveRunners);
 
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
         runner.Tick();
         if (!world.TryGetEntity(88, out GameEntity entity) ||
             !world.TryGetComponent(entity, out TagSetComponent tags) ||
@@ -2748,14 +3212,21 @@ public static class AuthoritativeMoveWorldVerification
 
         var actionSpec = new ActionSpec("verification_apply_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.Self, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None, effectSpecId: "temporary_pushable");
         var actionSpecs = new ActionSpecRegistry(new[] { actionSpec }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
-        var strategies = new ActionStrategyRegistry();
-        strategies.Register(new ApplyRuntimeEffectActionStrategy());
+        var primitiveRunners = new PrimitiveRunnerRegistry();
+        var applyEffect = new ApplyEffectRunner();
+        primitiveRunners.Register(new RunnerId("apply_effect_runner"), context => applyEffect.Process(context));
         var world = new GameWorld(provider);
         world.AddEntity(DefaultWorldConfig.BlockerSpawn(12001, new GridCoord(0, 0)));
         world.NextTick();
         var queue = new WorldActionQueue(actionSpecs);
         WorldAction action = queue.EnqueueConfiguredMove("verification_apply_effect", 12001, Direction.None, 0, 1);
-        StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(actionSpecs, strategies, provider).Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        var system = new BehaviorRuntime(actionSpecs, primitiveRunners, provider);
+        BehaviorRuntimeTickResult result = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+        if (!result.ActionResults.ContainsKey(action.ActionId))
+        {
+            world.NextTick();
+            result = system.Tick(world, Array.Empty<WorldAction>(), world.ServerTick);
+        }
         if (!result.ActionResults[action.ActionId].Success ||
             world.RuntimeEffects.Count != 1 ||
             !world.TryGetEntity(12001, out GameEntity entity) ||
@@ -2798,11 +3269,9 @@ public static class AuthoritativeMoveWorldVerification
         return world.RuntimeEffects.ActiveAt(startTick).OrderByDescending(effect => effect.Id.Value).First(effect => effect.TargetEntityId == entityId && effect.Spec.EffectSpecId.Equals(spec.SpecId));
     }
 
-    private sealed class VerificationRuntimeEffectStrategy : IActionStrategy
+    private static class VerificationRuntimeEffectRunner
     {
-        public ActionStrategyId StrategyId => "runtime_effect";
-
-        public void Process(ActionStrategyContext context)
+        public static void Process(PrimitiveRunnerContext context)
         {
             if (!context.World.TryGetEntity(context.Request.EntityId, out GameEntity entity))
             {
@@ -2817,15 +3286,16 @@ public static class AuthoritativeMoveWorldVerification
         }
     }
 
-    private static class VerificationGeneratedActionStrategyRegistration
+    private static class VerificationGeneratedPrimitiveRunnerRegistration
     {
-        public static ActionStrategyRegistry CreateDefault()
+        public static PrimitiveRunnerRegistry CreateDefault()
         {
-            var registry = new ActionStrategyRegistry();
-            registry.Register(new MoveActionStrategy());
-            registry.Register(new RemoveActionStrategy());
-            registry.Register(new SpawnActionStrategy());
-            registry.Register(new VerificationRuntimeEffectStrategy());
+            var registry = new PrimitiveRunnerRegistry();
+            var spawn = new SpawnRunner();
+            var remove = new RemoveRunner();
+            registry.Register(new RunnerId("spawn_runner"), context => spawn.Process(context));
+            registry.Register(new RunnerId("remove_runner"), context => remove.Process(context));
+            registry.Register(new RunnerId("apply_effect_runner"), VerificationRuntimeEffectRunner.Process);
             return registry;
         }
     }

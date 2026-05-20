@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UniTask.Addressables.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UniTask.Addressables.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Addressables.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Addressables.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask..ACED574C.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Addressables.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UniTask.Addressables.pdb

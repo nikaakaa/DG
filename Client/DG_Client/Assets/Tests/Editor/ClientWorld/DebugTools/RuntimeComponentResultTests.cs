@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using DG.GameCore;
 using DG.Map;
@@ -119,7 +118,7 @@ namespace DG.EditorTests
             AddEffect(world, EffectSpecFor(RuntimeEffectKind.TemporaryImmobile, "immobile", 1), 6, 0, "immobile");
             var action = new WorldAction(1, WorldActionPriority.Player, "player_move", 6, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, new[] { action }, 1);
+            BehaviorRuntimeTickResult result = new BehaviorRuntime().Tick(world, new[] { action }, 1);
 
             Assert.IsFalse(result.ActionResults[1].Success);
             Assert.AreEqual(MoveErrorCode.Blocked, result.ActionResults[1].ErrorCode);
@@ -422,8 +421,9 @@ namespace DG.EditorTests
             var provider = LubanGameConfigProvider.FromDirectory(GameConfigDirectory());
             var actionSpec = new ActionSpec("multi_pushable", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.FrontEntities, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None, targeting: new TargetingSpec("front_two", "front_entities", TargetDirectionSource.Request, TargetFilterSpec.None.FilterId, TargetOrderingPolicy.HitOrderThenCoordThenEntity, 3, 2), effectSpecId: "temporary_pushable");
             var registry = new ActionSpecRegistry(new[] { actionSpec }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
-            var strategies = new ActionStrategyRegistry();
-            strategies.Register(new ApplyRuntimeEffectActionStrategy());
+            var primitiveRunners = new PrimitiveRunnerRegistry();
+            var applyEffect = new ApplyEffectRunner();
+            primitiveRunners.Register(new RunnerId("apply_effect_runner"), context => applyEffect.Process(context));
             var world = new GameWorld(provider);
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(30, 30, new GridCoord(0, 0))));
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(31, new GridCoord(1, 0))));
@@ -431,12 +431,18 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue(registry);
             WorldAction action = queue.EnqueueConfiguredMove("multi_pushable", 30, Direction.Right, 0, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry, strategies, provider).Tick(world, queue.DrainReady(1), 1);
+            var system = new BehaviorRuntime(registry, primitiveRunners, provider);
+            BehaviorRuntimeTickResult result = system.Tick(world, queue.DrainReady(1), 1);
+            for (int i = 0; i < 8 && system.RunningBehaviorCount != 0 && result.ActionResults.Count == 0; i++)
+            {
+                world.NextTick();
+                result = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            }
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.AreEqual(2, world.RuntimeEffects.Count);
-            Assert.IsTrue(world.RuntimeEffects.ActiveAt(1).Any(effect => effect.TargetEntityId == 31));
-            Assert.IsTrue(world.RuntimeEffects.ActiveAt(1).Any(effect => effect.TargetEntityId == 32));
+            Assert.IsTrue(world.RuntimeEffects.ActiveAt(result.ProposalResults.Max(item => item.Proposal.ServerTick)).Any(effect => effect.TargetEntityId == 31));
+            Assert.IsTrue(world.RuntimeEffects.ActiveAt(result.ProposalResults.Max(item => item.Proposal.ServerTick)).Any(effect => effect.TargetEntityId == 32));
         }
 
         [Test]

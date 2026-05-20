@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using DG.GameCore;
 using DG.Map;
 using Fantasy;
@@ -206,22 +207,8 @@ namespace DG.EditorTests
 
             bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(5, states, new List<long>(), new[]
             {
-                new G2C_WorldDeltaAnimationMetadata
-                {
-                    EntityId = 20,
-                    ServerTick = 5,
-                    MotionKind = (int)WorldDeltaMotionKind.MechanismPush,
-                    StyleKey = "mechanism_push",
-                    Direction = (int)Direction.Right
-                },
-                new G2C_WorldDeltaAnimationMetadata
-                {
-                    EntityId = 21,
-                    ServerTick = 5,
-                    MotionKind = (int)WorldDeltaMotionKind.MechanismPush,
-                    StyleKey = "mechanism_push",
-                    Direction = (int)Direction.Right
-                }
+                Presentation(20, 5, "entity.pushed", "push.default", Direction.Right),
+                Presentation(21, 5, "entity.pushed", "push.default", Direction.Right)
             });
 
             Assert.IsTrue(applied);
@@ -237,6 +224,38 @@ namespace DG.EditorTests
             }
 
             CollectionAssert.AreEquivalent(new[] { 20L, 21L }, movedIds);
+        }
+
+        [Test]
+        public void EntityMovedNotify_DoesNotPreemptWorldDeltaRotatePivotAnimation()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 30 }, DefaultWorldConfig.PortConnectorBlockerSpawn(30, new GridCoord(0, 0), Direction.Right));
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 31 }, DefaultWorldConfig.PortConnectorBlockerSpawn(31, new GridCoord(0, 1), Direction.Right));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+
+            Assert.IsTrue(ClientMoveNetworkRuntime.ApplyMovedNotify(31, 1, 0));
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(31, out Vector2Int beforeDelta));
+            Assert.AreEqual(new Vector2Int(0, 1), beforeDelta);
+
+            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(6, new[]
+            {
+                RotateState(30, 0, 0, Direction.Right, DirectionMask.Right | DirectionMask.Down),
+                RotateState(31, 1, 0, Direction.Right, DirectionMask.Left)
+            }, new List<long>(), new[]
+            {
+                RotateGroupMetadata(30, 6, new Vector2Int(0, 0), new[]
+                {
+                    RotateMember(30, new Vector2Int(0, 0), new Vector2Int(0, 0)),
+                    RotateMember(31, new Vector2Int(0, 1), new Vector2Int(1, 0))
+                })
+            });
+
+            Assert.IsTrue(applied);
+            Assert.IsFalse(runner.Context.AnimationLayer.TryDequeue(out _));
+            Assert.IsTrue(runner.Context.AnimationLayer.TryDequeueRotateGroup(out RotatePivotGroupPlaybackPlan groupPlan));
+            Assert.AreEqual(2, groupPlan.Members.Count);
+            Assert.IsTrue(groupPlan.Members.Any(item => item.EntityId == 31 && item.FromCoord == new Vector2Int(0, 1) && item.ToCoord == new Vector2Int(1, 0)));
         }
 
         [Test]
@@ -272,8 +291,6 @@ namespace DG.EditorTests
             Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(23, out Vector2Int secondCoord));
             Assert.AreEqual(new Vector2Int(1, 0), firstCoord);
             Assert.AreEqual(new Vector2Int(1, 0), secondCoord);
-            Assert.IsTrue(runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent animationEvent));
-            Assert.AreEqual(22, animationEvent.EntityId);
             Assert.IsFalse(runner.Context.AnimationLayer.TryDequeue(out _));
         }
 
@@ -360,6 +377,52 @@ namespace DG.EditorTests
             Assert.AreEqual(0, ClientMoveNetworkRuntime.PendingInputCount);
             Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
             Assert.AreEqual(new Vector2Int(0, 0), coord);
+        }
+
+        [Test]
+        public void PendingInput_RapidDirectionResponsesClearWithoutLocalMovement()
+        {
+            ClientWorldRunner runner = CreateRunner();
+            runner.Context.ClientMapWorld.AddEntity(new ClientMapEntity { EntityId = 1 }, DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            ClientMoveNetworkRuntime.SetRunner(runner);
+            ClientMoveNetworkRuntime.RecordPendingIntent(201, 1, 100, Direction.Left, 31);
+            ClientMoveNetworkRuntime.RecordPendingIntent(202, 1, 101, Direction.Up, 32);
+            ClientMoveNetworkRuntime.RecordPendingIntent(203, 1, 102, Direction.Right, 33);
+
+            ClientMoveNetworkRuntime.ResolvePendingInput(201, (int)ClientPlayerInputStatus.Replaced);
+            ClientMoveNetworkRuntime.ResolvePendingInput(202, (int)ClientPlayerInputStatus.Replaced);
+
+            Assert.AreEqual(1, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsTrue(ClientMoveNetworkRuntime.TryGetPendingInput(203, out PendingPlayerInput pending));
+            Assert.AreEqual(Direction.Right, pending.Direction);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out Vector2Int coord));
+            Assert.AreEqual(new Vector2Int(0, 0), coord);
+
+            bool applied = ClientMoveNetworkRuntime.ApplyWorldDelta(12, new[]
+            {
+                new G2C_WorldEntityState
+                {
+                    EntityId = 1,
+                    ConfigId = DefaultWorldConfig.PlayerConfigId,
+                    ArchetypeId = DefaultWorldConfig.PlayerArchetypeId,
+                    EntityTarget = DefaultWorldConfig.PlayerTarget,
+                    X = 1,
+                    Y = 0,
+                    Direction = (int)Direction.Right,
+                    HasCollider = true,
+                    Blocking = true,
+                    PlayerControlled = true
+                }
+            }, new List<long>());
+
+            Assert.IsTrue(applied);
+            Assert.AreEqual(1, ClientMoveNetworkRuntime.PendingInputCount);
+            Assert.IsTrue(runner.Context.ClientMapWorld.TryGetPosition(1, out coord));
+            Assert.AreEqual(new Vector2Int(1, 0), coord);
+
+            ClientMoveNetworkRuntime.ResolvePendingInput(203, (int)ClientPlayerInputStatus.Resolved);
+
+            Assert.AreEqual(0, ClientMoveNetworkRuntime.PendingInputCount);
         }
 
         [Test]
@@ -526,7 +589,7 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void DGDebugPanelController_SubmitSpawnRequestsAppliesStructureRuntimeEffects()
+        public void DGDebugPanelController_SubmitSpawnRequestsDoesNotApplyStructureRuntimeEffectsLocally()
         {
             ClientWorldRunner runner = CreateRunner();
             GameObject submitterObject = new GameObject("Submitter");
@@ -563,7 +626,8 @@ namespace DG.EditorTests
 
             Assert.AreNotEqual(0, spawned.EntityId);
             Assert.IsTrue(runner.Context.ClientMapWorld.CoreWorld.TryGetEntity(spawned.EntityId, out GameEntity entity));
-            Assert.IsTrue(runner.Context.ClientMapWorld.CoreWorld.HasComponent<PushableComponent>(entity));
+            Assert.IsFalse(runner.Context.ClientMapWorld.CoreWorld.HasComponent<PushableComponent>(entity));
+            Assert.IsTrue(panel.LastResult.Contains("runtime effect failed: server authoritative disabled"));
         }
 
         [Test]
@@ -1135,6 +1199,94 @@ namespace DG.EditorTests
             ClientWorldRunner runner = gameObject.AddComponent<ClientWorldRunner>();
             runner.Initialize(world.EnsureWorld());
             return runner;
+        }
+
+        private static G2C_WorldEntityState RotateState(long entityId, int x, int y, Direction direction, DirectionMask ports)
+        {
+            return new G2C_WorldEntityState
+            {
+                EntityId = entityId,
+                ConfigId = DefaultWorldConfig.PortConnectorBlockerConfigId,
+                ArchetypeId = DefaultWorldConfig.PortConnectorBlockerArchetypeId,
+                EntityTarget = DefaultWorldConfig.BlockerTarget,
+                X = x,
+                Y = y,
+                Direction = (int)direction,
+                HasCollider = true,
+                Blocking = true,
+                Pushable = true,
+                PortLocalPorts = (int)ports,
+                CanMove = true,
+                CanBePushed = true
+            };
+        }
+
+        private static G2C_PresentationFact RotateGroupMetadata(long pivotEntityId, long serverTick, Vector2Int pivot, IReadOnlyList<RotateMemberSpec> members)
+        {
+            var item = new G2C_PresentationFact
+            {
+                FactId = pivotEntityId,
+                ServerTick = serverTick,
+                FactType = (int)PresentationFactType.RotatePivotGroup,
+                ResultKind = (int)PresentationFactResultKind.Success,
+                SourceEntityId = pivotEntityId,
+                FromX = members[0].FromCoord.x,
+                FromY = members[0].FromCoord.y,
+                ToX = members[0].ToCoord.x,
+                ToY = members[0].ToCoord.y,
+                PivotEntityId = pivotEntityId,
+                PivotX = pivot.x,
+                PivotY = pivot.y,
+                RotateDirection = (int)RotatePivotDirection.Clockwise
+            };
+
+            for (int i = 0; i < members.Count; i++)
+            {
+                RotateMemberSpec member = members[i];
+                item.SubjectEntityIds.Add(member.EntityId);
+                item.Members.Add(new G2C_PresentationFactMember
+                {
+                    EntityId = member.EntityId,
+                    FromX = member.FromCoord.x,
+                    FromY = member.FromCoord.y,
+                    ToX = member.ToCoord.x,
+                    ToY = member.ToCoord.y
+                });
+            }
+
+            return item;
+        }
+
+        private static RotateMemberSpec RotateMember(long entityId, Vector2Int from, Vector2Int to)
+            => new RotateMemberSpec(entityId, from, to);
+
+        private static G2C_PresentationFact Presentation(long entityId, long serverTick, string kindId, string cueId, Direction direction)
+        {
+            var item = new G2C_PresentationFact
+            {
+                FactId = entityId,
+                ServerTick = serverTick,
+                FactType = (int)(cueId == "push.default" ? PresentationFactType.EntityPushed : PresentationFactType.EntityMoved),
+                ResultKind = (int)PresentationFactResultKind.Success,
+                SourceEntityId = entityId,
+                Direction = (int)direction
+            };
+            item.SubjectEntityIds.Add(entityId);
+            return item;
+        }
+
+        private readonly struct RotateMemberSpec
+        {
+            public RotateMemberSpec(long entityId, Vector2Int fromCoord, Vector2Int toCoord)
+            {
+                EntityId = entityId;
+                FromCoord = fromCoord;
+                ToCoord = toCoord;
+            }
+
+            public long EntityId { get; }
+            public Vector2Int FromCoord { get; }
+            public Vector2Int ToCoord { get; }
         }
 
         private static void AddRuntimeEffect(GameWorld world, long entityId, EffectKind kind, string specId, DirectionMask portMask, int autoMoveIntervalTicks)

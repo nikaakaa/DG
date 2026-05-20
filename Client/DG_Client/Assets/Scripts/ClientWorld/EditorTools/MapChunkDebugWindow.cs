@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using DG.GameCore;
 using DG.Map;
 using System.Collections.Generic;
@@ -263,3 +264,4 @@ namespace DG.EditorTools
         }
     }
 }
+#endif

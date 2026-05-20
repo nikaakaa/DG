@@ -1,246 +1,201 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace DG.GameCore
 {
-public sealed class StateDrivenRuleExecutionSystem
+public sealed class BehaviorRuntime
 {
-    private readonly CommitResolver commitResolver = new();
-    private readonly RulePlanner rulePlanner;
-    private readonly ConflictResolver conflictResolver = new();
-    private readonly ActionStrategyRegistry strategyRegistry;
     private readonly ActionSpecRegistry actionSpecs;
-    private readonly IGameConfigProvider configProvider;
     private readonly ActionRequestAdapter actionAdapter;
-    private readonly ActionArbiter actionArbiter;
-    private readonly PushVectorArbiter pushVectorArbiter;
-    private readonly RotatePivotResponseProcessor rotatePivotResponseProcessor;
+    private readonly BehaviorInstanceRunner behaviorRunner = new();
+    private readonly StepRunner stepRunner;
+    private readonly MoveBatchOrchestrator moveBatchOrchestrator;
+    private readonly PrimitiveRequestDispatcher primitiveDispatcher;
 
-    public StateDrivenRuleExecutionSystem() : this(ActionSpecRegistry.Default)
+    public BehaviorRuntime() : this(ActionSpecRegistry.Default)
     {
     }
 
-    public StateDrivenRuleExecutionSystem(ActionSpecRegistry actionSpecs)
-        : this(actionSpecs, ActionStrategyRegistry.Default)
+    public BehaviorRuntime(ActionSpecRegistry actionSpecs)
+        : this(actionSpecs, PrimitiveRunnerRegistry.Default)
     {
     }
 
-    public StateDrivenRuleExecutionSystem(ActionSpecRegistry actionSpecs, ActionStrategyRegistry strategyRegistry)
-        : this(actionSpecs, strategyRegistry, LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()))
+    public BehaviorRuntime(ActionSpecRegistry actionSpecs, PrimitiveRunnerRegistry primitiveRunners)
+        : this(actionSpecs, primitiveRunners, LubanGameConfigProvider.FromDirectory(GameCoreConfigPath.FindGeneratedJsonDirectory()), ActionPresentationRegistry.Default)
     {
     }
 
-    public StateDrivenRuleExecutionSystem(ActionSpecRegistry actionSpecs, ActionStrategyRegistry strategyRegistry, IGameConfigProvider configProvider)
+    public BehaviorRuntime(ActionSpecRegistry actionSpecs, PrimitiveRunnerRegistry primitiveRunners, IGameConfigProvider configProvider)
+        : this(actionSpecs, primitiveRunners, configProvider, ActionPresentationRegistry.Default)
     {
+    }
+
+    public BehaviorRuntime(ActionSpecRegistry actionSpecs, PrimitiveRunnerRegistry primitiveRunners, IGameConfigProvider configProvider, ActionPresentationRegistry actionPresentationRegistry)
+    {
+        if (primitiveRunners == null) throw new ArgumentNullException(nameof(primitiveRunners));
+        if (configProvider == null) throw new ArgumentNullException(nameof(configProvider));
         this.actionSpecs = actionSpecs;
-        this.strategyRegistry = strategyRegistry ?? throw new System.ArgumentNullException(nameof(strategyRegistry));
-        this.configProvider = configProvider ?? throw new System.ArgumentNullException(nameof(configProvider));
-        rulePlanner = new RulePlanner(actionSpecs);
+        actionPresentationRegistry ??= new ActionPresentationRegistry(Array.Empty<ActionPresentationConfig>());
         actionAdapter = new ActionRequestAdapter(actionSpecs);
-        actionArbiter = new ActionArbiter(actionSpecs);
-        pushVectorArbiter = new PushVectorArbiter(actionSpecs);
-        rotatePivotResponseProcessor = new RotatePivotResponseProcessor(actionSpecs);
+        BatchBehaviorRunnerRegistry batchRunners = BatchBehaviorRunnerCatalog.CreateDefault(actionSpecs);
+        stepRunner = new StepRunner(actionSpecs, actionPresentationRegistry);
+        PushRunner pushRunner = new PushRunner(actionSpecs);
+        moveBatchOrchestrator = new MoveBatchOrchestrator(actionSpecs, batchRunners, pushRunner, stepRunner, behaviorRunner);
+        primitiveDispatcher = new PrimitiveRequestDispatcher(actionSpecs, primitiveRunners, BehaviorResolver.Default, configProvider, behaviorRunner);
     }
 
-    public StateDrivenRuleExecutionResult Tick(GameWorld world, IReadOnlyList<WorldAction> actions, long serverTick)
+    public int RunningBehaviorCount => behaviorRunner.RunningInstanceCount;
+    public int RunningReservationCount => behaviorRunner.RunningReservationCount;
+    public int ActiveBehaviorCount => RunningBehaviorCount;
+    public int ActiveReservationCount => RunningReservationCount;
+
+    public bool HasActiveSubjectReservation(long entityId)
+    {
+        return behaviorRunner.TryGetRunningSubject(entityId, long.MinValue, out _);
+    }
+
+    public bool HasRunningMovementClaim(long entityId, long serverTick)
+    {
+        return behaviorRunner.TryGetRunningSubject(entityId, BehaviorClaimChannel.Movement, serverTick, out _);
+    }
+
+    public bool HasActiveCellReservation(GridCoord cell)
+    {
+        return behaviorRunner.TryGetReservedCell(cell, long.MinValue, out _);
+    }
+
+    public BehaviorRuntimeTickResult Tick(GameWorld world, IReadOnlyList<WorldAction> actions, long serverTick)
     {
         var proposals = new List<CommitProposal>();
         var moveRequests = new List<ActionRequest>();
         var actionResults = new Dictionary<long, MoveResult>();
         var reasons = new List<string>();
         var deferredActions = new List<DeferredAction>();
-        var transitions = new List<ActionUnitTransition>();
+        var actionFacts = new List<ActionFact>();
+        var behaviorInstances = new List<ActionBehaviorInstance>();
+        var proposalResults = new List<CommitProposalResult>();
+        IReadOnlyDictionary<long, ActionSpecId> specIdsByActionId = actions.ToDictionary(action => action.ActionId, action => action.SpecId);
+        IReadOnlyDictionary<long, ActionRequest> requestsByActionId = actions
+            .Select(action => actionAdapter.FromWorldAction(action))
+            .ToDictionary(request => request.ActionId);
+
+        ReleaseReadyBehaviors(world, serverTick, actionResults, proposalResults, reasons, deferredActions, actionFacts);
 
         for (int i = 0; i < actions.Count; i++)
         {
-            ActionRequest request = actionAdapter.FromWorldAction(actions[i]);
-            RouteRequest(world, request, proposals, moveRequests, actionResults, reasons, serverTick);
+            ActionRequest request = requestsByActionId[actions[i].ActionId];
+            if (TryHandleRunningReservationRequest(world, request, serverTick, actionResults, reasons, actionFacts, behaviorInstances))
+            {
+                continue;
+            }
+
+            primitiveDispatcher.Route(world, request, proposals, moveRequests, actionResults, reasons, actionFacts, behaviorInstances, serverTick);
         }
 
-        RotatePivotResponseResult rotateResponse = rotatePivotResponseProcessor.Process(world, moveRequests, serverTick);
-        MergeRotatePivotResult(rotateResponse, actionResults, reasons, deferredActions);
-        PushVectorCompositionResult pushComposition = pushVectorArbiter.Compose(world, rotateResponse.RemainingRequests);
-        ApplyPushComposition(world, pushComposition, actionResults, reasons);
-        ActionArbitrationResult arbitration = actionArbiter.ArbitrateMoves(world, pushComposition.Requests, serverTick);
-        transitions.AddRange(arbitration.Transitions);
-        MergeArbitrationResult(arbitration, proposals, actionResults, reasons, deferredActions);
-        ApplyDerivedArbitrationToReasons(arbitration.DerivedActions, reasons);
-        IReadOnlyList<MovePlan> movePlans = CreateMovePlans(world, arbitration.AcceptedActions, actionResults, reasons, transitions);
-        if (rotateResponse.MovePlans.Count != 0)
-        {
-            movePlans = rotateResponse.MovePlans.Concat(movePlans).ToArray();
-        }
-        var proposalResults = new List<CommitProposalResult>();
-        proposalResults.AddRange(commitResolver.Resolve(world, proposals));
-        proposalResults.AddRange(conflictResolver.Resolve(world, movePlans));
-        ApplyProposalResultsToActions(actionResults, proposalResults, reasons, transitions);
-        ApplyComposedPushResults(actionResults, pushComposition);
+        moveBatchOrchestrator.Execute(world, moveRequests, serverTick, proposals, actionResults, reasons, deferredActions, actionFacts, behaviorInstances, proposalResults, specIdsByActionId, requestsByActionId);
 
-        return new StateDrivenRuleExecutionResult(actionResults, proposalResults, reasons, deferredActions, transitions, rotateResponse.AnimationMetadata);
+        return new BehaviorRuntimeTickResult(actionResults, proposalResults, reasons, deferredActions, actionFacts, behaviorInstances);
     }
 
-    private static void ApplyPushComposition(GameWorld world, PushVectorCompositionResult composition, Dictionary<long, MoveResult> actionResults, List<string> reasons)
+    private void ReleaseReadyBehaviors(GameWorld world, long serverTick, Dictionary<long, MoveResult> actionResults, List<CommitProposalResult> proposalResults, List<string> reasons, List<DeferredAction> deferredActions, List<ActionFact> actionFacts)
     {
-        for (int i = 0; i < composition.CancelledRequests.Count; i++)
+        IReadOnlyList<BehaviorInstanceRelease> releases = behaviorRunner.StepDue(world, serverTick);
+        var releaseSpecIdsByActionId = new Dictionary<long, ActionSpecId>();
+        var releaseRequestsByActionId = new Dictionary<long, ActionRequest>();
+        var routedRequests = new List<ActionRequest>();
+        var releaseProposals = new List<CommitProposal>();
+        var releaseMovePlans = new List<MovePlan>();
+        for (int i = 0; i < releases.Count; i++)
         {
-            ActionRequest request = composition.CancelledRequests[i];
-            actionResults[request.ActionId] = new MoveResult(false, request.EntityId, CurrentCoord(world, request.EntityId), Direction.None, MoveErrorCode.Blocked, "push-vector-cancelled", false, default, request.ClientTick);
+            BehaviorInstanceRelease release = releases[i];
+            BehaviorStepOutput output = release.Output;
+            releaseSpecIdsByActionId[release.Instance.SourceActionId] = release.Instance.SpecId;
+            releaseProposals.AddRange(output.CommitProposals);
+            releaseMovePlans.AddRange(output.MovePlans);
+            if (output.RoutedRequests.Count != 0)
+            {
+                for (int requestIndex = 0; requestIndex < output.RoutedRequests.Count; requestIndex++)
+                {
+                    ActionRequest request = output.RoutedRequests[requestIndex];
+                    releaseSpecIdsByActionId[request.ActionId] = request.SpecId;
+                    releaseRequestsByActionId[request.ActionId] = request;
+                }
+
+                routedRequests.AddRange(output.RoutedRequests);
+            }
+
+            foreach (KeyValuePair<long, MoveResult> pair in output.ActionResults)
+            {
+                actionResults[pair.Key] = pair.Value;
+            }
+
+            proposalResults.AddRange(stepRunner.ResolveMovePlans(world, output.MovePlans, behaviorRunner));
+            deferredActions.AddRange(output.DeferredActions);
+            actionFacts.AddRange(output.ActionFacts);
+            reasons.AddRange(output.Reasons);
+            reasons.Add(release.Completion ? "behavior-complete" : "behavior-scheduled-output");
         }
 
-        for (int i = 0; i < composition.Reasons.Count; i++)
+        if (routedRequests.Count != 0)
         {
-            reasons.Add(composition.Reasons[i]);
+            MoveBatchPlanResult releasePlan = moveBatchOrchestrator.Plan(world, routedRequests, serverTick, releaseProposals, actionResults, reasons, deferredActions, actionFacts, new List<ActionBehaviorInstance>());
+            releaseMovePlans.AddRange(releasePlan.MovePlans);
         }
+
+        if (releaseMovePlans.Count != 0)
+        {
+            proposalResults.AddRange(stepRunner.ResolveMovePlans(world, releaseMovePlans, behaviorRunner));
+        }
+
+        if (releaseProposals.Count != 0)
+        {
+            proposalResults.AddRange(stepRunner.ResolveCommitProposals(world, releaseProposals));
+        }
+
+        moveBatchOrchestrator.ApplyProposalResultsToActions(actionResults, proposalResults, reasons, actionFacts, new List<ActionBehaviorInstance>(), serverTick, releaseSpecIdsByActionId, releaseRequestsByActionId);
     }
 
-    private void RouteRequest(GameWorld world, ActionRequest request, List<CommitProposal> proposals, List<ActionRequest> moveRequests, Dictionary<long, MoveResult> actionResults, List<string> reasons, long serverTick)
+    private bool TryHandleRunningReservationRequest(GameWorld world, ActionRequest request, long serverTick, Dictionary<long, MoveResult> actionResults, List<string> reasons, List<ActionFact> actionFacts, List<ActionBehaviorInstance> behaviorInstances)
     {
+        if (!behaviorRunner.TryGetRunningSubject(request.EntityId, serverTick, out ActionBehaviorInstance instance))
+        {
+            for (int i = 0; i < request.SubjectEntityIds.Count; i++)
+            {
+                if (behaviorRunner.TryGetRunningSubject(request.SubjectEntityIds[i], serverTick, out instance))
+                {
+                    break;
+                }
+            }
+        }
+
+        if (instance == null && request.Target.TargetCoord.HasValue &&
+            behaviorRunner.TryGetReservedCell(request.Target.TargetCoord.Value, serverTick, out ActionBehaviorInstance reserved))
+        {
+            instance = reserved;
+        }
+
+        if (instance == null || instance.IncomingPolicy != BehaviorIncomingPolicy.RejectIncoming)
+        {
+            return false;
+        }
+
+        if (instance.CreatedTick == serverTick)
+        {
+            return false;
+        }
+
+        string reason = behaviorRunner.TryGetRunningSubject(request.EntityId, serverTick, out _) ? "running-subject-in-flight" : "running-reservation-in-flight";
         ActionSpec spec = actionSpecs.Get(request.SpecId);
-        IActionStrategy strategy = strategyRegistry.Get(spec);
-        strategy.Process(new ActionStrategyContext(world, request, spec, proposals, moveRequests, actionResults, reasons, serverTick, configProvider, actionSpecs.TargetFilters));
-    }
-
-    private static void MergeArbitrationResult(ActionArbitrationResult arbitration, List<CommitProposal> proposals, Dictionary<long, MoveResult> actionResults, List<string> reasons, List<DeferredAction> deferredActions)
-    {
-        proposals.AddRange(arbitration.CommitProposals);
-        deferredActions.AddRange(arbitration.DeferredActions);
-        foreach (KeyValuePair<long, MoveResult> pair in arbitration.ActionResults)
-        {
-            actionResults[pair.Key] = pair.Value;
-        }
-
-        for (int i = 0; i < arbitration.Reasons.Count; i++)
-        {
-            reasons.Add(arbitration.Reasons[i]);
-        }
-    }
-
-    private static void MergeRotatePivotResult(RotatePivotResponseResult rotateResponse, Dictionary<long, MoveResult> actionResults, List<string> reasons, List<DeferredAction> deferredActions)
-    {
-        foreach (KeyValuePair<long, MoveResult> pair in rotateResponse.ActionResults)
-        {
-            actionResults[pair.Key] = pair.Value;
-        }
-
-        deferredActions.AddRange(rotateResponse.DeferredActions);
-        for (int i = 0; i < rotateResponse.Reasons.Count; i++)
-        {
-            reasons.Add(rotateResponse.Reasons[i]);
-        }
-    }
-
-    private static void ApplyDerivedArbitrationToReasons(IReadOnlyList<DerivedAction> derivedActions, List<string> reasons)
-    {
-        for (int i = 0; i < derivedActions.Count; i++)
-        {
-            string reason = derivedActions[i].Reason;
-            if (!string.IsNullOrEmpty(reason))
-            {
-                reasons.Add(reason);
-            }
-        }
-    }
-
-    private IReadOnlyList<MovePlan> CreateMovePlans(GameWorld world, IReadOnlyList<AcceptedAction> acceptedActions, Dictionary<long, MoveResult> actionResults, List<string> reasons, List<ActionUnitTransition> transitions)
-    {
-        var movePlans = new List<MovePlan>();
-        for (int i = 0; i < acceptedActions.Count; i++)
-        {
-            AcceptedAction action = acceptedActions[i];
-            if (!rulePlanner.TryPlanMove(world, action, out MovePlan plan, out PlanResult result))
-            {
-                transitions.Add(new ActionUnitTransition(action.Request.ActionId, ActionUnitLifecycleState.Accepted, ActionUnitLifecycleState.Failed, result.Message));
-                if (actionResults.TryGetValue(action.Request.ActionId, out MoveResult actionResult))
-                {
-                    actionResults[action.Request.ActionId] = new MoveResult(false, action.Request.EntityId, CurrentCoord(world, action.Request.EntityId), action.Direction, ErrorCodeFromPlanReason(result.Reason), result.Message, false, default, actionResult.ClientTick);
-                }
-
-                if (!string.IsNullOrEmpty(result.Message))
-                {
-                    reasons.Add(result.Message);
-                }
-
-                continue;
-            }
-
-            transitions.Add(new ActionUnitTransition(action.Request.ActionId, ActionUnitLifecycleState.Accepted, ActionUnitLifecycleState.Planned, string.Empty));
-            movePlans.Add(plan);
-        }
-
-        return movePlans;
-    }
-
-    private static void ApplyProposalResultsToActions(Dictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, List<string> reasons, List<ActionUnitTransition> transitions)
-    {
-        for (int i = 0; i < proposalResults.Count; i++)
-        {
-            CommitProposalResult result = proposalResults[i];
-            if (result.Proposal.SourceStateId != 0 ||
-                !actionResults.TryGetValue(result.Proposal.SourceActionId, out MoveResult actionResult))
-            {
-                continue;
-            }
-
-            if (result.Accepted)
-            {
-                transitions.Add(new ActionUnitTransition(result.Proposal.SourceActionId, ActionUnitLifecycleState.Planned, ActionUnitLifecycleState.Committed, string.Empty));
-                continue;
-            }
-
-            transitions.Add(new ActionUnitTransition(result.Proposal.SourceActionId, ActionUnitLifecycleState.Planned, ActionUnitLifecycleState.Failed, result.Reason));
-            actionResults[result.Proposal.SourceActionId] = new MoveResult(false, actionResult.EntityId, result.Proposal.From, actionResult.FinalDirection, MoveErrorCode.Blocked, result.Reason, false, default, actionResult.ClientTick);
-            if (!string.IsNullOrEmpty(result.Reason))
-            {
-                reasons.Add(result.Reason);
-            }
-        }
-    }
-
-    private static void ApplyComposedPushResults(Dictionary<long, MoveResult> actionResults, PushVectorCompositionResult composition)
-    {
-        foreach (KeyValuePair<long, IReadOnlyList<ActionRequest>> pair in composition.MergedRequestsByRepresentative)
-        {
-            if (!actionResults.TryGetValue(pair.Key, out MoveResult representativeResult))
-            {
-                continue;
-            }
-
-            IReadOnlyList<ActionRequest> mergedRequests = pair.Value;
-            for (int i = 0; i < mergedRequests.Count; i++)
-            {
-                ActionRequest request = mergedRequests[i];
-                actionResults[request.ActionId] = new MoveResult(
-                    representativeResult.Success,
-                    request.EntityId,
-                    representativeResult.FinalCoord,
-                    representativeResult.FinalDirection,
-                    representativeResult.ErrorCode,
-                    representativeResult.Reason,
-                    representativeResult.Bounced,
-                    representativeResult.Collision,
-                    request.ClientTick);
-            }
-        }
-    }
-
-    private static MoveErrorCode ErrorCodeFromPlanReason(PlanFailureReason reason)
-    {
-        return reason == PlanFailureReason.OccupiedByPlayer ? MoveErrorCode.Occupied :
-            reason == PlanFailureReason.InvalidDirection ? MoveErrorCode.InvalidDirection :
-            reason == PlanFailureReason.MissingPosition ? MoveErrorCode.MissingPosition :
-            reason == PlanFailureReason.UnknownEntity ? MoveErrorCode.UnknownEntity :
-            MoveErrorCode.Blocked;
-    }
-
-    private static GridCoord CurrentCoord(GameWorld world, long entityId)
-    {
-        if (world.TryGetEntity(entityId, out GameEntity entity) &&
-            world.TryGetComponent(entity, out PositionComponent position))
-        {
-            return position.Coord;
-        }
-
-        return default;
+        IReadOnlyList<long> subjectIds = request.SubjectEntityIds.Count == 0 ? new[] { request.EntityId } : request.SubjectEntityIds;
+        ActionBehaviorInstance rejectedInstance = ActionBehaviorInstance.Rejected(request, spec, subjectIds, serverTick, reason, "running-reservation-conflict");
+        BehaviorStep rejectedStep = behaviorRunner.RunTerminal(rejectedInstance, world);
+        actionFacts.AddRange(rejectedStep.Output.ActionFacts);
+        behaviorInstances.Add(rejectedInstance);
+        actionResults[request.ActionId] = new MoveResult(false, request.EntityId, MoveBatchOrchestrator.CurrentCoord(world, request.EntityId), request.Target.Direction, MoveErrorCode.Blocked, reason, false, default, request.ClientTick);
+        reasons.Add(reason);
+        return true;
     }
 }
 }

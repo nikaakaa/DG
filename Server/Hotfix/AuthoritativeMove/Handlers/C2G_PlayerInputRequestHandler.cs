@@ -11,11 +11,10 @@ public sealed class C2G_PlayerInputRequestHandler : MessageRPC<C2G_PlayerInputRe
     protected override async FTask Run(Session session, C2G_PlayerInputRequest request, G2C_PlayerInputResponse response, Action reply)
     {
         Direction direction = (Direction)request.Direction;
-        long beatTick = request.BeatTick > 0 ? request.BeatTick : AuthoritativeMoveWorldProvider.World.ServerTick + 1;
         InputIntent intent = InputIntent.PlayerMove(
             request.EntityId,
             direction,
-            beatTick,
+            request.BeatTick,
             request.ClientInputId,
             request.ClientTick,
             AuthoritativeMoveWorldProvider.World.ServerTick);

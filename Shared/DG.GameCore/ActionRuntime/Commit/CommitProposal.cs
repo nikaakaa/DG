@@ -85,11 +85,16 @@ public readonly struct CommitProposalId : System.IEquatable<CommitProposalId>
 public readonly struct CommitProposal
 {
     public CommitProposal(CommitProposalKind kind, WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, GridCoord from, GridCoord to, Direction direction, long serverTick, int configId, long playerId, int autoMoveIntervalTicks)
-        : this(kind, priority, sourceActionId, sourceStateId, entityId, from, to, direction, serverTick, configId, playerId, autoMoveIntervalTicks, false, default, default, WorldTag.None, default)
+        : this(kind, priority, sourceActionId, sourceStateId, entityId, from, to, direction, serverTick, configId, playerId, autoMoveIntervalTicks, false, default, default, WorldTag.None, default, PresentationFactType.Unknown)
     {
     }
 
     public CommitProposal(CommitProposalKind kind, WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, GridCoord from, GridCoord to, Direction direction, long serverTick, int configId, long playerId, int autoMoveIntervalTicks, bool rotatePivot, EffectApplication effectApplication, RuntimeEffectId runtimeEffectId, WorldTag tag, ComponentSourceContribution componentContribution)
+        : this(kind, priority, sourceActionId, sourceStateId, entityId, from, to, direction, serverTick, configId, playerId, autoMoveIntervalTicks, rotatePivot, effectApplication, runtimeEffectId, tag, componentContribution, PresentationFactType.Unknown)
+    {
+    }
+
+    public CommitProposal(CommitProposalKind kind, WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, GridCoord from, GridCoord to, Direction direction, long serverTick, int configId, long playerId, int autoMoveIntervalTicks, bool rotatePivot, EffectApplication effectApplication, RuntimeEffectId runtimeEffectId, WorldTag tag, ComponentSourceContribution componentContribution, PresentationFactType presentationHint)
     {
         ProposalId = new CommitProposalId(kind);
         Kind = kind;
@@ -109,6 +114,7 @@ public readonly struct CommitProposal
         RuntimeEffectId = runtimeEffectId;
         Tag = tag;
         ComponentContribution = componentContribution;
+        PresentationHint = presentationHint;
     }
 
     public CommitProposalKind Kind { get; }
@@ -129,15 +135,19 @@ public readonly struct CommitProposal
     public RuntimeEffectId RuntimeEffectId { get; }
     public WorldTag Tag { get; }
     public ComponentSourceContribution ComponentContribution { get; }
+    public PresentationFactType PresentationHint { get; }
 
     public static CommitProposal Move(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, GridCoord from, GridCoord to, long serverTick)
+        => Move(priority, sourceActionId, sourceStateId, entityId, from, to, serverTick, PresentationFactType.EntityMoved);
+
+    public static CommitProposal Move(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, GridCoord from, GridCoord to, long serverTick, PresentationFactType presentationHint)
     {
-        return new CommitProposal(CommitProposalKind.MoveEntity, priority, sourceActionId, sourceStateId, entityId, from, to, Direction.None, serverTick, 0, 0, 0);
+        return new CommitProposal(CommitProposalKind.MoveEntity, priority, sourceActionId, sourceStateId, entityId, from, to, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default, presentationHint);
     }
 
     public static CommitProposal SetDirection(WorldActionPriority priority, long sourceActionId, long sourceStateId, long entityId, Direction direction, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.SetDirection, priority, sourceActionId, sourceStateId, entityId, default, default, direction, serverTick, 0, 0, 0);
+        return new CommitProposal(CommitProposalKind.SetDirection, priority, sourceActionId, sourceStateId, entityId, default, default, direction, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default, PresentationFactType.Unknown);
     }
 
     public static CommitProposal Create(WorldActionPriority priority, long sourceActionId, long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, long serverTick)
@@ -145,47 +155,47 @@ public readonly struct CommitProposal
 
     public static CommitProposal Create(WorldActionPriority priority, long sourceActionId, long entityId, int configId, GridCoord coord, Direction direction, long playerId, int autoMoveIntervalTicks, bool rotatePivot, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.CreateEntity, priority, sourceActionId, 0, entityId, default, coord, direction, serverTick, configId, playerId, autoMoveIntervalTicks, rotatePivot, default, default, WorldTag.None, default);
+        return new CommitProposal(CommitProposalKind.CreateEntity, priority, sourceActionId, 0, entityId, default, coord, direction, serverTick, configId, playerId, autoMoveIntervalTicks, rotatePivot, default, default, WorldTag.None, default, PresentationFactType.EntitySpawned);
     }
 
     public static CommitProposal Delete(WorldActionPriority priority, long sourceActionId, long entityId, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.DeleteEntity, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default);
+        return new CommitProposal(CommitProposalKind.DeleteEntity, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default, PresentationFactType.EntityRemoved);
     }
 
     public static CommitProposal SetAutoMoveTick(WorldActionPriority priority, long sourceActionId, long entityId, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.SetAutoMoveTick, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default);
+        return new CommitProposal(CommitProposalKind.SetAutoMoveTick, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default, PresentationFactType.Unknown);
     }
 
     public static CommitProposal AddRuntimeEffect(WorldActionPriority priority, long sourceActionId, EffectApplication application, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.AddRuntimeEffect, priority, sourceActionId, 0, application.TargetEntityId, default, application.TargetCell, Direction.None, serverTick, 0, 0, 0, false, application, default, WorldTag.None, default);
+        return new CommitProposal(CommitProposalKind.AddRuntimeEffect, priority, sourceActionId, 0, application.TargetEntityId, default, application.TargetCell, Direction.None, serverTick, 0, 0, 0, false, application, default, WorldTag.None, default, PresentationFactType.Unknown);
     }
 
     public static CommitProposal RemoveRuntimeEffect(WorldActionPriority priority, long sourceActionId, long entityId, RuntimeEffectId effectId, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.RemoveRuntimeEffect, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, effectId, WorldTag.None, default);
+        return new CommitProposal(CommitProposalKind.RemoveRuntimeEffect, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, effectId, WorldTag.None, default, PresentationFactType.Unknown);
     }
 
     public static CommitProposal SetComponentResult(WorldActionPriority priority, long sourceActionId, ComponentSourceContribution contribution, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.SetComponentResult, priority, sourceActionId, 0, contribution.EntityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, contribution);
+        return new CommitProposal(CommitProposalKind.SetComponentResult, priority, sourceActionId, 0, contribution.EntityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, contribution, PresentationFactType.Unknown);
     }
 
     public static CommitProposal AddTag(WorldActionPriority priority, long sourceActionId, long entityId, WorldTag tag, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.AddTag, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, tag, default);
+        return new CommitProposal(CommitProposalKind.AddTag, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, tag, default, PresentationFactType.Unknown);
     }
 
     public static CommitProposal RemoveTag(WorldActionPriority priority, long sourceActionId, long entityId, WorldTag tag, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.RemoveTag, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, tag, default);
+        return new CommitProposal(CommitProposalKind.RemoveTag, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, tag, default, PresentationFactType.Unknown);
     }
 
     public static CommitProposal ClearRuntimeSources(WorldActionPriority priority, long sourceActionId, long entityId, long serverTick)
     {
-        return new CommitProposal(CommitProposalKind.ClearRuntimeSources, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default);
+        return new CommitProposal(CommitProposalKind.ClearRuntimeSources, priority, sourceActionId, 0, entityId, default, default, Direction.None, serverTick, 0, 0, 0, false, default, default, WorldTag.None, default, PresentationFactType.Unknown);
     }
 }
 }

@@ -53,14 +53,14 @@ public static class LubanActionSpecRegistry
 
         return new ActionSpec(
             specId,
-            new ActionStrategyId(row.StrategyId),
+            ConvertEnum<cfg.gamecore.ActionPrimitive, ActionPrimitive>(row.Primitive, specId, nameof(row.Primitive)),
             ConvertEnum<cfg.gamecore.ActionSourceKind, ActionSourceKind>(row.Source, specId, nameof(row.Source)),
             ConvertEnum<cfg.gamecore.ActionPriority, WorldActionPriority>(row.Priority, specId, nameof(row.Priority)),
             ParseTags(row.SourceTag),
             ParseTags(row.AbilityTag),
             ParseTags(row.RequiredTags),
             ParseTags(row.BlockedTags),
-            ActionTargetRule.None,
+            targeting.LegacyRule,
             row.BlockedResultPolicyId,
             ConvertEnum<cfg.gamecore.ActionConflictPolicy, ActionConflictPolicy>(row.ConflictPolicy, specId, nameof(row.ConflictPolicy)),
             ConvertEnum<cfg.gamecore.ActionInterruptPolicy, ActionInterruptPolicy>(row.InterruptPolicy, specId, nameof(row.InterruptPolicy)),
@@ -71,7 +71,7 @@ public static class LubanActionSpecRegistry
             new ActionHandoffSpec(handoffPolicy, row.HandoffSpecId, handoffSubject),
             row.DefaultCostTicks,
             targeting,
-            string.IsNullOrWhiteSpace(row.EffectSpecId) ? default : new EffectSpecId(row.EffectSpecId));
+            default);
     }
 
     private static IReadOnlyDictionary<TargetFilterSpecId, TargetFilterSpec> ConvertTargetFilters(cfg.Tables tables)
@@ -114,7 +114,8 @@ public static class LubanActionSpecRegistry
                 filterId,
                 ConvertEnum<cfg.gamecore.TargetOrderingPolicy, TargetOrderingPolicy>(row.OrderingPolicy, row.TargetingId, nameof(row.OrderingPolicy)),
                 row.Range,
-                row.MaxTargets);
+                row.MaxTargets,
+                InferLegacyRule(row));
             TargetSelectorRegistry.CreateDefault().Get(spec.SelectorId);
 
             if (specs.ContainsKey(spec.SpecId))
@@ -126,6 +127,40 @@ public static class LubanActionSpecRegistry
         }
 
         return specs;
+    }
+
+    private static ActionTargetRule InferLegacyRule(cfg.gamecore.TargetingSpec row)
+    {
+        TargetSelectorId selectorId = row.SelectorId;
+        TargetDirectionSource directionSource = ConvertEnum<cfg.gamecore.TargetDirectionSource, TargetDirectionSource>(row.DirectionSource, row.TargetingId, nameof(row.DirectionSource));
+        if (selectorId.Equals(new TargetSelectorId("none")))
+        {
+            return ActionTargetRule.None;
+        }
+
+        if (selectorId.Equals(new TargetSelectorId("target_coord")))
+        {
+            return row.Range == 1 ? ActionTargetRule.TargetCoordOneStep : ActionTargetRule.TargetCoordAny;
+        }
+
+        if (selectorId.Equals(new TargetSelectorId("direction_cell")))
+        {
+            return directionSource == TargetDirectionSource.Component
+                ? ActionTargetRule.DirectionFromComponent
+                : ActionTargetRule.DirectionFromRequest;
+        }
+
+        if (selectorId.Equals(new TargetSelectorId("self")))
+        {
+            return ActionTargetRule.Self;
+        }
+
+        if (selectorId.Equals(new TargetSelectorId("front_entities")))
+        {
+            return ActionTargetRule.FrontEntities;
+        }
+
+        return ActionTargetRule.None;
     }
 
     private static TargetFilterCondition ConvertTargetFilterCondition(cfg.gamecore.TargetFilterCondition row)

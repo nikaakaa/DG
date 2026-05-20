@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\MCPForUnity.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\MCPForUnity.Editor.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\MCPForUnity.Editor.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\MCPForUnity.Editor.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\MCPForUn.B77013DC.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\MCPForUnity.Editor.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\MCPForUnity.Editor.pdb

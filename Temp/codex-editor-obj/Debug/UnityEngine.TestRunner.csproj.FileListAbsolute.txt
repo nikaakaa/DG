@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UnityEngine.TestRunner.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\UnityEngine.TestRunner.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEngine.TestRunner.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEngine.TestRunner.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEng.A4D2535F.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEngine.TestRunner.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\UnityEngine.TestRunner.pdb

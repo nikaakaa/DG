@@ -20,13 +20,14 @@ namespace DG.Map
         private readonly Dictionary<long, Transform> EntityViews = new();
         private readonly Dictionary<long, ActiveEntityAnimation> activeAnimations = new();
         private readonly Dictionary<long, ClientAnimationEvent> latestDrainedEvents = new();
-        private readonly Dictionary<string, SharedRotateAnimationGroup> rotateAnimationGroups = new();
+        private readonly PresentationPlaybackScheduler playbackScheduler = new();
         private readonly Dictionary<string, LineRenderer> portConnectionLines = new();
         private readonly HashSet<long> seenEntityIds = new();
         private readonly List<long> removedEntityIds = new();
         private readonly HashSet<string> seenPortConnectionKeys = new();
         private readonly List<string> removedPortConnectionKeys = new();
         private Transform entityRoot;
+        private Transform rotateGroupRoot;
         private Transform portConnectionRoot;
         private Texture2D squareTexture;
         private Sprite squareSprite;
@@ -43,6 +44,8 @@ namespace DG.Map
 
             entityRoot = new GameObject("Entities").transform;
             entityRoot.SetParent(transform, false);
+            rotateGroupRoot = new GameObject("RotatePivotGroups").transform;
+            rotateGroupRoot.SetParent(transform, false);
             portConnectionRoot = new GameObject("PortConnections").transform;
             portConnectionRoot.SetParent(transform, false);
             squareSprite = CreateSquareSprite(out squareTexture);
@@ -72,7 +75,7 @@ namespace DG.Map
             EntityViews.Clear();
             activeAnimations.Clear();
             latestDrainedEvents.Clear();
-            rotateAnimationGroups.Clear();
+            playbackScheduler.Clear();
             portConnectionLines.Clear();
             DestroyAsset(squareSprite);
             DestroyAsset(squareTexture);
@@ -95,7 +98,7 @@ namespace DG.Map
             float animationDeltaTime = Application.isPlaying ? Time.deltaTime : 0f;
             runner.Context.AnimationLayer.Enabled = animationLayerEnabled;
             DrainAnimationEvents();
-            PrepareRotateAnimationGroups(animationDeltaTime);
+            AdvanceRotateGroups(animationDeltaTime);
             seenEntityIds.Clear();
             for (int i = 0; i < snapshots.Count; i++)
             {
@@ -135,7 +138,11 @@ namespace DG.Map
             Vector3 resolvedPosition = ToWorldPosition(new Vector2Int(snapshot.X, snapshot.Y), -0.1f);
             Vector3 resolvedScale = Vector3.one * (cellSize * 0.8f);
             Color displayColor = resolvedColor;
-            if (animationLayerEnabled && activeAnimations.TryGetValue(snapshot.EntityId, out ActiveEntityAnimation animation))
+                if (animationLayerEnabled && playbackScheduler.HasEntityOwner(snapshot.EntityId))
+                {
+                    displayColor = resolvedColor;
+                }
+                else if (animationLayerEnabled && activeAnimations.TryGetValue(snapshot.EntityId, out ActiveEntityAnimation animation))
             {
                 if (animation.Advance(deltaTime, resolvedPosition, resolvedScale, resolvedColor, out Vector3 animatedPosition, out Vector3 animatedScale, out Color animatedColor))
                 {
@@ -169,20 +176,40 @@ namespace DG.Map
             LineRenderer lineRenderer = view.GetComponent<LineRenderer>();
             if (lineRenderer != null)
             {
-                ConfigurePortLine(lineRenderer, snapshot);
+                DirectionMask portMask = animationLayerEnabled && TryGetRotateGroupPortMask(snapshot.EntityId, out DirectionMask rotatePortMask)
+                    ? rotatePortMask
+                    : animationLayerEnabled && activeAnimations.TryGetValue(snapshot.EntityId, out ActiveEntityAnimation portAnimation)
+                    ? portAnimation.PortLineMask(snapshot)
+                    : PortDebugVisualizationUtility.GetWorldPorts(snapshot);
+                bool showPort = animationLayerEnabled && TryGetRotateGroupPortMask(snapshot.EntityId, out _)
+                    ? portMask != DirectionMask.None
+                    : snapshot.PortLocalPorts != DirectionMask.None;
+                ConfigurePortLine(lineRenderer, showPort, portMask);
             }
         }
 
-        private void ConfigurePortLine(LineRenderer lineRenderer, EntitySnapshot snapshot)
+        private bool TryGetRotateGroupPortMask(long entityId, out DirectionMask ports)
         {
-            bool showPort = PortDebugVisualizationUtility.HasPorts(snapshot);
+            ports = DirectionMask.None;
+            if (!playbackScheduler.TryGetGroupTrackByEntity(entityId, out RigidBodyGroupTrack runtime))
+            {
+                return false;
+            }
+
+            return runtime.TryGetPortMask(entityId, out ports);
+        }
+
+        private void ConfigurePortLine(LineRenderer lineRenderer, EntitySnapshot snapshot)
+            => ConfigurePortLine(lineRenderer, PortDebugVisualizationUtility.HasPorts(snapshot), PortDebugVisualizationUtility.GetWorldPorts(snapshot));
+
+        private void ConfigurePortLine(LineRenderer lineRenderer, bool showPort, DirectionMask ports)
+        {
             lineRenderer.enabled = showPort;
             if (!showPort)
             {
                 return;
             }
 
-            DirectionMask worldPorts = PortDebugVisualizationUtility.GetWorldPorts(snapshot);
             lineRenderer.useWorldSpace = false;
             lineRenderer.loop = false;
             lineRenderer.widthMultiplier = 0.12f;
@@ -191,7 +218,7 @@ namespace DG.Map
             lineRenderer.startColor = portLineColor;
             lineRenderer.endColor = portLineColor;
             lineRenderer.sortingOrder = 12;
-            if (worldPorts.Contains(Direction.Up) || worldPorts.Contains(Direction.Down))
+            if (ports.Contains(Direction.Up) || ports.Contains(Direction.Down))
             {
                 lineRenderer.SetPosition(0, new Vector3(0f, -0.45f, -0.02f));
                 lineRenderer.SetPosition(1, new Vector3(0f, 0.45f, -0.02f));
@@ -253,6 +280,7 @@ namespace DG.Map
 
                 EntityViews.Remove(entityId);
                 activeAnimations.Remove(entityId);
+                ClearRotateGroupContaining(entityId);
             }
         }
 
@@ -269,35 +297,42 @@ namespace DG.Map
             latestDrainedEvents.Clear();
             if (runner.Context.AnimationLayer == null)
             {
-                rotateAnimationGroups.Clear();
+                ClearRotateAnimationGroups();
                 return;
+            }
+
+            while (runner.Context.AnimationLayer.TryDequeueRotateGroup(out RotatePivotGroupPlaybackPlan rotatePlan))
+            {
+                StartRotateGroup(rotatePlan);
+            }
+
+            while (runner.Context.AnimationLayer.TryDequeueTranslateGroup(out TranslateGroupPlaybackPlan translatePlan))
+            {
+                StartTranslateGroup(translatePlan);
             }
 
             while (runner.Context.AnimationLayer.TryDequeue(out ClientAnimationEvent animationEvent))
             {
-                latestDrainedEvents[animationEvent.EntityId] = animationEvent;
-            }
-
-            foreach (ClientAnimationEvent animationEvent in latestDrainedEvents.Values)
-            {
-                if (!animationEvent.IsRotatePivot)
+                if (playbackScheduler.HasEntityOwner(animationEvent.EntityId) && animationEvent.MotionKind != ClientAnimationMotionKind.Remove)
                 {
                     continue;
                 }
 
-                string groupKey = RotateGroupKey(animationEvent);
-                if (!rotateAnimationGroups.ContainsKey(groupKey))
+                if (latestDrainedEvents.TryGetValue(animationEvent.EntityId, out ClientAnimationEvent existingEvent) &&
+                    ShouldKeepExistingAnimationEvent(existingEvent, animationEvent))
                 {
-                    rotateAnimationGroups[groupKey] = new SharedRotateAnimationGroup(animationEvent.RotateDirection);
+                    continue;
                 }
+
+                latestDrainedEvents[animationEvent.EntityId] = animationEvent;
             }
 
             foreach (KeyValuePair<long, ClientAnimationEvent> pair in latestDrainedEvents)
             {
                 ClientAnimationEvent animationEvent = pair.Value;
-                Transform view = GetOrCreateEntityView(animationEvent.EntityId);
                 if (animationEvent.MotionKind == ClientAnimationMotionKind.Remove)
                 {
+                    ClearRotateGroupContaining(animationEvent.EntityId);
                     if (EntityViews.TryGetValue(animationEvent.EntityId, out Transform removedView) && removedView != null)
                     {
                         DestroyImmediateOrDeferred(removedView.gameObject);
@@ -308,33 +343,37 @@ namespace DG.Map
                     continue;
                 }
 
+                Transform view = GetOrCreateEntityView(animationEvent.EntityId);
                 Vector3 startPosition = activeAnimations.ContainsKey(animationEvent.EntityId)
                     ? view.localPosition
                     : ToWorldPosition(animationEvent.FromCoord, -0.1f);
-                SharedRotateAnimationGroup rotateGroup = animationEvent.IsRotatePivot && rotateAnimationGroups.TryGetValue(RotateGroupKey(animationEvent), out SharedRotateAnimationGroup foundGroup) ? foundGroup : null;
-                string rotateGroupKey = rotateGroup == null ? string.Empty : RotateGroupKey(animationEvent);
-                ActiveEntityAnimation animation = ActiveEntityAnimation.Create(animationEvent, startPosition, ToWorldPosition(animationEvent.ToCoord, -0.1f), cellSize, rotateGroup, rotateGroupKey);
+                ActiveEntityAnimation animation = ActiveEntityAnimation.Create(animationEvent, startPosition, ToWorldPosition(animationEvent.ToCoord, -0.1f), cellSize);
                 view.localPosition = animation.StartPosition;
                 activeAnimations[animationEvent.EntityId] = animation;
             }
         }
 
+        private static bool ShouldKeepExistingAnimationEvent(ClientAnimationEvent existingEvent, ClientAnimationEvent incomingEvent)
+        {
+            if (incomingEvent.MotionKind == ClientAnimationMotionKind.Remove)
+            {
+                return false;
+            }
+
+            if (existingEvent.MotionKind == ClientAnimationMotionKind.Remove)
+            {
+                return true;
+            }
+
+            return existingEvent.IsRotatePivot && !incomingEvent.IsRotatePivot;
+        }
+
         private void CleanupUnusedRotateAnimationGroups()
         {
             removedPortConnectionKeys.Clear();
-            foreach (KeyValuePair<string, SharedRotateAnimationGroup> pair in rotateAnimationGroups)
+            foreach (KeyValuePair<string, RigidBodyGroupTrack> pair in playbackScheduler.GroupTracks)
             {
-                bool used = false;
-                foreach (KeyValuePair<long, ActiveEntityAnimation> animationPair in activeAnimations)
-                {
-                    if (animationPair.Value.RotateGroupKey == pair.Key)
-                    {
-                        used = true;
-                        break;
-                    }
-                }
-
-                if (!used)
+                if (pair.Value.Completed)
                 {
                     removedPortConnectionKeys.Add(pair.Key);
                 }
@@ -342,42 +381,114 @@ namespace DG.Map
 
             for (int i = 0; i < removedPortConnectionKeys.Count; i++)
             {
-                rotateAnimationGroups.Remove(removedPortConnectionKeys[i]);
+                playbackScheduler.RemoveCompletedTrack(removedPortConnectionKeys[i]);
             }
         }
 
         private void ClearRotateAnimationGroups()
         {
-            rotateAnimationGroups.Clear();
-        }
-
-        private void PrepareRotateAnimationGroups(float deltaTime)
-        {
-            foreach (KeyValuePair<string, SharedRotateAnimationGroup> pair in rotateAnimationGroups)
+            foreach (KeyValuePair<string, RigidBodyGroupTrack> pair in playbackScheduler.GroupTracks)
             {
-                pair.Value.ResetFrame();
+                pair.Value.Restore(entityRoot);
+                DestroyImmediateOrDeferred(pair.Value.Root.gameObject);
             }
 
-            foreach (KeyValuePair<long, ActiveEntityAnimation> pair in activeAnimations)
+            playbackScheduler.Clear();
+        }
+
+        private void ClearRotateGroupContaining(long entityId)
+        {
+            if (!playbackScheduler.TryGetTrackIdByEntity(entityId, out string groupId))
             {
-                ActiveEntityAnimation animation = pair.Value;
-                if (string.IsNullOrEmpty(animation.RotateGroupKey) || !rotateAnimationGroups.TryGetValue(animation.RotateGroupKey, out SharedRotateAnimationGroup group))
+                return;
+            }
+
+            playbackScheduler.InterruptTrack(groupId, entityRoot, DestroyImmediateOrDeferred);
+        }
+
+        private void StartRotateGroup(RotatePivotGroupPlaybackPlan plan)
+        {
+            if (plan.Members.Count == 0 || string.IsNullOrEmpty(plan.GroupId))
+            {
+                return;
+            }
+
+            for (int i = 0; i < plan.Members.Count; i++)
+            {
+                playbackScheduler.InterruptTrackContaining(plan.Members[i].EntityId, entityRoot, DestroyImmediateOrDeferred);
+            }
+
+            GameObject rootObject = new GameObject("RotatePivotGroup_" + plan.GroupId);
+            Transform root = rootObject.transform;
+            root.SetParent(rotateGroupRoot, false);
+            root.localPosition = ToWorldPosition(plan.PivotCoord, -0.1f);
+            root.localRotation = Quaternion.identity;
+            root.localScale = Vector3.one;
+
+            var runtime = new RigidBodyGroupTrack(plan, root, cellSize);
+            for (int i = 0; i < plan.Members.Count; i++)
+            {
+                RotatePivotGroupMemberPlaybackPlan member = plan.Members[i];
+                Transform view = GetOrCreateEntityView(member.EntityId);
+                activeAnimations.Remove(member.EntityId);
+                runtime.AddMember(member, view, entityRoot);
+            }
+
+            playbackScheduler.StartGroupTrack(runtime);
+        }
+
+        private void StartTranslateGroup(TranslateGroupPlaybackPlan plan)
+        {
+            if (plan.Members.Count == 0 || string.IsNullOrEmpty(plan.GroupId))
+            {
+                return;
+            }
+
+            for (int i = 0; i < plan.Members.Count; i++)
+            {
+                playbackScheduler.InterruptTrackContaining(plan.Members[i].EntityId, entityRoot, DestroyImmediateOrDeferred);
+            }
+
+            GameObject rootObject = new GameObject("TranslateGroup_" + plan.GroupId);
+            Transform root = rootObject.transform;
+            root.SetParent(rotateGroupRoot, false);
+            root.localPosition = Vector3.zero;
+            root.localRotation = Quaternion.identity;
+            root.localScale = Vector3.one;
+
+            var runtime = new RigidBodyGroupTrack(plan, root, cellSize);
+            for (int i = 0; i < plan.Members.Count; i++)
+            {
+                RotatePivotGroupMemberPlaybackPlan member = plan.Members[i];
+                Transform view = GetOrCreateEntityView(member.EntityId);
+                activeAnimations.Remove(member.EntityId);
+                runtime.AddMember(member, view, entityRoot);
+            }
+
+            playbackScheduler.StartGroupTrack(runtime);
+        }
+
+        private void AdvanceRotateGroups(float deltaTime)
+        {
+            removedPortConnectionKeys.Clear();
+            foreach (KeyValuePair<string, RigidBodyGroupTrack> pair in playbackScheduler.GroupTracks)
+            {
+                pair.Value.Advance(deltaTime);
+                if (!pair.Value.Completed)
                 {
                     continue;
                 }
 
-                group.Include(animation.PreviewElapsed(deltaTime), animation.DurationSeconds, animation.Easing);
+                pair.Value.Restore(entityRoot);
+                DestroyImmediateOrDeferred(pair.Value.Root.gameObject);
+                removedPortConnectionKeys.Add(pair.Key);
             }
 
-            foreach (KeyValuePair<string, SharedRotateAnimationGroup> pair in rotateAnimationGroups)
+            for (int i = 0; i < removedPortConnectionKeys.Count; i++)
             {
-                pair.Value.CommitFrame();
+                string groupId = removedPortConnectionKeys[i];
+                playbackScheduler.RemoveCompletedTrack(groupId);
             }
-        }
-
-        private static string RotateGroupKey(ClientAnimationEvent animationEvent)
-        {
-            return animationEvent.ServerTick + "|" + animationEvent.MotionKind + "|" + animationEvent.PivotEntityId + "|" + animationEvent.PivotCoord.x + "," + animationEvent.PivotCoord.y + "|" + animationEvent.RotateDirection + "|" + animationEvent.Bounce;
         }
 
         private void ConfigurePortConnections(IReadOnlyList<EntitySnapshot> snapshots)
@@ -397,6 +508,13 @@ namespace DG.Map
                 line.startColor = portLineColor;
                 line.endColor = portLineColor;
                 line.sortingOrder = 13;
+                if (playbackScheduler.HasConnectionOwner(connection.Key))
+                {
+                    line.SetPosition(0, ResolveConnectionPosition(connection.FromEntityId, connection.FromCoord));
+                    line.SetPosition(1, ResolveConnectionPosition(connection.ToEntityId, connection.ToCoord));
+                    continue;
+                }
+
                 line.SetPosition(0, ResolveConnectionPosition(connection.FromEntityId, connection.FromCoord));
                 line.SetPosition(1, ResolveConnectionPosition(connection.ToEntityId, connection.ToCoord));
             }
@@ -441,7 +559,7 @@ namespace DG.Map
         {
             if (EntityViews.TryGetValue(entityId, out Transform view) && view != null)
             {
-                Vector3 position = view.localPosition;
+                Vector3 position = transform.InverseTransformPoint(view.position);
                 position.z = -0.04f;
                 return position;
             }
@@ -540,40 +658,30 @@ namespace DG.Map
         {
             private readonly ClientAnimationEvent animationEvent;
             private readonly Vector3 startScale;
-            private readonly float cellSize;
-            private readonly SharedRotateAnimationGroup rotateGroup;
             private float elapsed;
 
-            private ActiveEntityAnimation(ClientAnimationEvent animationEvent, Vector3 startPosition, Vector3 endPosition, Vector3 startScale, float cellSize, SharedRotateAnimationGroup rotateGroup, string rotateGroupKey)
+            private ActiveEntityAnimation(ClientAnimationEvent animationEvent, Vector3 startPosition, Vector3 endPosition, Vector3 startScale, float cellSize)
             {
                 this.animationEvent = animationEvent;
                 StartPosition = startPosition;
                 EndPosition = endPosition;
                 this.startScale = startScale;
-                this.cellSize = cellSize;
-                this.rotateGroup = rotateGroup;
-                RotateGroupKey = rotateGroupKey;
                 elapsed = 0f;
             }
 
             public Vector3 StartPosition { get; }
             public Quaternion Rotation { get; private set; } = Quaternion.identity;
-            public string RotateGroupKey { get; }
             public float DurationSeconds => animationEvent.Style.DurationSeconds;
-            public ClientAnimationEasing Easing => animationEvent.Style.Easing;
             private Vector3 EndPosition { get; }
 
             public static ActiveEntityAnimation Create(ClientAnimationEvent animationEvent, Vector3 startPosition, Vector3 endPosition, float cellSize)
-                => Create(animationEvent, startPosition, endPosition, cellSize, null, string.Empty);
-
-            public static ActiveEntityAnimation Create(ClientAnimationEvent animationEvent, Vector3 startPosition, Vector3 endPosition, float cellSize, SharedRotateAnimationGroup rotateGroup, string rotateGroupKey)
             {
                 if (animationEvent.IsImpulse)
                 {
                     endPosition = startPosition + DirectionOffset(animationEvent.ImpulseDirection, cellSize * 0.32f);
                 }
 
-                return new ActiveEntityAnimation(animationEvent, startPosition, animationEvent.Style.Instant ? endPosition : endPosition, Vector3.one * (cellSize * 0.8f), cellSize, rotateGroup, rotateGroupKey);
+                return new ActiveEntityAnimation(animationEvent, startPosition, animationEvent.Style.Instant ? endPosition : endPosition, Vector3.one * (cellSize * 0.8f), cellSize);
             }
 
             public bool Advance(float deltaTime, Vector3 finalPosition, Vector3 finalScale, Color baseColor, out Vector3 position, out Vector3 scale, out Color color)
@@ -590,17 +698,8 @@ namespace DG.Map
                 elapsed += Mathf.Max(0f, deltaTime);
                 float normalized = Mathf.Clamp01(elapsed / animationEvent.Style.DurationSeconds);
                 float eased = Ease(normalized, animationEvent.Style.Easing);
-                if (animationEvent.IsRotatePivot)
-                {
-                    float rotationProgress = rotateGroup == null ? eased : rotateGroup.FrameProgress;
-                    position = EvaluateRotatePivot(animationEvent, rotationProgress, finalPosition, out Quaternion rotation);
-                    Rotation = rotation;
-                }
-                else
-                {
-                    position = animationEvent.IsImpulse ? Vector3.Lerp(StartPosition, EndPosition, Mathf.Sin(eased * Mathf.PI)) : Vector3.Lerp(StartPosition, EndPosition, eased);
-                    Rotation = Quaternion.identity;
-                }
+                position = animationEvent.IsImpulse ? Vector3.Lerp(StartPosition, EndPosition, Mathf.Sin(eased * Mathf.PI)) : Vector3.Lerp(StartPosition, EndPosition, eased);
+                Rotation = Quaternion.identity;
 
                 float pulse = Mathf.Sin(normalized * Mathf.PI);
                 float feedback = Mathf.Lerp(1f, animationEvent.Style.ScaleFeedback, pulse);
@@ -618,47 +717,9 @@ namespace DG.Map
                 return true;
             }
 
-            public float PreviewElapsed(float deltaTime)
+            public DirectionMask PortLineMask(EntitySnapshot snapshot)
             {
-                if (animationEvent.Style.Instant || animationEvent.Style.DurationSeconds <= 0f)
-                {
-                    return animationEvent.Style.DurationSeconds;
-                }
-
-                return elapsed + Mathf.Max(0f, deltaTime);
-            }
-
-            private Vector3 EvaluateRotatePivot(ClientAnimationEvent animationEvent, float eased, Vector3 finalPosition, out Quaternion rotation)
-            {
-                if (animationEvent.MotionKind == ClientAnimationMotionKind.RotatePivotBounce)
-                {
-                    float outAndBack = Mathf.Sin(eased * Mathf.PI);
-                    return RotateAroundPivot(animationEvent, outAndBack, out rotation);
-                }
-
-                Vector3 rotated = RotateAroundPivot(animationEvent, eased, out rotation);
-                if (animationEvent.FromCoord == animationEvent.ToCoord)
-                {
-                    return finalPosition;
-                }
-
-                return rotated;
-            }
-
-            private Vector3 RotateAroundPivot(ClientAnimationEvent animationEvent, float normalized, out Quaternion rotation)
-            {
-                Vector3 pivot = ToWorldPosition(animationEvent.PivotCoord, -0.1f, cellSize);
-                Vector3 offset = StartPosition - pivot;
-                float sign = animationEvent.RotateDirection == RotatePivotDirection.Clockwise ? -1f : 1f;
-                float angle = sign * normalized * 90f;
-                float radians = angle * Mathf.Deg2Rad;
-                float sin = Mathf.Sin(radians);
-                float cos = Mathf.Cos(radians);
-                Vector3 rotatedOffset = new Vector3(offset.x * cos - offset.y * sin, offset.x * sin + offset.y * cos, offset.z);
-                Vector3 result = pivot + rotatedOffset;
-                result.z = -0.1f;
-                rotation = Quaternion.Euler(0f, 0f, angle);
-                return result;
+                return PortDebugVisualizationUtility.GetWorldPorts(snapshot);
             }
 
             private static float Ease(float value, ClientAnimationEasing easing)
@@ -689,44 +750,340 @@ namespace DG.Map
             }
         }
 
-        private sealed class SharedRotateAnimationGroup
+        private sealed class PresentationPlaybackScheduler
         {
-            private readonly RotatePivotDirection rotateDirection;
-            public SharedRotateAnimationGroup(RotatePivotDirection rotateDirection)
-            {
-                this.rotateDirection = rotateDirection;
-            }
+            private readonly Dictionary<string, RigidBodyGroupTrack> groupTracks = new();
+            private readonly Dictionary<long, string> entityOwners = new();
+            private readonly Dictionary<string, string> connectionOwners = new();
 
-            public float FrameProgress { get; private set; }
+            public IReadOnlyDictionary<string, RigidBodyGroupTrack> GroupTracks => groupTracks;
 
-            public void ResetFrame()
+            public void StartGroupTrack(RigidBodyGroupTrack track)
             {
-                FrameProgress = 0f;
-            }
-
-            public void Include(float entityElapsed, float duration, ClientAnimationEasing easing)
-            {
-                FrameProgress = Mathf.Max(FrameProgress, Evaluate(entityElapsed, duration, easing));
-            }
-
-            public void CommitFrame()
-            {
-                FrameProgress = rotateDirection == RotatePivotDirection.Clockwise || rotateDirection == RotatePivotDirection.CounterClockwise ? FrameProgress : 0f;
-            }
-
-            private float Evaluate(float entityElapsed, float duration, ClientAnimationEasing easing)
-            {
-                float eased;
-                if (duration <= 0f)
+                if (track == null || string.IsNullOrEmpty(track.TrackId))
                 {
-                    eased = 1f;
-                }
-                else
-                {
-                    eased = Ease(Mathf.Clamp01(entityElapsed / duration), easing);
+                    return;
                 }
 
-                return eased;
+                groupTracks[track.TrackId] = track;
+                for (int i = 0; i < track.MemberEntityIds.Count; i++)
+                {
+                    entityOwners[track.MemberEntityIds[i]] = track.TrackId;
+                }
+
+                for (int first = 0; first < track.MemberEntityIds.Count; first++)
+                {
+                    for (int second = first + 1; second < track.MemberEntityIds.Count; second++)
+                    {
+                        connectionOwners[ConnectionKey(track.MemberEntityIds[first], track.MemberEntityIds[second])] = track.TrackId;
+                    }
+                }
+            }
+
+            public bool HasEntityOwner(long entityId)
+            {
+                return entityOwners.ContainsKey(entityId);
+            }
+
+            public bool HasConnectionOwner(string connectionKey)
+            {
+                return connectionOwners.ContainsKey(connectionKey);
+            }
+
+            public bool TryGetTrackIdByEntity(long entityId, out string trackId)
+            {
+                return entityOwners.TryGetValue(entityId, out trackId);
+            }
+
+            public bool TryGetGroupTrackByEntity(long entityId, out RigidBodyGroupTrack track)
+            {
+                track = null;
+                return entityOwners.TryGetValue(entityId, out string trackId) && groupTracks.TryGetValue(trackId, out track);
+            }
+
+            public void InterruptTrackContaining(long entityId, Transform entityRoot, System.Action<Object> destroy)
+            {
+                if (entityOwners.TryGetValue(entityId, out string trackId))
+                {
+                    InterruptTrack(trackId, entityRoot, destroy);
+                }
+            }
+
+            public void InterruptTrack(string trackId, Transform entityRoot, System.Action<Object> destroy)
+            {
+                if (string.IsNullOrEmpty(trackId) || !groupTracks.TryGetValue(trackId, out RigidBodyGroupTrack track))
+                {
+                    return;
+                }
+
+                track.Interrupt();
+                track.Restore(entityRoot);
+                if (track.Root != null)
+                {
+                    destroy?.Invoke(track.Root.gameObject);
+                }
+
+                RemoveCompletedTrack(trackId);
+            }
+
+            public void RemoveCompletedTrack(string trackId)
+            {
+                if (string.IsNullOrEmpty(trackId))
+                {
+                    return;
+                }
+
+                groupTracks.Remove(trackId);
+                foreach (long entityId in new List<long>(entityOwners.Keys))
+                {
+                    if (entityOwners[entityId] == trackId)
+                    {
+                        entityOwners.Remove(entityId);
+                    }
+                }
+
+                foreach (string connectionKey in new List<string>(connectionOwners.Keys))
+                {
+                    if (connectionOwners[connectionKey] == trackId)
+                    {
+                        connectionOwners.Remove(connectionKey);
+                    }
+                }
+            }
+
+            public void Clear()
+            {
+                groupTracks.Clear();
+                entityOwners.Clear();
+                connectionOwners.Clear();
+            }
+
+            private static string ConnectionKey(long first, long second)
+            {
+                return first <= second ? first + ":" + second : second + ":" + first;
+            }
+        }
+
+        private sealed class RigidBodyGroupTrack
+        {
+            private readonly RotatePivotGroupPlaybackPlan plan;
+            private readonly TranslateGroupPlaybackPlan translatePlan;
+            private readonly RigidBodyGroupMotionKind motionKind;
+            private readonly float cellSize;
+            private readonly List<MemberRuntime> members = new();
+            private float elapsed;
+
+            public RigidBodyGroupTrack(RotatePivotGroupPlaybackPlan plan, Transform root, float cellSize)
+            {
+                this.plan = plan;
+                motionKind = RigidBodyGroupMotionKind.RotateAroundPivot;
+                Root = root;
+                this.cellSize = cellSize;
+            }
+
+            public RigidBodyGroupTrack(TranslateGroupPlaybackPlan plan, Transform root, float cellSize)
+            {
+                translatePlan = plan;
+                motionKind = RigidBodyGroupMotionKind.Translate;
+                Root = root;
+                this.cellSize = cellSize;
+            }
+
+            public string TrackId => motionKind == RigidBodyGroupMotionKind.Translate ? translatePlan.GroupId : plan.GroupId;
+            public Transform Root { get; }
+            public bool Completed { get; private set; }
+            public bool Interrupted { get; private set; }
+            public float DurationSeconds => motionKind == RigidBodyGroupMotionKind.Translate ? translatePlan.Style.DurationSeconds : plan.Style.DurationSeconds;
+            public IReadOnlyList<long> MemberEntityIds
+            {
+                get
+                {
+                    var result = new long[members.Count];
+                    for (int i = 0; i < members.Count; i++)
+                    {
+                        result[i] = members[i].Plan.EntityId;
+                    }
+
+                    return result;
+                }
+            }
+
+            public void AddMember(RotatePivotGroupMemberPlaybackPlan member, Transform view, Transform originalParent)
+            {
+                Vector3 worldStart = ToWorldPosition(member.FromCoord, -0.1f, cellSize);
+                view.SetParent(originalParent, false);
+                view.localPosition = worldStart;
+                view.localRotation = Quaternion.identity;
+                view.SetParent(Root, true);
+                members.Add(new MemberRuntime(member, view, originalParent));
+            }
+
+            public void Advance(float deltaTime)
+            {
+                if (Completed || Interrupted)
+                {
+                    return;
+                }
+
+                if (motionKind == RigidBodyGroupMotionKind.RotateAroundPivot && (plan.Style.Instant || plan.Style.DurationSeconds <= 0f) ||
+                    motionKind == RigidBodyGroupMotionKind.Translate && (translatePlan.Style.Instant || translatePlan.Style.DurationSeconds <= 0f))
+                {
+                    ApplyProgress(1f);
+                    Completed = true;
+                    return;
+                }
+
+                elapsed += Mathf.Max(0f, deltaTime);
+                float normalized = Mathf.Clamp01(elapsed / DurationSeconds);
+                ClientAnimationEasing easing = motionKind == RigidBodyGroupMotionKind.Translate ? translatePlan.Style.Easing : plan.Style.Easing;
+                float eased = Ease(normalized, easing);
+                float progress = motionKind == RigidBodyGroupMotionKind.RotateAroundPivot && plan.Bounce ? BounceProgress(eased) : eased;
+                ApplyProgress(progress);
+                if (normalized >= 1f)
+                {
+                    Completed = true;
+                }
+            }
+
+            public void Interrupt()
+            {
+                Interrupted = true;
+                Completed = true;
+            }
+
+            public void SetElapsedForTests(float value)
+            {
+                elapsed = Mathf.Max(0f, value);
+            }
+
+            public void Restore(Transform entityRoot)
+            {
+                for (int i = 0; i < members.Count; i++)
+                {
+                    MemberRuntime member = members[i];
+                    if (member.View == null)
+                    {
+                        continue;
+                    }
+
+                    member.View.SetParent(member.OriginalParent == null ? entityRoot : member.OriginalParent, false);
+                    member.View.localPosition = ToWorldPosition(member.Plan.ToCoord, -0.1f, cellSize);
+                    member.View.localRotation = Quaternion.identity;
+                    member.View.localScale = Vector3.one * (cellSize * 0.8f);
+                }
+            }
+
+            public bool TryGetPortMask(long entityId, out DirectionMask ports)
+            {
+                for (int i = 0; i < members.Count; i++)
+                {
+                    MemberRuntime member = members[i];
+                    if (member.Plan.EntityId == entityId)
+                    {
+                        ports = member.Plan.FromPortLocalPorts.RotateBy(member.Plan.FromDirection);
+                        return true;
+                    }
+                }
+
+                ports = DirectionMask.None;
+                return false;
+            }
+
+            private void ApplyProgress(float progress)
+            {
+                if (motionKind == RigidBodyGroupMotionKind.Translate)
+                {
+                    ApplyTranslate(progress);
+                    return;
+                }
+
+                float angle = Angle(progress);
+                Root.localRotation = Quaternion.Euler(0f, 0f, angle);
+                for (int i = 0; i < members.Count; i++)
+                {
+                    MemberRuntime member = members[i];
+                    if (member.View == null)
+                    {
+                        continue;
+                    }
+
+                    float pulse = Mathf.Sin(Mathf.Clamp01(progress) * Mathf.PI);
+                    float feedback = Mathf.Lerp(1f, plan.Style.ScaleFeedback, pulse);
+                    member.View.localScale = Vector3.one * (cellSize * 0.8f * feedback);
+                }
+            }
+
+            private void ApplyTranslate(float progress)
+            {
+                Root.localRotation = Quaternion.identity;
+                Root.localPosition = Vector3.zero;
+                for (int i = 0; i < members.Count; i++)
+                {
+                    MemberRuntime member = members[i];
+                    if (member.View == null)
+                    {
+                        continue;
+                    }
+
+                    Vector3 from = ToWorldPosition(member.Plan.FromCoord, -0.1f, cellSize);
+                    Vector3 to = ToWorldPosition(member.Plan.ToCoord, -0.1f, cellSize);
+                    member.View.localPosition = member.Plan.FromCoord == member.Plan.ToCoord && translatePlan.Direction != Direction.None
+                        ? Vector3.Lerp(from, from + DirectionOffset(translatePlan.Direction, cellSize * 0.32f), Mathf.Sin(Mathf.Clamp01(progress) * Mathf.PI))
+                        : Vector3.Lerp(from, to, progress);
+                    float pulse = Mathf.Sin(Mathf.Clamp01(progress) * Mathf.PI);
+                    float feedback = Mathf.Lerp(1f, translatePlan.Style.ScaleFeedback, pulse);
+                    member.View.localScale = Vector3.one * (cellSize * 0.8f * feedback);
+                }
+            }
+
+            private static Vector3 DirectionOffset(Direction direction, float distance)
+            {
+                return direction switch
+                {
+                    Direction.Left => new Vector3(-distance, 0f, 0f),
+                    Direction.Right => new Vector3(distance, 0f, 0f),
+                    Direction.Up => new Vector3(0f, distance, 0f),
+                    Direction.Down => new Vector3(0f, -distance, 0f),
+                    _ => Vector3.zero
+                };
+            }
+
+            private float Angle(float progress)
+            {
+                if (plan.RotateDirection != RotatePivotDirection.Clockwise && plan.RotateDirection != RotatePivotDirection.CounterClockwise)
+                {
+                    return 0f;
+                }
+
+                float sign = plan.RotateDirection == RotatePivotDirection.Clockwise ? -1f : 1f;
+                return sign * progress * 90f;
+            }
+
+            private float BounceProgress(float normalized)
+            {
+                float contact = ContactProgress();
+                if (normalized <= contact)
+                {
+                    return contact <= 0f ? 1f : Mathf.Clamp01(normalized / contact);
+                }
+
+                float returnProgress = Mathf.Clamp01((normalized - contact) / Mathf.Max(0.0001f, 1f - contact));
+                return 1f - returnProgress;
+            }
+
+            private float ContactProgress()
+            {
+                if (plan.ContactProgress > 0d && plan.ContactProgress < 1d)
+                {
+                    return (float)plan.ContactProgress;
+                }
+
+                if (plan.ContactTick > plan.StartTick && plan.EndTick > plan.StartTick && plan.ContactTick < plan.EndTick)
+                {
+                    return Mathf.Clamp01((float)(plan.ContactTick - plan.StartTick) / (plan.EndTick - plan.StartTick));
+                }
+
+                return 0.5f;
             }
 
             private static float Ease(float value, ClientAnimationEasing easing)
@@ -737,6 +1094,25 @@ namespace DG.Map
                     ClientAnimationEasing.EaseInOut => value < 0.5f ? 4f * value * value * value : 1f - Mathf.Pow(-2f * value + 2f, 3f) * 0.5f,
                     _ => value
                 };
+            }
+
+            private static Vector3 ToWorldPosition(Vector2Int coord, float z, float cellSize)
+            {
+                return new Vector3((coord.x + 0.5f) * cellSize, (coord.y + 0.5f) * cellSize, z);
+            }
+
+            private readonly struct MemberRuntime
+            {
+                public MemberRuntime(RotatePivotGroupMemberPlaybackPlan plan, Transform view, Transform originalParent)
+                {
+                    Plan = plan;
+                    View = view;
+                    OriginalParent = originalParent;
+                }
+
+                public RotatePivotGroupMemberPlaybackPlan Plan { get; }
+                public Transform View { get; }
+                public Transform OriginalParent { get; }
             }
         }
     }

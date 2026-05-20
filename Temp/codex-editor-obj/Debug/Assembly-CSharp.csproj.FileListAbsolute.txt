@@ -1,0 +1,7 @@
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Assembly-CSharp.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-build\Assembly-CSharp.pdb
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Assembly-CSharp.csproj.AssemblyReference.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Assembly-CSharp.csproj.CoreCompileInputs.cache
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Assembly.44154EF1.Up2Date
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Assembly-CSharp.dll
+D:\Unity_Project_1\DG\Temp\codex-editor-obj\Debug\Assembly-CSharp.pdb

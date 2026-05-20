@@ -2,38 +2,38 @@ using System.Collections.Generic;
 
 namespace DG.GameCore
 {
-public sealed class StateDrivenRuleExecutionResult
+public sealed class BehaviorRuntimeTickResult
 {
-    public StateDrivenRuleExecutionResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons)
-        : this(actionResults, proposalResults, reasons, System.Array.Empty<DeferredAction>(), System.Array.Empty<ActionUnitTransition>())
+    public BehaviorRuntimeTickResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons)
+        : this(actionResults, proposalResults, reasons, System.Array.Empty<DeferredAction>())
     {
     }
 
-    public StateDrivenRuleExecutionResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons, IReadOnlyList<DeferredAction> deferredActions)
-        : this(actionResults, proposalResults, reasons, deferredActions, System.Array.Empty<ActionUnitTransition>())
+    public BehaviorRuntimeTickResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons, IReadOnlyList<DeferredAction> deferredActions)
+        : this(actionResults, proposalResults, reasons, deferredActions, System.Array.Empty<ActionFact>())
     {
     }
 
-    public StateDrivenRuleExecutionResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<ActionUnitTransition> transitions)
-        : this(actionResults, proposalResults, reasons, deferredActions, transitions, System.Array.Empty<WorldDeltaAnimationMetadata>())
+    public BehaviorRuntimeTickResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<ActionFact> actionFacts)
+        : this(actionResults, proposalResults, reasons, deferredActions, actionFacts, System.Array.Empty<ActionBehaviorInstance>())
     {
     }
 
-    public StateDrivenRuleExecutionResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<ActionUnitTransition> transitions, IReadOnlyList<WorldDeltaAnimationMetadata> animationMetadata)
+    public BehaviorRuntimeTickResult(IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<CommitProposalResult> proposalResults, IReadOnlyList<string> reasons, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<ActionFact> actionFacts, IReadOnlyList<ActionBehaviorInstance> behaviorInstances)
     {
         ActionResults = actionResults;
         ProposalResults = proposalResults;
         Reasons = reasons;
         DeferredActions = deferredActions;
-        Transitions = transitions;
-        AnimationMetadata = animationMetadata;
+        ActionFacts = actionFacts;
+        BehaviorInstances = behaviorInstances;
     }
 
     public IReadOnlyDictionary<long, MoveResult> ActionResults { get; }
     public IReadOnlyList<CommitProposalResult> ProposalResults { get; }
     public IReadOnlyList<string> Reasons { get; }
     public IReadOnlyList<DeferredAction> DeferredActions { get; }
-    public IReadOnlyList<ActionUnitTransition> Transitions { get; }
-    public IReadOnlyList<WorldDeltaAnimationMetadata> AnimationMetadata { get; }
+    public IReadOnlyList<ActionFact> ActionFacts { get; }
+    public IReadOnlyList<ActionBehaviorInstance> BehaviorInstances { get; }
 }
 }

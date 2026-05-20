@@ -18,6 +18,8 @@ namespace cfg.gamecore
         Remove = 3,
         SetComponentResult = 4,
         ApplyRuntimeEffect = 5,
+        RemoveRuntimeEffect = 6,
+        SetTag = 7,
     }
 
 } 

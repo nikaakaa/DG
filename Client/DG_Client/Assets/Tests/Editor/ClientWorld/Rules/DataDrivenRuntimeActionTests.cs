@@ -16,13 +16,13 @@ namespace DG.EditorTests
         {
             ActionSpecRegistry registry = ActionSpecRegistry.Default;
 
-            AssertLubanSpec(registry, "player_move", "move", ActionSourceKind.Player, "legacy_target_coord_one_step");
-            AssertLubanSpec(registry, "auto_move", "move", ActionSourceKind.Auto, "legacy_direction_component_cell");
-            AssertLubanSpec(registry, "mechanism_push", "move", ActionSourceKind.Mechanism, "legacy_direction_cell");
-            AssertLubanSpec(registry, "debug_move", "move", ActionSourceKind.Debug, "legacy_target_coord_any");
-            AssertLubanSpec(registry, "debug_spawn", "spawn", ActionSourceKind.Debug, "legacy_target_coord_any");
-            AssertLubanSpec(registry, "debug_remove", "remove", ActionSourceKind.Debug, "legacy_none");
-            AssertLubanSpec(registry, "connected_body_move", "move", ActionSourceKind.Mechanism, "legacy_direction_cell");
+            AssertLubanSpec(registry, "player_move", ActionPrimitive.Move, ActionSourceKind.Player, "legacy_target_coord_one_step", ActionTargetRule.TargetCoordOneStep);
+            AssertLubanSpec(registry, "auto_move", ActionPrimitive.Move, ActionSourceKind.Auto, "legacy_direction_component_cell", ActionTargetRule.DirectionFromComponent);
+            AssertLubanSpec(registry, "mechanism_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, "legacy_direction_cell", ActionTargetRule.DirectionFromRequest);
+            AssertLubanSpec(registry, "debug_move", ActionPrimitive.Move, ActionSourceKind.Debug, "legacy_target_coord_any", ActionTargetRule.TargetCoordAny);
+            AssertLubanSpec(registry, "debug_spawn", ActionPrimitive.Spawn, ActionSourceKind.Debug, "legacy_target_coord_any", ActionTargetRule.TargetCoordAny);
+            AssertLubanSpec(registry, "debug_remove", ActionPrimitive.Remove, ActionSourceKind.Debug, "legacy_none", ActionTargetRule.None);
+            AssertLubanSpec(registry, "connected_body_move", ActionPrimitive.Move, ActionSourceKind.Mechanism, "legacy_direction_cell", ActionTargetRule.DirectionFromRequest);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("player_move").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("player_push").SubjectKind);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").SubjectKind);
@@ -39,17 +39,34 @@ namespace DG.EditorTests
         {
             ActionSpecRegistry registry = LubanActionSpecRegistry.FromDirectory(GameConfigDirectory());
 
-            AssertLubanSpec(registry, "player_move", "move", ActionSourceKind.Player, "legacy_target_coord_one_step");
-            AssertLubanSpec(registry, "auto_move", "move", ActionSourceKind.Auto, "legacy_direction_component_cell");
-            AssertLubanSpec(registry, "mechanism_push", "move", ActionSourceKind.Mechanism, "legacy_direction_cell");
-            AssertLubanSpec(registry, "debug_move", "move", ActionSourceKind.Debug, "legacy_target_coord_any");
-            AssertLubanSpec(registry, "debug_spawn", "spawn", ActionSourceKind.Debug, "legacy_target_coord_any");
-            AssertLubanSpec(registry, "debug_remove", "remove", ActionSourceKind.Debug, "legacy_none");
+            AssertLubanSpec(registry, "player_move", ActionPrimitive.Move, ActionSourceKind.Player, "legacy_target_coord_one_step", ActionTargetRule.TargetCoordOneStep);
+            AssertLubanSpec(registry, "auto_move", ActionPrimitive.Move, ActionSourceKind.Auto, "legacy_direction_component_cell", ActionTargetRule.DirectionFromComponent);
+            AssertLubanSpec(registry, "mechanism_push", ActionPrimitive.Move, ActionSourceKind.Mechanism, "legacy_direction_cell", ActionTargetRule.DirectionFromRequest);
+            AssertLubanSpec(registry, "debug_move", ActionPrimitive.Move, ActionSourceKind.Debug, "legacy_target_coord_any", ActionTargetRule.TargetCoordAny);
+            AssertLubanSpec(registry, "debug_spawn", ActionPrimitive.Spawn, ActionSourceKind.Debug, "legacy_target_coord_any", ActionTargetRule.TargetCoordAny);
+            AssertLubanSpec(registry, "debug_remove", ActionPrimitive.Remove, ActionSourceKind.Debug, "legacy_none", ActionTargetRule.None);
             Assert.AreEqual(new ActionSpecId("player_push"), registry.Get("player_move").Handoff.SpecId);
             Assert.AreEqual(new ActionSpecId("mechanism_push"), registry.Get("mechanism_push").Handoff.SpecId);
             Assert.AreEqual(ActionSubjectKind.ConnectedBodyIfAny, registry.Get("mechanism_push").Handoff.SubjectKind);
             Assert.AreEqual(3, registry.Get("mechanism_push").DefaultCostTicks);
             Assert.AreEqual(3, registry.GetBlockedResultPolicy("immune_push_or_block").Branches.Count);
+        }
+
+        [Test]
+        public void FormalLubanActionSpecSchema_UsesTargetingIdInsteadOfTargetRule()
+        {
+            string root = RepositoryRoot();
+            string schema = File.ReadAllText(Path.Combine(root, "Config", "Luban", "Defines", "gamecore.xml"));
+            string generated = File.ReadAllText(Path.Combine(root, "Config", "Luban", "Generated", "json", "gamecore_tbactionspec.json"));
+            string streaming = File.ReadAllText(Path.Combine(Application.streamingAssetsPath, "GameConfig", "gamecore_tbactionspec.json"));
+
+            Assert.IsFalse(schema.Contains("ActionTargetRule"));
+            Assert.IsFalse(schema.Contains("target_rule"));
+            Assert.IsTrue(schema.Contains("targeting_id"));
+            Assert.IsFalse(generated.Contains("\"target_rule\""));
+            Assert.IsFalse(streaming.Contains("\"target_rule\""));
+            Assert.IsTrue(generated.Contains("\"targeting_id\""));
+            Assert.IsTrue(streaming.Contains("\"targeting_id\""));
         }
 
         [Test]
@@ -60,7 +77,24 @@ namespace DG.EditorTests
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 10, Direction.Right, 20, 0);
 
             Assert.AreEqual(3, action.CostTicks);
-            Assert.AreEqual(23, action.ReadyTick);
+            Assert.AreEqual(20, action.ReadyTick);
+        }
+
+        [Test]
+        public void WorldActionQueue_DoesNotApplyCostTicksAsReadyDelay()
+        {
+            var queue = new WorldActionQueue();
+
+            WorldAction auto = queue.EnqueueAutoMove(1, 20, 3);
+            WorldAction push = queue.EnqueueConfiguredMove("mechanism_push", 2, Direction.Right, 20, 3);
+
+            IReadOnlyList<WorldAction> ready = queue.DrainReady(20);
+
+            Assert.AreEqual(2, ready.Count);
+            Assert.AreEqual(20, auto.ReadyTick);
+            Assert.AreEqual(3, auto.CostTicks);
+            Assert.AreEqual(20, push.ReadyTick);
+            Assert.AreEqual(3, push.CostTicks);
         }
 
         [Test]
@@ -120,7 +154,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("configured_wind_push", 100, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.IsTrue(world.TryGetEntity(100, out GameEntity entity));
@@ -277,7 +312,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(110, new GridCoord(1, 0), 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.IsTrue(result.Reasons.Contains("bounded/deferred-output"));
@@ -557,11 +593,12 @@ namespace DG.EditorTests
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9122, new GridCoord(2, 0))));
             var registry = FrontMoveRegistry();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world,
-                new[] { new WorldAction(1, WorldActionPriority.Mechanism, "front_move_all", 9120, null, Direction.Right, 0, 0, 0, 1) },
-                1);
+            var queue = new WorldActionQueue(registry);
+            WorldAction action = queue.EnqueueConfiguredMove("front_move_all", 9120, Direction.Right, 0, 1);
+            var system = new BehaviorRuntime(registry);
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(1), action.ActionId);
 
-            Assert.IsTrue(result.ActionResults[1].Success);
+            Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 9120, new GridCoord(0, 0));
             AssertPosition(world, 9121, new GridCoord(2, 0));
             AssertPosition(world, 9122, new GridCoord(3, 0));
@@ -575,11 +612,12 @@ namespace DG.EditorTests
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(9126, new GridCoord(1, 0))));
             var registry = FrontMoveRegistry();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world,
-                new[] { new WorldAction(1, WorldActionPriority.Mechanism, "front_move_all", 9125, null, Direction.Right, 0, 0, 0, 1) },
-                1);
+            var queue = new WorldActionQueue(registry);
+            WorldAction action = queue.EnqueueConfiguredMove("front_move_all", 9125, Direction.Right, 0, 1);
+            var system = new BehaviorRuntime(registry);
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(1), action.ActionId);
 
-            Assert.IsTrue(result.ActionResults[1].Success);
+            Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 9125, new GridCoord(0, 0));
             AssertPosition(world, 9126, new GridCoord(2, 0));
         }
@@ -594,7 +632,7 @@ namespace DG.EditorTests
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(9133, new GridCoord(3, 0))));
             var registry = FrontMoveRegistry();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world,
+            BehaviorRuntimeTickResult result = new BehaviorRuntime(registry).Tick(world,
                 new[] { new WorldAction(1, WorldActionPriority.Mechanism, "front_move_all", 9130, null, Direction.Right, 0, 0, 0, 1) },
                 1);
 
@@ -779,7 +817,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueAutoMove(332, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsTrue(result.ActionResults.TryGetValue(action.ActionId, out MoveResult moveResult));
             Assert.IsFalse(moveResult.Success);
@@ -804,11 +843,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueAutoMove(334, world.ServerTick - 1, 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
-            world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            AdvanceWorldTo(world, first.DeferredActions[0].ReadyTick);
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -831,11 +870,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueAutoMove(336, world.ServerTick - 1, 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -858,7 +897,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(340, new GridCoord(1, 0), 20);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.IsTrue(result.Reasons.Contains("bounded/deferred-output"));
@@ -877,13 +917,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(360, new GridCoord(1, 0), 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
@@ -906,17 +946,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(370, new GridCoord(1, 0), 2);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -937,7 +977,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 410, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 410, new GridCoord(1, 0));
@@ -955,7 +996,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("configured_wind_push", 420, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 420, new GridCoord(0, 0));
@@ -1003,13 +1045,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(440, new GridCoord(1, 0), 5);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -1032,11 +1074,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(4410, new GridCoord(1, 0), 6);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -1044,6 +1086,33 @@ namespace DG.EditorTests
             AssertPosition(world, 4410, new GridCoord(0, 0));
             AssertPosition(world, 4411, new GridCoord(2, 0));
             AssertPosition(world, 4412, new GridCoord(3, 0));
+        }
+
+        [Test]
+        public void PushablePlayerEntry_EmitsSourcePushFeedbackWhenSourceDoesNotMove()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(44100, 44100, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(44101, 44101, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(44102, new GridCoord(2, 0), Direction.Right)));
+            Assert.IsTrue(world.TryGetEntity(44101, out GameEntity pushedPlayer));
+            world.SetComponent(pushedPlayer, new PushableComponent());
+            world.SetComponent(pushedPlayer, new PortConnectorComponent(DirectionMask.Right));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueuePlayerMove(44100, new GridCoord(1, 0), 6);
+            var system = new BehaviorRuntime();
+
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+
+            ActionFact fact = first.ActionFacts.Single(item =>
+                item.SourceActionId == action.ActionId &&
+                item.ProjectionFactType == PresentationFactType.EntityPushed &&
+                item.SubjectEntityIds.SequenceEqual(new[] { 44100L }));
+            Assert.AreEqual(new GridCoord(0, 0), fact.From);
+            Assert.AreEqual(new GridCoord(0, 0), fact.To);
+            Assert.AreEqual(Direction.Right, fact.Direction);
+            Assert.AreEqual(ActionFactType.EntityPushed, fact.FactType);
         }
 
         [Test]
@@ -1060,13 +1129,13 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(445, new GridCoord(1, 0), 6);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(0, 0), first.ActionResults[action.ActionId].FinalCoord);
@@ -1142,7 +1211,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 530, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            BehaviorRuntimeTickResult first = new BehaviorRuntime().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1165,7 +1234,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 535, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            BehaviorRuntimeTickResult result = new BehaviorRuntime().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
             Assert.AreEqual(MoveErrorCode.Immune, result.ActionResults[action.ActionId].ErrorCode);
@@ -1198,7 +1267,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue(registry);
             WorldAction action = queue.EnqueueConfiguredMove("branch_order_move", 537, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(registry).Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            BehaviorRuntimeTickResult result = new BehaviorRuntime(registry).Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
             Assert.AreEqual("first", result.ActionResults[action.ActionId].Reason);
@@ -1252,21 +1321,21 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 570, Direction.Right, world.ServerTick - 1, 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            BehaviorRuntimeTickResult first = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(2, contacts.Count);
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
             Assert.AreEqual(1, first.DeferredActions.Count);
-            world.NextTick();
+            AdvanceWorldTo(world, first.DeferredActions[0].ReadyTick);
             for (int i = 0; i < first.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(first.DeferredActions[i]);
             }
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             AssertPosition(world, 570, new GridCoord(0, 0));
             AssertPosition(world, 571, new GridCoord(0, 1));
             AssertPosition(world, 572, new GridCoord(2, 0));
@@ -1300,19 +1369,19 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 580, Direction.Up, world.ServerTick - 1, 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            BehaviorRuntimeTickResult first = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(2, contacts.Count);
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
-            world.NextTick();
+            AdvanceWorldTo(world, first.DeferredActions[0].ReadyTick);
             for (int i = 0; i < first.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(first.DeferredActions[i]);
             }
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             AssertPosition(world, 580, new GridCoord(0, 0));
             AssertPosition(world, 581, new GridCoord(1, 0));
@@ -1339,15 +1408,15 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(610, new GridCoord(1, 0), 33);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(new GridCoord(1, -1), first.ActionResults[action.ActionId].FinalCoord);
@@ -1384,12 +1453,12 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(630, new GridCoord(1, 0), 34);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
             var reasons = new List<string>();
 
             for (int i = 0; i < 8; i++)
             {
-                StateDrivenRuleExecutionResult result = i == 0
+                BehaviorRuntimeTickResult result = i == 0
                     ? TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick))
                     : TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
                 reasons.AddRange(result.Reasons);
@@ -1424,13 +1493,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 540, Direction.Right, world.ServerTick - 1, 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
-            world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
-            world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            AdvanceWorldTo(world, first.DeferredActions[0].ReadyTick);
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             AssertPosition(world, 540, new GridCoord(0, 0));
@@ -1454,15 +1521,15 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 550, Direction.Right, world.ServerTick - 1, 1);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
-            world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            AdvanceWorldTo(world, first.DeferredActions[0].ReadyTick);
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(second.ActionResults.Values.Any(result => !result.Success));
-            AssertPosition(world, 552, new GridCoord(2, 0));
+            AssertPosition(world, 552, new GridCoord(1, 0));
             AssertPosition(world, 553, new GridCoord(1, 1));
             AssertPosition(world, 550, new GridCoord(0, 0));
             AssertPosition(world, 551, new GridCoord(0, 1));
@@ -1483,7 +1550,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 560, Direction.Right, world.ServerTick - 1, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 560, new GridCoord(0, 0));
@@ -1505,7 +1573,7 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(450, new GridCoord(1, 0), 6);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            BehaviorRuntimeTickResult result = new BehaviorRuntime().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.IsFalse(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 450, new GridCoord(0, 0));
@@ -1543,11 +1611,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(470, new GridCoord(1, 0), 7);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1569,11 +1637,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(480, new GridCoord(1, 0), 8);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1595,7 +1663,8 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(430, new GridCoord(1, 0), 9);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick), action.ActionId);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             AssertPosition(world, 430, new GridCoord(1, 0));
@@ -1612,11 +1681,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(380, new GridCoord(1, 0), 3);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1635,17 +1704,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(390, new GridCoord(1, 0), 4);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1670,17 +1739,17 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(490, new GridCoord(1, 0), 9);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult third = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fourth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult fifth = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1693,6 +1762,76 @@ namespace DG.EditorTests
         }
 
         [Test]
+        public void DeferredConnectedBodyPush_EmitsBodyMovedFactForEntireBody()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(4900, 4900, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(4901, 4901, new GridCoord(1, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(4902, new GridCoord(2, 0), Direction.Right)));
+            Assert.IsTrue(world.TryGetEntity(4901, out GameEntity pushedPlayer));
+            world.SetComponent(pushedPlayer, new PushableComponent());
+            SetPorts(world, 4901, DirectionMask.Right);
+            SetPorts(world, 4902, DirectionMask.Left);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            queue.EnqueuePlayerMove(4900, new GridCoord(1, 0), 9);
+            var system = new BehaviorRuntime();
+
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            world.NextTick();
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+
+            Assert.AreEqual(1, first.DeferredActions.Count);
+            CollectionAssert.AreEquivalent(new[] { 4901L, 4902L }, first.DeferredActions[0].SubjectEntityIds.ToArray());
+            ActionFact bodyFact = second.ActionFacts.Single(item => item.ProjectionFactType == PresentationFactType.BodyMoved);
+            CollectionAssert.AreEquivalent(new[] { 4901L, 4902L }, bodyFact.SubjectEntityIds.ToArray());
+            CollectionAssert.AreEquivalent(new[] { 4901L, 4902L }, bodyFact.Members.Select(member => member.EntityId).ToArray());
+            Assert.IsFalse(second.ActionFacts.Any(item => item.ProjectionFactType == PresentationFactType.EntityPushed && item.SubjectEntityIds.SequenceEqual(new[] { 4901L })));
+            AssertPosition(world, 4901, new GridCoord(2, 0));
+            AssertPosition(world, 4902, new GridCoord(3, 0));
+        }
+
+        [Test]
+        public void IntermediateConnectedBodyPush_EmitsGroupFeedbackWhenBodyDoesNotMove()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(4910, 4910, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(4911, new GridCoord(1, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(4912, new GridCoord(2, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PushableBlockerSpawn(4913, new GridCoord(3, 0))));
+            SetPorts(world, 4911, DirectionMask.Right);
+            SetPorts(world, 4912, DirectionMask.Left);
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            queue.EnqueuePlayerMove(4910, new GridCoord(1, 0), 10);
+            var system = new BehaviorRuntime();
+
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            AdvanceWorldTo(world, first.DeferredActions[0].ReadyTick);
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+
+            ActionFact bodyFact = second.ActionFacts.Single(item => item.ProjectionFactType == PresentationFactType.BodyMoved);
+            CollectionAssert.AreEquivalent(new[] { 4911L, 4912L }, bodyFact.SubjectEntityIds.ToArray());
+            CollectionAssert.AreEquivalent(new[] { 4911L, 4912L }, bodyFact.Members.Select(member => member.EntityId).ToArray());
+            Assert.IsTrue(bodyFact.Members.All(member => member.From.Equals(member.To)));
+            AssertPosition(world, 4911, new GridCoord(1, 0));
+            AssertPosition(world, 4912, new GridCoord(2, 0));
+            BehaviorRuntimeTickResult tailMove = default;
+            for (int i = 0; i < 4 && CurrentPosition(world, 4913) != new GridCoord(4, 0); i++)
+            {
+                world.NextTick();
+                tailMove = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            }
+
+            Assert.IsTrue(tailMove.ActionFacts.Any(item =>
+                item.ProjectionFactType == PresentationFactType.EntityPushed &&
+                item.SubjectEntityIds.SequenceEqual(new[] { 4913L }) &&
+                item.From.Equals(new GridCoord(3, 0)) &&
+                item.To.Equals(new GridCoord(4, 0))));
+            AssertPosition(world, 4913, new GridCoord(4, 0));
+        }
+
+        [Test]
         public void PushBlockedPath_DoesNotCreatePendingChildHandoff()
         {
             var world = new GameWorld();
@@ -1701,9 +1840,9 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(720, new GridCoord(1, 0), 41);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1721,11 +1860,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(730, new GridCoord(1, 0), 42);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
@@ -1756,7 +1895,7 @@ namespace DG.EditorTests
                 ActionSpecRegistry.Default.GetBlockedResultPolicy("immune_push_or_block")
             });
 
-            StateDrivenRuleExecutionResult first = new StateDrivenRuleExecutionSystem(registry).Tick(world, new[]
+            BehaviorRuntimeTickResult first = new BehaviorRuntime(registry).Tick(world, new[]
             {
                 new WorldAction(1, WorldActionPriority.Mechanism, "policy_a", 740, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1),
                 new WorldAction(2, WorldActionPriority.Mechanism, "policy_b", 741, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1)
@@ -1779,16 +1918,16 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(750, new GridCoord(0, 0), 43);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(1, first.DeferredActions.Count);
             Assert.AreEqual(1, first.DeferredActions[0].CostTicks);
-            Assert.AreEqual(first.DeferredActions[0].CreatedTick + 1, first.DeferredActions[0].ReadyTick);
+            Assert.AreEqual(first.DeferredActions[0].CreatedTick, first.DeferredActions[0].ReadyTick);
             Assert.IsFalse(first.Reasons.Contains("push chain cycle"));
             Assert.IsFalse(second.Reasons.Contains("push chain cycle"));
         }
@@ -1803,11 +1942,11 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(760, new GridCoord(1, 0), 44);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
             world.NextTick();
-            StateDrivenRuleExecutionResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult second = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsTrue(first.ActionResults[action.ActionId].Success);
             Assert.IsTrue(first.Reasons.Contains("bounded/deferred-output"));
@@ -1822,9 +1961,9 @@ namespace DG.EditorTests
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(780, 780, new GridCoord(0, 0))));
             world.NextTick();
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult result = system.Tick(world, new[]
+            BehaviorRuntimeTickResult result = system.Tick(world, new[]
             {
                 new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 780, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1),
                 new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 780, null, Direction.Down, 0, world.ServerTick - 1, world.ServerTick, 1)
@@ -1843,9 +1982,9 @@ namespace DG.EditorTests
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(781, 781, new GridCoord(0, 0))));
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(782, new GridCoord(0, 1))));
             world.NextTick();
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult result = system.Tick(world, new[]
+            BehaviorRuntimeTickResult result = system.Tick(world, new[]
             {
                 new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 781, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1),
                 new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 781, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1)
@@ -1867,9 +2006,9 @@ namespace DG.EditorTests
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(783, 783, new GridCoord(0, 0))));
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(784, new GridCoord(1, 0))));
             world.NextTick();
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult result = system.Tick(world, new[]
+            BehaviorRuntimeTickResult result = system.Tick(world, new[]
             {
                 new WorldAction(1, WorldActionPriority.Mechanism, "mechanism_push", 783, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1),
                 new WorldAction(2, WorldActionPriority.Mechanism, "mechanism_push", 783, null, Direction.Up, 0, world.ServerTick - 1, world.ServerTick, 1)
@@ -1945,9 +2084,9 @@ namespace DG.EditorTests
             world.NextTick();
             var queue = new WorldActionQueue();
             WorldAction action = queue.EnqueuePlayerMove(770, new GridCoord(0, 0), 45);
-            var system = new StateDrivenRuleExecutionSystem();
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            BehaviorRuntimeTickResult first = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.IsFalse(first.ActionResults[action.ActionId].Success);
             Assert.AreEqual(0, first.DeferredActions.Count);
@@ -2082,17 +2221,17 @@ namespace DG.EditorTests
         private static void AssertSpec(ActionSpecRegistry registry, ActionSpecId id, ActionPrimitive primitive, ActionSourceKind source, ActionTargetRule targetRule)
         {
             Assert.IsTrue(registry.TryGet(id, out ActionSpec spec));
-            Assert.AreEqual(new ActionStrategyId(primitive), spec.StrategyId);
+            Assert.AreEqual(primitive, spec.Primitive);
             Assert.AreEqual(source, spec.DefaultSource);
             Assert.AreEqual(targetRule, spec.TargetRule);
         }
 
-        private static void AssertLubanSpec(ActionSpecRegistry registry, ActionSpecId id, ActionStrategyId strategyId, ActionSourceKind source, TargetingSpecId targetingId)
+        private static void AssertLubanSpec(ActionSpecRegistry registry, ActionSpecId id, ActionPrimitive primitive, ActionSourceKind source, TargetingSpecId targetingId, ActionTargetRule inferredTargetRule)
         {
             ActionSpec spec = registry.Get(id);
-            Assert.AreEqual(strategyId, spec.StrategyId);
+            Assert.AreEqual(primitive, spec.Primitive);
             Assert.AreEqual(source, spec.DefaultSource);
-            Assert.AreEqual(ActionTargetRule.None, spec.TargetRule);
+            Assert.AreEqual(inferredTargetRule, spec.TargetRule);
             Assert.AreEqual(targetingId, spec.Targeting.SpecId);
         }
 
@@ -2137,6 +2276,13 @@ namespace DG.EditorTests
             Assert.AreEqual(expected, position.Coord);
         }
 
+        private static GridCoord CurrentPosition(GameWorld world, long entityId)
+        {
+            Assert.IsTrue(world.TryGetEntity(entityId, out GameEntity entity));
+            Assert.IsTrue(world.TryGetComponent(entity, out PositionComponent position));
+            return position.Coord;
+        }
+
         private static void AssertDirection(GameWorld world, long entityId, Direction expected)
         {
             Assert.IsTrue(world.TryGetEntity(entityId, out GameEntity entity));
@@ -2144,15 +2290,52 @@ namespace DG.EditorTests
             Assert.AreEqual(expected, direction.Direction);
         }
 
-        private static StateDrivenRuleExecutionResult TickAndEnqueueDeferred(StateDrivenRuleExecutionSystem system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions)
+        private static BehaviorRuntimeTickResult TickAndEnqueueDeferred(BehaviorRuntime system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions)
         {
-            StateDrivenRuleExecutionResult result = system.Tick(world, actions, world.ServerTick);
+            BehaviorRuntimeTickResult result = system.Tick(world, actions, world.ServerTick);
+            for (int i = 0; i < 8 && system.RunningBehaviorCount != 0 && result.ActionResults.Count == 0; i++)
+            {
+                world.NextTick();
+                result = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            }
+
             for (int i = 0; i < result.DeferredActions.Count; i++)
             {
                 queue.EnqueueDeferred(result.DeferredActions[i]);
             }
 
             return result;
+        }
+
+        private static BehaviorRuntimeTickResult TickAndEnqueueDeferredStartOnly(BehaviorRuntime system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions)
+        {
+            BehaviorRuntimeTickResult result = system.Tick(world, actions, world.ServerTick);
+            for (int i = 0; i < result.DeferredActions.Count; i++)
+            {
+                queue.EnqueueDeferred(result.DeferredActions[i]);
+            }
+
+            return result;
+        }
+
+        private static BehaviorRuntimeTickResult TickUntilResult(BehaviorRuntime system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions, long actionId, int maxTicks = 8)
+        {
+            BehaviorRuntimeTickResult result = TickAndEnqueueDeferred(system, world, queue, actions);
+            for (int i = 0; i < maxTicks && !result.ActionResults.ContainsKey(actionId); i++)
+            {
+                world.NextTick();
+                result = TickAndEnqueueDeferred(system, world, queue, queue.DrainReady(world.ServerTick));
+            }
+
+            return result;
+        }
+
+        private static void AdvanceWorldTo(GameWorld world, long serverTick)
+        {
+            while (world.ServerTick < serverTick)
+            {
+                world.NextTick();
+            }
         }
 
         private static void SetPorts(GameWorld world, long entityId, DirectionMask ports)
@@ -2218,11 +2401,11 @@ namespace DG.EditorTests
                 ActionSpecRegistry.Default.GetBlockedResultPolicy("immune_push_or_block")
             });
 
-            StateDrivenRuleExecutionResult withDerive = new StateDrivenRuleExecutionSystem(registryWithDerive).Tick(world,
+            BehaviorRuntimeTickResult withDerive = new BehaviorRuntime(registryWithDerive).Tick(world,
                 new[] { new WorldAction(1, WorldActionPriority.Mechanism, "test_push_derive", 900, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1) },
                 world.ServerTick);
 
-            StateDrivenRuleExecutionResult withBlock = new StateDrivenRuleExecutionSystem(registryWithBlock).Tick(world,
+            BehaviorRuntimeTickResult withBlock = new BehaviorRuntime(registryWithBlock).Tick(world,
                 new[] { new WorldAction(2, WorldActionPriority.Mechanism, "test_push_block", 900, null, Direction.Right, 0, world.ServerTick - 1, world.ServerTick, 1) },
                 world.ServerTick);
 
@@ -2241,7 +2424,6 @@ namespace DG.EditorTests
                 Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Targeting", "TargetingSystem.cs"),
                 Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Claims", "ActionClaimBuilder.cs"),
                 Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Blocking", "ActionBlockedOutcomeExecutor.cs"),
-                Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Strategies", "ActionStrategyRegistry.cs"),
                 Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Execution", "StateDrivenRules.cs"),
                 Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Commit", "CommitResolver.cs"),
                 Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Commit", "ConflictResolver.cs"),
@@ -2261,15 +2443,21 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void ActionStrategyRegistry_AddsStrategyWithoutExecutionBranch()
+        public void PrimitiveRunnerRegistry_RegistersDispatcherWithoutExecutionBranch()
         {
-            var registry = new ActionStrategyRegistry();
-            var strategy = new TestRuntimeEffectStrategy();
-            registry.Register(strategy);
+            var registry = new PrimitiveRunnerRegistry();
+            var probe = new TestRuntimeEffectRunner();
+            registry.Register(new RunnerId("apply_effect_runner"), context => probe.Process(context));
 
-            var spec = new ActionSpec("test_runtime_effect", ActionPrimitive.ApplyRuntimeEffect, "runtime_effect", ActionSourceKind.Runtime, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None);
+            var definition = new BehaviorDefinition(
+                new BehaviorId("apply_runtime_effect"),
+                new RunnerId("apply_effect_runner"),
+                ActionPrimitive.ApplyRuntimeEffect,
+                BehaviorClaimChannel.Status,
+                BehaviorClaimMode.Shared,
+                1);
 
-            Assert.AreSame(strategy, registry.Get(spec));
+            Assert.IsNotNull(registry.Get(definition));
 
             string root = RepositoryRoot();
             string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Execution", "StateDrivenRules.cs"));
@@ -2278,43 +2466,20 @@ namespace DG.EditorTests
         }
 
         [Test]
-        public void ActionStrategyRegistry_UnknownStrategyIdFailsClearly()
+        public void PrimitiveRunnerRegistry_UnknownRunnerIdFailsClearly()
         {
-            var registry = new ActionStrategyRegistry();
-            registry.Register(new MoveActionStrategy());
-            var spec = new ActionSpec("unknown_strategy", ActionPrimitive.Move, "missing_strategy", ActionSourceKind.Mechanism, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None);
+            var registry = new PrimitiveRunnerRegistry();
+            var definition = new BehaviorDefinition(
+                new BehaviorId("missing_behavior"),
+                new RunnerId("missing_runner"),
+                ActionPrimitive.Move,
+                BehaviorClaimChannel.Movement,
+                BehaviorClaimMode.Exclusive,
+                1);
 
-            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() => registry.Get(spec));
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() => registry.Get(definition));
 
-            StringAssert.Contains("No action strategy registered for id", exception.Message);
-        }
-
-        [Test]
-        public void ActionStrategyAttribute_GeneratesExplicitRegistrationSource()
-        {
-            var descriptors = new[]
-            {
-                new ActionStrategyRegistrationDescriptor("runtime_effect", typeof(TestRuntimeEffectStrategy).FullName)
-            };
-
-            string source = ActionStrategyRegistrationGenerator.GenerateSource("DG.GameCore", "GeneratedActionStrategyRegistration", descriptors);
-
-            Assert.IsTrue(source.Contains("registry.Register(new DG.EditorTests.DataDrivenRuntimeActionTests.TestRuntimeEffectStrategy());"));
-            Assert.IsFalse(source.Contains("GetCustomAttribute"));
-            Assert.IsFalse(source.Contains("GetTypes"));
-            Assert.IsFalse(source.Contains("Activator.CreateInstance"));
-        }
-
-        [Test]
-        public void ActionStrategyRegistrationGenerator_RejectsDuplicateKeys()
-        {
-            var descriptors = new[]
-            {
-                new ActionStrategyRegistrationDescriptor("duplicate", typeof(TestRuntimeEffectStrategy).FullName),
-                new ActionStrategyRegistrationDescriptor("duplicate", typeof(TestSetComponentResultStrategy).FullName)
-            };
-
-            Assert.Throws<InvalidOperationException>(() => ActionStrategyRegistrationGenerator.Validate(descriptors));
+            StringAssert.Contains("No runner registered for id", exception.Message);
         }
 
         [Test]
@@ -2324,13 +2489,14 @@ namespace DG.EditorTests
             {
                 new ActionSpec("test_runtime_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Runtime, WorldActionPriority.Debug, WorldTag.None, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.None, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None)
             }, new[] { BlockedResultPolicyFactory.RejectPolicy("reject") });
-            ActionStrategyRegistry strategies = TestGeneratedActionStrategyRegistration.CreateDefault();
+            PrimitiveRunnerRegistry primitiveRunners = TestGeneratedPrimitiveRunnerRegistration.CreateDefault();
             var world = new GameWorld();
             Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(930, 930, new GridCoord(0, 0))));
             var queue = new WorldActionQueue(actionSpecs);
             WorldAction action = queue.EnqueueConfiguredMove("test_runtime_effect", 930, Direction.None, 0, 1);
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem(actionSpecs, strategies, FallbackGameConfigProvider.Instance).Tick(world, queue.DrainReady(1), 1);
+            var system = new BehaviorRuntime(actionSpecs, primitiveRunners, FallbackGameConfigProvider.Instance);
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(1), action.ActionId);
 
             Assert.IsTrue(result.ActionResults[action.ActionId].Success);
             Assert.AreEqual("test-runtime-effect", result.ActionResults[action.ActionId].Reason);
@@ -2343,98 +2509,347 @@ namespace DG.EditorTests
         {
             string root = RepositoryRoot();
             string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Execution", "StateDrivenRules.cs"));
-            string generated = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Generated", "GeneratedActionStrategyRegistration.cs"));
 
             Assert.IsFalse(execution.Contains("GetCustomAttribute"));
             Assert.IsFalse(execution.Contains("GetTypes"));
             Assert.IsFalse(execution.Contains("Activator.CreateInstance"));
-            Assert.IsFalse(generated.Contains("GetCustomAttribute"));
-            Assert.IsFalse(generated.Contains("GetTypes"));
-            Assert.IsFalse(generated.Contains("Activator.CreateInstance"));
         }
 
         [Test]
-        public void ActionUnitStateMachine_RecordsExplicitLifecycleTransitions()
+        public void OrdinaryStrategyOutput_CanBeReturnedByBehaviorRunnerStep()
         {
-            var stateMachine = new ActionUnitStateMachine();
+            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromWorldAction(new WorldAction(1, WorldActionPriority.Player, "player_move", 361, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1));
+            ActionSpec spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            ActionBehaviorInstance instance = ActionBehaviorInstance.Running(request, spec, new[] { 361L }, BehaviorClaimSet.FromSubjects(new[] { 361L }, BehaviorIncomingPolicy.RejectIncoming), 1, BehaviorStepOutput.Empty, "test");
+            var output = new BehaviorStepOutput(
+                Array.Empty<MovePlan>(),
+                Array.Empty<CommitProposal>(),
+                new[] { request },
+                new Dictionary<long, MoveResult>(),
+                Array.Empty<DeferredAction>(),
+                Array.Empty<ActionFact>(),
+                Array.Empty<string>());
 
-            ActionUnitTransition ready = stateMachine.Advance(1, ActionUnitLifecycleState.Ready);
-            ActionUnitTransition candidate = stateMachine.Advance(1, ActionUnitLifecycleState.CandidateBuilt);
-            ActionUnitTransition accepted = stateMachine.Advance(1, ActionUnitLifecycleState.Accepted);
-            ActionUnitTransition deferred = stateMachine.Advance(1, ActionUnitLifecycleState.DeferredOutputEmitted);
-            ActionUnitTransition completed = stateMachine.Advance(1, ActionUnitLifecycleState.Completed);
+            BehaviorStep step = new BehaviorRunner(new CompletedActionBehaviorStateMachine(output)).Step(instance, new BehaviorRunnerContext(new GameWorld(), 1, BehaviorRunnerPhase.Complete));
 
-            Assert.AreEqual(ActionUnitLifecycleState.Queued, ready.From);
-            Assert.AreEqual(ActionUnitLifecycleState.Ready, ready.To);
-            Assert.AreEqual(ActionUnitLifecycleState.Ready, candidate.From);
-            Assert.AreEqual(ActionUnitLifecycleState.CandidateBuilt, accepted.From);
-            Assert.AreEqual(ActionUnitLifecycleState.Accepted, deferred.From);
-            Assert.AreEqual(ActionUnitLifecycleState.DeferredOutputEmitted, completed.From);
-            Assert.AreEqual(ActionUnitLifecycleState.Completed, stateMachine.Get(1));
+            Assert.AreEqual(BehaviorStepResult.Completed, step.Result);
+            Assert.AreEqual(1, step.Output.RoutedRequests.Count);
+            Assert.AreEqual(request.ActionId, step.Output.RoutedRequests[0].ActionId);
         }
 
         [Test]
-        public void ActionArbitrationResult_RecordsLifecycleTransitionsFromUnifiedStateMachine()
+        public void DebugSpawnRemoveAndRuntimeEffect_CreateRunningBehaviorInstances()
+        {
+            var actionSpecs = new ActionSpecRegistry(ActionSpecRegistry.Default.Specs.Concat(new[]
+            {
+                new ActionSpec("test_apply_effect", ActionPrimitive.ApplyRuntimeEffect, ActionSourceKind.Debug, WorldActionPriority.Debug, WorldTag.SourceDebug, WorldTag.None, WorldTag.None, WorldTag.None, ActionTargetRule.Self, "reject", ActionConflictPolicy.None, ActionInterruptPolicy.None, ActionMergePolicy.None, ActionPlanRule.None, ActionCommitRule.None, ActionSubjectKind.HitEntity, ActionHandoffSpec.None, 1, TargetingSpec.FromLegacyRule(ActionTargetRule.Self), "temporary_pushable")
+            }), ActionSpecRegistry.Default.BlockedResultPolicies.Concat(new[] { BlockedResultPolicyFactory.RejectPolicy("reject") }));
+            PrimitiveRunnerRegistry primitiveRunners = PrimitiveRunnerRegistry.Default;
+            var world = new GameWorld();
+            var system = new BehaviorRuntime(actionSpecs, primitiveRunners, FallbackGameConfigProvider.Instance);
+
+            BehaviorRuntimeTickResult spawnStart = system.Tick(world, new[] { new WorldAction(1, WorldActionPriority.Debug, "debug_spawn", 700, new GridCoord(0, 0), Direction.Right, 0, 0, 0, 1).WithSpawn(DefaultWorldConfig.BlockerConfigId, 0, 1) }, 1);
+            BehaviorRuntimeTickResult spawnEnd = system.Tick(world, Array.Empty<WorldAction>(), 2);
+            BehaviorRuntimeTickResult effectStart = system.Tick(world, new[] { new WorldAction(2, WorldActionPriority.Debug, "test_apply_effect", 700, null, Direction.None, 0, 2, 2, 1) }, 2);
+            BehaviorRuntimeTickResult effectEnd = system.Tick(world, Array.Empty<WorldAction>(), 3);
+            BehaviorRuntimeTickResult removeStart = system.Tick(world, new[] { new WorldAction(3, WorldActionPriority.Debug, "debug_remove", 700, null, Direction.None, 0, 3, 3, 1) }, 3);
+            BehaviorRuntimeTickResult removeEnd = system.Tick(world, Array.Empty<WorldAction>(), 4);
+
+            Assert.IsFalse(spawnStart.ActionResults.ContainsKey(1));
+            Assert.IsFalse(effectStart.ActionResults.ContainsKey(2));
+            Assert.IsFalse(removeStart.ActionResults.ContainsKey(3));
+            Assert.IsTrue(spawnEnd.ActionResults[1].Success);
+            Assert.IsTrue(effectEnd.ActionResults[2].Success);
+            Assert.IsTrue(removeEnd.ActionResults[3].Success);
+            Assert.AreEqual(1, spawnStart.BehaviorInstances.Count);
+            Assert.AreEqual(1, effectStart.BehaviorInstances.Count);
+            Assert.AreEqual(1, removeStart.BehaviorInstances.Count);
+            Assert.AreEqual(BehaviorInstanceState.Running, spawnStart.BehaviorInstances[0].State);
+            Assert.AreEqual(BehaviorInstanceState.Running, effectStart.BehaviorInstances[0].State);
+            Assert.AreEqual(BehaviorInstanceState.Running, removeStart.BehaviorInstances[0].State);
+        }
+
+        [Test]
+        public void RunningBehaviorStore_IndexesClaimsByChannelAndResource()
+        {
+            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromWorldAction(new WorldAction(1, WorldActionPriority.Player, "player_move", 361, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1));
+            ActionSpec spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            var instance = ActionBehaviorInstance.Running(
+                request,
+                spec,
+                new[] { 361L },
+                new BehaviorClaimSet(new[] { 361L }, new[] { new GridCoord(1, 0) }, new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Movement, BehaviorClaimMode.Exclusive),
+                1,
+                BehaviorStepOutput.Empty,
+                "test");
+            var runner = new BehaviorInstanceRunner();
+
+            runner.Start(instance, new GameWorld());
+
+            Assert.AreSame(instance.Reservation, instance.ClaimSet);
+            Assert.IsTrue(runner.TryGetRunningSubject(361, BehaviorClaimChannel.Movement, 1, out ActionBehaviorInstance movementSubject));
+            Assert.IsTrue(movementSubject.ClaimSet is BehaviorClaimSet);
+            Assert.AreEqual(BehaviorClaimMode.Exclusive, movementSubject.ClaimSet.Mode);
+            Assert.AreEqual(BehaviorClaimChannel.Movement, movementSubject.ClaimSet.Channel);
+            Assert.AreEqual(BehaviorInstanceState.Running, movementSubject.CurrentState);
+            Assert.AreEqual(instance.InstanceId, movementSubject.InstanceId);
+            Assert.IsFalse(runner.TryGetRunningSubject(361, BehaviorClaimChannel.Status, 1, out _));
+            Assert.IsTrue(runner.TryGetReservedCell(new GridCoord(1, 0), BehaviorClaimChannel.Movement, 1, out ActionBehaviorInstance movementCell));
+            Assert.AreEqual(instance.InstanceId, movementCell.InstanceId);
+            Assert.IsFalse(runner.TryGetReservedCell(new GridCoord(1, 0), BehaviorClaimChannel.Debug, 1, out _));
+            Assert.IsTrue(runner.TryGetReservedResource(new ResourceKey("door:alpha"), BehaviorClaimChannel.Movement, 1, out ActionBehaviorInstance resourceClaim));
+            Assert.AreEqual(instance.InstanceId, resourceClaim.InstanceId);
+            Assert.IsFalse(runner.TryGetReservedResource(new ResourceKey("door:alpha"), BehaviorClaimChannel.Status, 1, out _));
+
+            runner.StepDue(new GameWorld(), 2);
+
+            Assert.IsFalse(runner.TryGetReservedResource(new ResourceKey("door:alpha"), BehaviorClaimChannel.Movement, 2, out _));
+        }
+
+        [Test]
+        public void RunningBehaviorStore_ExposesBehaviorClaimSetQueryApi()
+        {
+            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromWorldAction(new WorldAction(1, WorldActionPriority.Player, "player_move", 361, new GridCoord(1, 0), Direction.None, 0, 0, 0, 1));
+            ActionSpec spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            var instance = ActionBehaviorInstance.Running(
+                request,
+                spec,
+                new[] { 361L },
+                new BehaviorClaimSet(new[] { 361L }, new[] { new GridCoord(1, 0) }, new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Movement, BehaviorClaimMode.Exclusive),
+                1,
+                BehaviorStepOutput.Empty,
+                "test");
+            var store = new RunningBehaviorInstanceStore();
+
+            store.Add(instance);
+
+            Assert.IsTrue(store.Get(instance.InstanceId, out ActionBehaviorInstance byInstance));
+            Assert.AreSame(instance.ClaimSet, byInstance.ClaimSet);
+            Assert.IsTrue(store.QueryByEntity(361, BehaviorClaimChannel.Movement, out ActionBehaviorInstance byEntity));
+            Assert.AreEqual(instance.InstanceId, byEntity.InstanceId);
+            Assert.IsTrue(store.QueryByCell(new GridCoord(1, 0), BehaviorClaimChannel.Movement, out ActionBehaviorInstance byCell));
+            Assert.AreEqual(instance.InstanceId, byCell.InstanceId);
+            Assert.IsTrue(store.QueryByResource(new ResourceKey("door:alpha"), BehaviorClaimChannel.Movement, out ActionBehaviorInstance byResource));
+            Assert.AreEqual(instance.InstanceId, byResource.InstanceId);
+            Assert.AreEqual(0, store.StepDue(1).Count);
+            Assert.AreEqual(instance.InstanceId, store.StepDue(2).Single().InstanceId);
+            Assert.IsTrue(store.ReleaseByInstance(instance.InstanceId));
+            Assert.IsFalse(store.QueryByEntity(361, BehaviorClaimChannel.Movement, out _));
+            Assert.IsFalse(store.ReleaseByInstance(instance.InstanceId));
+        }
+
+        [Test]
+        public void ActionSpec_RejectsDefaultCostTicksBelowOne()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new ActionSpec(
+                "invalid_cost",
+                ActionPrimitive.Move,
+                ActionSourceKind.Mechanism,
+                WorldActionPriority.Mechanism,
+                WorldTag.SourceMechanism,
+                WorldTag.AbilityMechanismPush,
+                WorldTag.None,
+                WorldTag.None,
+                ActionTargetRule.DirectionFromRequest,
+                "reject",
+                ActionConflictPolicy.ExclusiveTargetCell,
+                ActionInterruptPolicy.HigherPriorityInterruptsLower,
+                ActionMergePolicy.SameClaim,
+                ActionPlanRule.MoveBody,
+                ActionCommitRule.None,
+                defaultCostTicks: 0));
+        }
+
+        [Test]
+        public void OrdinaryMove_CostTicksGreaterThanOneCommitsOnlyAtCompletionTick()
         {
             var world = new GameWorld();
-            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(360, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(990, 990, new GridCoord(0, 0))));
+            var system = new BehaviorRuntime();
+            var action = new WorldAction(1, WorldActionPriority.Player, "player_move", 990, new GridCoord(1, 0), Direction.None, 0, 1, 1, 3);
 
-            ActionArbitrationResult arbitration = new ActionArbiter().ArbitrateMoves(world, new[]
-            {
-                MoveRequest(1, "mechanism_push", WorldActionPriority.Mechanism, 360, Direction.Right)
-            }, 1);
+            BehaviorRuntimeTickResult start = system.Tick(world, new[] { action }, 1);
+            BehaviorRuntimeTickResult middleA = system.Tick(world, Array.Empty<WorldAction>(), 2);
+            BehaviorRuntimeTickResult middleB = system.Tick(world, Array.Empty<WorldAction>(), 3);
+            BehaviorRuntimeTickResult end = system.Tick(world, Array.Empty<WorldAction>(), 4);
 
-            CollectionAssert.AreEqual(new[]
-            {
-                ActionUnitLifecycleState.Ready,
-                ActionUnitLifecycleState.CandidateBuilt,
-                ActionUnitLifecycleState.Accepted
-            }, arbitration.Transitions.Select(transition => transition.To).ToArray());
+            Assert.IsFalse(start.ActionResults.ContainsKey(1));
+            Assert.IsFalse(middleA.ActionResults.ContainsKey(1));
+            Assert.IsFalse(middleB.ActionResults.ContainsKey(1));
+            Assert.IsTrue(end.ActionResults[1].Success);
+            Assert.AreEqual(3, start.BehaviorInstances[0].EffectiveCostTicks);
+            Assert.AreEqual(0, system.ActiveBehaviorCount);
+            Assert.AreEqual(new GridCoord(1, 0), end.ActionResults[1].FinalCoord);
         }
 
         [Test]
-        public void RuleExecutionResult_RecordsPlannedAndCommittedLifecycleTransitions()
+        public void AutoMove_CostTicksIsNotAppliedTwice()
         {
             var world = new GameWorld();
-            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(361, new GridCoord(0, 0), Direction.Right)));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BallSpawn(994, new GridCoord(0, 0), Direction.Right, 1)));
+            world.NextTick();
             var queue = new WorldActionQueue();
-            queue.EnqueueConfiguredMove("mechanism_push", 361, Direction.Right, 0, 1);
+            WorldAction action = queue.EnqueueAutoMove(994, world.ServerTick, 1);
+            var system = new BehaviorRuntime();
 
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(1), 1);
+            BehaviorRuntimeTickResult start = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            world.NextTick();
+            BehaviorRuntimeTickResult complete = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
-            Assert.IsTrue(result.Transitions.Any(transition => transition.ActionId == 1 && transition.To == ActionUnitLifecycleState.Planned));
-            Assert.IsTrue(result.Transitions.Any(transition => transition.ActionId == 1 && transition.To == ActionUnitLifecycleState.Committed));
+            Assert.IsFalse(start.ActionResults.ContainsKey(action.ActionId));
+            Assert.IsTrue(complete.ActionResults.ContainsKey(action.ActionId));
+            Assert.IsTrue(complete.ProposalResults.Any(item => item.Proposal.Kind == CommitProposalKind.SetAutoMoveTick && item.Proposal.ServerTick == world.ServerTick));
         }
 
-        private sealed class TestRuntimeEffectStrategy : IActionStrategy
+        [Test]
+        public void MechanismPush_CostTicksThreeCommitsAtStartPlusThreeNotSix()
         {
-            public ActionStrategyId StrategyId => "runtime_effect";
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PortConnectorBlockerSpawn(995, new GridCoord(0, 0), Direction.Right)));
+            AddMechanismAbility(world, 995);
+            var queue = new WorldActionQueue();
+            WorldAction action = queue.EnqueueConfiguredMove("mechanism_push", 995, Direction.Right, 10, 0);
+            var system = new BehaviorRuntime();
 
-            public void Process(ActionStrategyContext context)
+            BehaviorRuntimeTickResult start = system.Tick(world, queue.DrainReady(10), 10);
+            BehaviorRuntimeTickResult beforeA = system.Tick(world, Array.Empty<WorldAction>(), 11);
+            BehaviorRuntimeTickResult beforeB = system.Tick(world, Array.Empty<WorldAction>(), 12);
+            BehaviorRuntimeTickResult complete = system.Tick(world, Array.Empty<WorldAction>(), 13);
+
+            Assert.AreEqual(10, action.ReadyTick);
+            Assert.AreEqual(3, action.CostTicks);
+            Assert.IsFalse(start.ActionResults.ContainsKey(action.ActionId));
+            Assert.IsFalse(beforeA.ActionResults.ContainsKey(action.ActionId));
+            Assert.IsFalse(beforeB.ActionResults.ContainsKey(action.ActionId));
+            Assert.IsTrue(complete.ActionResults[action.ActionId].Success);
+            Assert.AreEqual(new GridCoord(1, 0), complete.ActionResults[action.ActionId].FinalCoord);
+        }
+
+        [Test]
+        public void BehaviorClaimSet_DetectsResourceConflictByChannelAndMode()
+        {
+            var first = new BehaviorClaimSet(Array.Empty<long>(), Array.Empty<GridCoord>(), new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Interaction, BehaviorClaimMode.Exclusive);
+            var second = new BehaviorClaimSet(Array.Empty<long>(), Array.Empty<GridCoord>(), new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Interaction, BehaviorClaimMode.Exclusive);
+            var shared = new BehaviorClaimSet(Array.Empty<long>(), Array.Empty<GridCoord>(), new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Interaction, BehaviorClaimMode.Shared);
+            var debug = new BehaviorClaimSet(Array.Empty<long>(), Array.Empty<GridCoord>(), new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Debug, BehaviorClaimMode.Exclusive);
+
+            Assert.IsTrue(first.ConflictsWith(second));
+            Assert.IsTrue(first.ConflictsWith(shared));
+            Assert.IsFalse(shared.ConflictsWith(shared));
+            Assert.IsFalse(first.ConflictsWith(debug));
+        }
+
+        [Test]
+        public void BehaviorRuntime_UsesRunnerPolicyServiceForRulePipeline()
+        {
+            string root = RepositoryRoot();
+            string execution = File.ReadAllText(Path.Combine(root, "Shared", "DG.GameCore", "ActionRuntime", "Execution", "StateDrivenRules.cs"));
+
+            Assert.IsTrue(execution.Contains("StepRunner"));
+            Assert.IsFalse(execution.Contains("new ActionArbiter"));
+            Assert.IsFalse(execution.Contains("new RulePlanner"));
+            Assert.IsFalse(execution.Contains("new ConflictResolver"));
+            Assert.IsFalse(execution.Contains("new CommitResolver"));
+            Assert.IsFalse(execution.Contains(".ArbitrateMoves("));
+        }
+
+        [Test]
+        public void ConflictResolver_RejectsPlanWhenRunningEntityClaimIsActive()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(991, 991, new GridCoord(0, 0))));
+            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromWorldAction(new WorldAction(1, WorldActionPriority.Player, "player_move", 991, new GridCoord(1, 0), Direction.None, 0, 1, 1, 2));
+            ActionSpec spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            var instance = ActionBehaviorInstance.Running(
+                request,
+                spec,
+                new[] { 991L },
+                BehaviorClaimSet.FromSubjects(new[] { 991L }, BehaviorIncomingPolicy.RejectIncoming),
+                1,
+                BehaviorStepOutput.Empty,
+                "test");
+            var runner = new BehaviorInstanceRunner();
+            runner.Start(instance, world);
+            var plan = new MovePlan(WorldActionPriority.Player, 2, 0, 991, 1, 991, BehaviorBodyKind.SingleEntity, Direction.Right, new[] { new BodyMember(991, new GridCoord(0, 0), new GridCoord(1, 0)) });
+
+            IReadOnlyList<CommitProposalResult> results = new ConflictResolver().Resolve(world, new[] { plan }, runner);
+
+            Assert.IsFalse(results.Single().Accepted);
+            Assert.AreEqual("running subject in flight", results.Single().Reason);
+        }
+
+        [Test]
+        public void ConflictResolver_UsesDocumentedOccupancyOrderBeforeRunningClaims()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(992, 992, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.BlockerSpawn(993, new GridCoord(1, 0))));
+            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromWorldAction(new WorldAction(1, WorldActionPriority.Player, "player_move", 992, new GridCoord(1, 0), Direction.None, 0, 1, 1, 5));
+            ActionSpec spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            var instance = ActionBehaviorInstance.Running(
+                request,
+                spec,
+                new[] { 992L },
+                new BehaviorClaimSet(new[] { 992L }, new[] { new GridCoord(1, 0) }, new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Movement, BehaviorClaimMode.Exclusive),
+                1,
+                BehaviorStepOutput.Empty,
+                "test");
+            var runner = new BehaviorInstanceRunner();
+            runner.Start(instance, world);
+            var plan = new MovePlan(WorldActionPriority.Player, 2, 0, 992, 2, 992, BehaviorBodyKind.SingleEntity, Direction.Right, new[] { new BodyMember(992, new GridCoord(0, 0), new GridCoord(1, 0)) }, new[] { new ResourceKey("door:alpha") });
+
+            IReadOnlyList<CommitProposalResult> results = new ConflictResolver().Resolve(world, new[] { plan }, runner);
+
+            Assert.IsFalse(results.Single().Accepted);
+            Assert.AreEqual("blocked cell", results.Single().Reason);
+        }
+
+        [Test]
+        public void ConflictResolver_RejectsPlanWhenRunningResourceClaimIsActive()
+        {
+            var world = new GameWorld();
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(994, 994, new GridCoord(0, 0))));
+            Assert.IsTrue(world.AddEntity(DefaultWorldConfig.PlayerSpawn(995, 995, new GridCoord(2, 0))));
+            var request = new ActionRequestAdapter(ActionSpecRegistry.Default).FromWorldAction(new WorldAction(1, WorldActionPriority.Player, "player_move", 994, new GridCoord(1, 0), Direction.None, 0, 1, 1, 5));
+            ActionSpec spec = ActionSpecRegistry.Default.Get(request.SpecId);
+            var instance = ActionBehaviorInstance.Running(
+                request,
+                spec,
+                new[] { 994L },
+                new BehaviorClaimSet(new[] { 994L }, System.Array.Empty<GridCoord>(), new[] { new ResourceKey("door:alpha") }, BehaviorIncomingPolicy.RejectIncoming, BehaviorClaimChannel.Movement, BehaviorClaimMode.Exclusive),
+                1,
+                BehaviorStepOutput.Empty,
+                "test");
+            var runner = new BehaviorInstanceRunner();
+            runner.Start(instance, world);
+            var plan = new MovePlan(WorldActionPriority.Player, 2, 0, 995, 2, 995, BehaviorBodyKind.SingleEntity, Direction.Right, new[] { new BodyMember(995, new GridCoord(2, 0), new GridCoord(3, 0)) }, new[] { new ResourceKey("door:alpha") });
+
+            IReadOnlyList<CommitProposalResult> results = new ConflictResolver().Resolve(world, new[] { plan }, runner);
+
+            Assert.IsFalse(results.Single().Accepted);
+            Assert.AreEqual("running resource in flight", results.Single().Reason);
+        }
+
+        private sealed class TestRuntimeEffectRunner
+        {
+            public void Process(PrimitiveRunnerContext context)
             {
                 context.ActionResults[context.Request.ActionId] = new MoveResult(true, context.Request.EntityId, CurrentCoord(context.World, context.Request.EntityId), Direction.None, MoveErrorCode.None, "test-runtime-effect", false, default, context.Request.ClientTick);
                 context.Reasons.Add("test-runtime-effect");
             }
         }
 
-        private sealed class TestSetComponentResultStrategy : IActionStrategy
+        private static class TestGeneratedPrimitiveRunnerRegistration
         {
-            public ActionStrategyId StrategyId => "component_result";
-
-            public void Process(ActionStrategyContext context)
+            public static PrimitiveRunnerRegistry CreateDefault()
             {
-            }
-        }
-
-        private static class TestGeneratedActionStrategyRegistration
-        {
-            public static ActionStrategyRegistry CreateDefault()
-            {
-                var registry = new ActionStrategyRegistry();
-                registry.Register(new MoveActionStrategy());
-                registry.Register(new RemoveActionStrategy());
-                registry.Register(new SpawnActionStrategy());
-                registry.Register(new TestRuntimeEffectStrategy());
+                var registry = new PrimitiveRunnerRegistry();
+                var spawn = new SpawnRunner();
+                var remove = new RemoveRunner();
+                var runtimeEffect = new TestRuntimeEffectRunner();
+                registry.Register(new RunnerId("spawn_runner"), context => spawn.Process(context));
+                registry.Register(new RunnerId("remove_runner"), context => remove.Process(context));
+                registry.Register(new RunnerId("apply_effect_runner"), context => runtimeEffect.Process(context));
                 return registry;
             }
         }

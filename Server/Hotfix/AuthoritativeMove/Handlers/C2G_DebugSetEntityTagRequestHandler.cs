@@ -11,13 +11,14 @@ public sealed class C2G_DebugSetEntityTagRequestHandler : MessageRPC<C2G_DebugSe
     protected override async FTask Run(Session session, C2G_DebugSetEntityTagRequest request, G2C_DebugSetEntityTagResponse response, Action reply)
     {
         WorldTag tag = (WorldTag)request.Tag;
-        bool success = AuthoritativeMoveWorldProvider.DebugEdit.TrySetTag(request.EntityId, tag, request.Enabled, out string reason);
+        AuthoritativeDebugActionInput input = AuthoritativeMoveWorldProvider.DebugEdit.EnqueueSetTag(request.EntityId, tag, request.Enabled);
+        MoveResult result = await input.WaitAsync();
 
-        response.Success = success;
+        response.Success = result.Success;
         response.EntityId = request.EntityId;
         response.Tag = request.Tag;
         response.Enabled = request.Enabled;
-        response.Reason = reason;
+        response.Reason = result.Reason;
 
         Log.Info(
             "[C2G_DebugSetEntityTagRequestHandler] success:{0} entity:{1} tag:{2} enabled:{3} reason:{4}",

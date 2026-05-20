@@ -12,7 +12,6 @@ public sealed class ActionArbiter
     private readonly ActionSubjectSelector subjectSelector = new();
     private readonly TargetingSystem targetingSystem;
     private readonly ActionClaimBuilder claimBuilder = new();
-    private readonly ActionUnitStateMachine stateMachine = new();
     private readonly ActionSpecRegistry registry;
 
     public ActionArbiter() : this(ActionSpecRegistry.Default)
@@ -31,7 +30,6 @@ public sealed class ActionArbiter
         var candidates = new List<AcceptedAction>();
         for (int i = 0; i < requests.Count; i++)
         {
-            result.RecordTransition(stateMachine.Advance(requests[i].ActionId, ActionUnitLifecycleState.Ready));
             ProcessMoveRequest(world, requests[i], result, candidates, serverTick);
         }
 
@@ -108,7 +106,6 @@ public sealed class ActionArbiter
         }
 
         IReadOnlyList<ActionClaim> claims = output.Claims;
-        result.RecordTransition(stateMachine.Advance(request.ActionId, ActionUnitLifecycleState.CandidateBuilt));
         IReadOnlyList<ExternalPushContact> contacts = bodyCapabilities.FindExternalPushContacts(world, claims, body);
         if (contacts.Count != 0)
         {

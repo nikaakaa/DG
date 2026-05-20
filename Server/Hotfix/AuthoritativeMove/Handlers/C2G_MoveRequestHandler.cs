@@ -12,11 +12,10 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
     {
         bool hasBefore = TryGetCoord(request.EntityId, out GridCoord beforeCoord);
         Direction direction = ResolveDirection(beforeCoord, new GridCoord(request.TargetX, request.TargetY));
-        long beatTick = request.BeatTick > 0 ? request.BeatTick : AuthoritativeMoveWorldProvider.World.ServerTick + 1;
         InputIntent intent = InputIntent.PlayerMove(
             request.EntityId,
             direction,
-            beatTick,
+            request.BeatTick,
             request.ClientInputId,
             request.ClientTick,
             AuthoritativeMoveWorldProvider.World.ServerTick);
@@ -57,7 +56,7 @@ public sealed class C2G_MoveRequestHandler : MessageRPC<C2G_MoveRequest, G2C_Mov
             request.EntityId,
             request.TargetX,
             request.TargetY,
-            beatTick,
+            request.BeatTick,
             direction,
             request.ClientInputId,
             request.ClientTick,

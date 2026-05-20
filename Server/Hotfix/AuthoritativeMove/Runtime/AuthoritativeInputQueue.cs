@@ -21,15 +21,16 @@ public sealed class AuthoritativeMoveInput
     private readonly FTask<MoveResult> completion;
 
     public AuthoritativeMoveInput(long entityId, long beatTick, Direction direction, long clientInputId, long clientTick, long submitSequence)
-        : this(InputIntent.PlayerMove(entityId, direction, beatTick, clientInputId, clientTick, 0), submitSequence)
+        : this(InputIntent.PlayerMove(entityId, direction, beatTick, clientInputId, clientTick, 0), beatTick, submitSequence)
     {
     }
 
-    public AuthoritativeMoveInput(InputIntent intent, long submitSequence)
+    public AuthoritativeMoveInput(InputIntent intent, long consumeTick, long submitSequence)
     {
         Intent = intent;
         EntityId = intent.ActorEntityId;
         BeatTick = intent.BeatTick;
+        ConsumeTick = consumeTick;
         Direction = intent.Direction;
         ClientInputId = intent.ClientInputId;
         ClientTick = intent.ClientTick;
@@ -41,6 +42,7 @@ public sealed class AuthoritativeMoveInput
     public InputIntent Intent { get; }
     public long EntityId { get; }
     public long BeatTick { get; }
+    public long ConsumeTick { get; }
     public Direction Direction { get; }
     public long ClientInputId { get; }
     public long ClientTick { get; }
@@ -74,6 +76,7 @@ public sealed class AuthoritativeMoveInput
 public sealed class AuthoritativeDebugActionInput
 {
     private readonly FTask<MoveResult> completion;
+    private MoveResult result;
 
     public AuthoritativeDebugActionInput(WorldAction action)
     {
@@ -83,6 +86,7 @@ public sealed class AuthoritativeDebugActionInput
 
     public WorldAction Action { get; }
     public bool IsCompleted => completion.IsCompleted;
+    public MoveResult Result => result;
 
     public FTask<MoveResult> WaitAsync()
     {
@@ -93,6 +97,7 @@ public sealed class AuthoritativeDebugActionInput
     {
         if (!completion.IsCompleted)
         {
+            this.result = result;
             completion.SetResult(result);
         }
     }
@@ -104,6 +109,7 @@ public sealed class AuthoritativeInputQueue
     private readonly Dictionary<long, AuthoritativeDebugActionInput> debugInputs = new();
     private readonly HashSet<long> consumedClientInputIds = new();
     private long nextSubmitSequence = 1;
+    private long activeMoveConsumeTick;
 
     public AuthoritativeInputQueue() : this(ActionSpecRegistry.Default)
     {
@@ -127,12 +133,8 @@ public sealed class AuthoritativeInputQueue
 
     public AuthoritativeMoveInput EnqueueIntent(InputIntent intent, long currentTick)
     {
-        var input = new AuthoritativeMoveInput(intent, nextSubmitSequence++);
-        if (intent.BeatTick < currentTick)
-        {
-            input.Complete(AuthoritativePlayerInputStatus.Expired, new MoveResult(false, intent.ActorEntityId, default, intent.Direction, MoveErrorCode.UnknownEntity, "input expired", false, default, intent.ClientTick));
-            return input;
-        }
+        long consumeTick = ResolveMoveConsumeTick(currentTick);
+        var input = new AuthoritativeMoveInput(intent, consumeTick, nextSubmitSequence++);
 
         if (intent.ClientInputId != 0 && consumedClientInputIds.Contains(intent.ClientInputId))
         {
@@ -140,7 +142,7 @@ public sealed class AuthoritativeInputQueue
             return input;
         }
 
-        var key = new PlayerInputKey(intent.BeatTick, intent.ActorEntityId, intent.Channel, intent.InputKind);
+        var key = new PlayerInputKey(consumeTick, intent.ActorEntityId, intent.Channel, intent.InputKind);
         if (moveInputs.TryGetValue(key, out AuthoritativeMoveInput? previous))
         {
             previous.Complete(AuthoritativePlayerInputStatus.Replaced, new MoveResult(false, previous.EntityId, default, previous.Direction, MoveErrorCode.UnknownEntity, "input replaced", false, default, previous.ClientTick));
@@ -150,17 +152,22 @@ public sealed class AuthoritativeInputQueue
         return input;
     }
 
-    public IReadOnlyList<AuthoritativeMoveInput> DrainMoves(long beatTick)
+    public IReadOnlyList<AuthoritativeMoveInput> DrainMoves(long consumeTick)
     {
         if (moveInputs.Count == 0)
         {
+            if (activeMoveConsumeTick == consumeTick)
+            {
+                activeMoveConsumeTick = 0;
+            }
+
             return Array.Empty<AuthoritativeMoveInput>();
         }
 
         var inputs = new List<AuthoritativeMoveInput>();
         foreach (KeyValuePair<PlayerInputKey, AuthoritativeMoveInput> pair in moveInputs.ToArray())
         {
-            if (pair.Key.BeatTick != beatTick && pair.Key.BeatTick != long.MaxValue)
+            if (pair.Key.ConsumeTick != consumeTick && pair.Key.ConsumeTick != long.MaxValue)
             {
                 continue;
             }
@@ -175,8 +182,13 @@ public sealed class AuthoritativeInputQueue
             inputs.Add(pair.Value);
         }
 
+        if (activeMoveConsumeTick == consumeTick)
+        {
+            activeMoveConsumeTick = 0;
+        }
+
         return inputs
-            .OrderBy(input => input.BeatTick)
+            .OrderBy(input => input.ConsumeTick)
             .ThenBy(input => input.EntityId)
             .ThenBy(input => input.SubmitSequence)
             .ToArray();
@@ -190,6 +202,7 @@ public sealed class AuthoritativeInputQueue
         }
 
         moveInputs.Clear();
+        activeMoveConsumeTick = 0;
 
         foreach (AuthoritativeDebugActionInput input in debugInputs.Values)
         {
@@ -221,6 +234,30 @@ public sealed class AuthoritativeInputQueue
     public AuthoritativeDebugActionInput EnqueueDebugRemove(long entityId)
     {
         WorldAction action = ActionQueue.EnqueueDebugRemove(entityId);
+        var input = new AuthoritativeDebugActionInput(action);
+        debugInputs[action.ActionId] = input;
+        return input;
+    }
+
+    public AuthoritativeDebugActionInput EnqueueDebugApplyEffect(long entityId, EffectSpecId effectSpecId, string stackKey, long expireTick)
+    {
+        WorldAction action = ActionQueue.EnqueueDebugApplyEffect(entityId, effectSpecId, stackKey, expireTick);
+        var input = new AuthoritativeDebugActionInput(action);
+        debugInputs[action.ActionId] = input;
+        return input;
+    }
+
+    public AuthoritativeDebugActionInput EnqueueDebugRemoveEffect(long entityId, RuntimeEffectId runtimeEffectId)
+    {
+        WorldAction action = ActionQueue.EnqueueDebugRemoveEffect(entityId, runtimeEffectId);
+        var input = new AuthoritativeDebugActionInput(action);
+        debugInputs[action.ActionId] = input;
+        return input;
+    }
+
+    public AuthoritativeDebugActionInput EnqueueDebugSetTag(long entityId, WorldTag tag, bool enabled)
+    {
+        WorldAction action = ActionQueue.EnqueueDebugSetTag(entityId, tag, enabled);
         var input = new AuthoritativeDebugActionInput(action);
         debugInputs[action.ActionId] = input;
         return input;
@@ -273,24 +310,39 @@ public sealed class AuthoritativeInputQueue
         return Direction.None;
     }
 
+    private long ResolveMoveConsumeTick(long currentTick)
+    {
+        if (currentTick == 0)
+        {
+            return long.MaxValue;
+        }
+
+        if (activeMoveConsumeTick == 0)
+        {
+            activeMoveConsumeTick = currentTick + 1;
+        }
+
+        return activeMoveConsumeTick;
+    }
+
     private readonly struct PlayerInputKey : IEquatable<PlayerInputKey>
     {
-        public PlayerInputKey(long beatTick, long entityId, string channel, InputKind inputKind)
+        public PlayerInputKey(long consumeTick, long entityId, string channel, InputKind inputKind)
         {
-            BeatTick = beatTick;
+            ConsumeTick = consumeTick;
             EntityId = entityId;
             Channel = channel ?? string.Empty;
             InputKind = inputKind;
         }
 
-        public long BeatTick { get; }
+        public long ConsumeTick { get; }
         public long EntityId { get; }
         public string Channel { get; }
         public InputKind InputKind { get; }
 
         public bool Equals(PlayerInputKey other)
         {
-            return BeatTick == other.BeatTick &&
+            return ConsumeTick == other.ConsumeTick &&
                 EntityId == other.EntityId &&
                 Channel == other.Channel &&
                 InputKind == other.InputKind;
@@ -303,7 +355,7 @@ public sealed class AuthoritativeInputQueue
 
         public override int GetHashCode()
         {
-            return HashCode.Combine(BeatTick, EntityId, Channel, InputKind);
+            return HashCode.Combine(ConsumeTick, EntityId, Channel, InputKind);
         }
     }
 }

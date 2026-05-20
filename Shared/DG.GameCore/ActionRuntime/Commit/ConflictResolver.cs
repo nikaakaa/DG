@@ -7,6 +7,11 @@ public sealed class ConflictResolver
 {
     public IReadOnlyList<CommitProposalResult> Resolve(GameWorld world, IReadOnlyList<MovePlan> plans)
     {
+        return Resolve(world, plans, null);
+    }
+
+    public IReadOnlyList<CommitProposalResult> Resolve(GameWorld world, IReadOnlyList<MovePlan> plans, BehaviorInstanceRunner? runningBehaviors)
+    {
         var results = new List<CommitProposalResult>();
         var movedEntities = new HashSet<long>();
         var occupiedTargets = new HashSet<GridCoord>();
@@ -28,7 +33,7 @@ public sealed class ConflictResolver
                 continue;
             }
 
-            PlanResult validation = ValidatePlan(world, plan, movedEntities, occupiedTargets);
+            PlanResult validation = ValidatePlan(world, plan, movedEntities, occupiedTargets, runningBehaviors);
             if (!validation.Accepted)
             {
                 AddPlanResults(results, plan, false, validation.Message);
@@ -72,9 +77,11 @@ public sealed class ConflictResolver
         return results;
     }
 
-    private static PlanResult ValidatePlan(GameWorld world, MovePlan plan, HashSet<long> movedEntities, HashSet<GridCoord> occupiedTargets)
+    private static PlanResult ValidatePlan(GameWorld world, MovePlan plan, HashSet<long> movedEntities, HashSet<GridCoord> occupiedTargets, BehaviorInstanceRunner? runningBehaviors)
     {
         var bodyIds = new HashSet<long>(plan.Members.Select(member => member.EntityId));
+        var occupancyExcludedIds = new HashSet<long>(bodyIds);
+        occupancyExcludedIds.UnionWith(movedEntities);
         for (int i = 0; i < plan.Members.Count; i++)
         {
             BodyMember member = plan.Members[i];
@@ -93,6 +100,24 @@ public sealed class ConflictResolver
                 return PlanResult.Failed(PlanFailureReason.SourceChanged, "source changed");
             }
 
+            if (TryFindExternalBlocking(world, member.To, occupancyExcludedIds, false, out _))
+            {
+                return PlanResult.Failed(PlanFailureReason.BlockedCell, "blocked cell");
+            }
+        }
+
+        for (int i = 0; i < plan.Members.Count; i++)
+        {
+            BodyMember member = plan.Members[i];
+            if (TryFindExternalBlocking(world, member.To, occupancyExcludedIds, true, out _))
+            {
+                return PlanResult.Failed(PlanFailureReason.OccupiedByPlayer, "occupied by player");
+            }
+        }
+
+        for (int i = 0; i < plan.Members.Count; i++)
+        {
+            BodyMember member = plan.Members[i];
             if (movedEntities.Contains(member.EntityId))
             {
                 return PlanResult.Failed(PlanFailureReason.EntityAlreadyMoved, "entity already moved");
@@ -102,12 +127,35 @@ public sealed class ConflictResolver
             {
                 return PlanResult.Failed(PlanFailureReason.TargetReserved, "target reserved");
             }
+        }
 
-            GameEntity blocking = FindExternalBlocking(world, member.To, bodyIds);
-            if (blocking != null)
+        if (runningBehaviors != null)
+        {
+            for (int i = 0; i < plan.Members.Count; i++)
             {
-                bool player = world.HasComponent<PlayerControlComponent>(blocking);
-                return PlanResult.Failed(player ? PlanFailureReason.OccupiedByPlayer : PlanFailureReason.BlockedCell, player ? "occupied by player" : "blocked cell");
+                BodyMember member = plan.Members[i];
+                if (runningBehaviors.TryGetRunningSubject(member.EntityId, plan.ServerTick, plan.SourceActionId, out ActionBehaviorInstance subjectReserved))
+                {
+                    return PlanResult.Failed(PlanFailureReason.TargetReserved, subjectReserved.Reservation.IncomingPolicy == BehaviorIncomingPolicy.RejectIncoming ? "running subject in flight" : "entity reserved");
+                }
+            }
+
+            for (int i = 0; i < plan.Members.Count; i++)
+            {
+                BodyMember member = plan.Members[i];
+                if (runningBehaviors.TryGetReservedCell(member.To, plan.ServerTick, plan.SourceActionId, out ActionBehaviorInstance cellReserved))
+                {
+                    return PlanResult.Failed(PlanFailureReason.TargetReserved, cellReserved.Reservation.IncomingPolicy == BehaviorIncomingPolicy.RejectIncoming ? "running reservation in flight" : "target reserved");
+                }
+            }
+
+            for (int i = 0; i < plan.Resources.Count; i++)
+            {
+                if (runningBehaviors.TryGetReservedResource(plan.Resources[i], BehaviorClaimChannel.Movement, plan.ServerTick, out ActionBehaviorInstance resourceReserved) &&
+                    resourceReserved.SourceActionId != plan.SourceActionId)
+                {
+                    return PlanResult.Failed(PlanFailureReason.TargetReserved, resourceReserved.Reservation.IncomingPolicy == BehaviorIncomingPolicy.RejectIncoming ? "running resource in flight" : "resource reserved");
+                }
             }
         }
 
@@ -119,7 +167,7 @@ public sealed class ConflictResolver
         for (int i = 0; i < plan.Members.Count; i++)
         {
             BodyMember member = plan.Members[i];
-            CommitProposal proposal = CommitProposal.Move(plan.Priority, plan.SourceActionId, plan.SourceStateId, member.EntityId, member.From, member.To, plan.ServerTick);
+            CommitProposal proposal = CommitProposal.Move(plan.Priority, plan.SourceActionId, plan.SourceStateId, member.EntityId, member.From, member.To, plan.ServerTick, plan.PresentationHint);
             results.Add(new CommitProposalResult(proposal, accepted, reason));
         }
     }
@@ -129,21 +177,25 @@ public sealed class ConflictResolver
         return string.Join("|", plan.Members.OrderBy(member => member.EntityId).Select(member => $"{member.EntityId}:{member.From.X},{member.From.Y}>{member.To.X},{member.To.Y}"));
     }
 
-    private static GameEntity FindExternalBlocking(GameWorld world, GridCoord coord, HashSet<long> bodyIds)
+    private static bool TryFindExternalBlocking(GameWorld world, GridCoord coord, HashSet<long> bodyIds, bool player, out GameEntity blocking)
     {
         IReadOnlyList<GameEntity> targets = world.GetEntitiesAt(coord);
         for (int i = 0; i < targets.Count; i++)
         {
             GameEntity target = targets[i];
-            if (bodyIds.Contains(target.EntityId) || !world.HasComponent<BlockingComponent>(target))
+            if (bodyIds.Contains(target.EntityId) ||
+                !world.HasComponent<BlockingComponent>(target) ||
+                world.HasComponent<PlayerControlComponent>(target) != player)
             {
                 continue;
             }
 
-            return target;
+            blocking = target;
+            return true;
         }
 
-        return null!;
+        blocking = null!;
+        return false;
     }
 }
 }

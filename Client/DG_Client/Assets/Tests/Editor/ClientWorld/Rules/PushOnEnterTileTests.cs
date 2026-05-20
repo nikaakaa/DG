@@ -60,7 +60,8 @@ namespace DG.EditorTests
 
             var queue = new WorldActionQueue();
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.AreEqual(1, result.ActionResults.Count);
             Assert.IsTrue(result.ActionResults.Values.Single().Success);
@@ -80,7 +81,8 @@ namespace DG.EditorTests
 
             var queue = new WorldActionQueue();
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick));
 
             Assert.AreEqual(1, result.ActionResults.Count);
             Assert.IsFalse(result.ActionResults.Values.Single().Success);
@@ -101,38 +103,87 @@ namespace DG.EditorTests
             var queue = new WorldActionQueue();
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
             queue.EnqueueConfiguredMove("mechanism_push", 1, Direction.Right, world.ServerTick - 1, 1);
-            StateDrivenRuleExecutionResult result = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult result = TickUntilResult(system, world, queue, queue.DrainReady(world.ServerTick));
 
-            Assert.AreEqual(2, result.ActionResults.Count(item => item.Value.EntityId == 1));
+            Assert.AreEqual(1, result.ActionResults.Count(item => item.Value.EntityId == 1 && item.Value.Success));
             Assert.IsTrue(world.TryGetEntity(1, out GameEntity player));
             Assert.IsTrue(world.TryGetComponent(player, out PositionComponent position));
             Assert.AreEqual(new GridCoord(1, 0), position.Coord);
         }
 
         [Test]
-        public void PushOnEnterOutput_UsesComponentSpecAndReadyCost()
+        public void PushOnEnter_OutputCostTicksIsBehaviorDurationOnly()
         {
             var world = new GameWorld();
-            world.AddEntity(DefaultWorldConfig.WindFieldSpawn(100, new GridCoord(0, 0), Direction.Right));
+            world.AddEntity(DefaultWorldConfig.ConveyorSpawn(100, new GridCoord(0, 0), Direction.Right));
             world.AddEntity(DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
             Assert.IsTrue(world.TryGetEntity(100, out GameEntity trigger));
             Assert.IsTrue(world.TryGetComponent(trigger, out PushOnEnterComponent output));
-            Assert.AreEqual(new ActionSpecId("configured_wind_push"), output.OutputSpecId);
-            Assert.AreEqual(2, output.OutputCostTicks);
+            Assert.AreEqual(new ActionSpecId("mechanism_push"), output.OutputSpecId);
+            Assert.AreEqual(1, output.OutputCostTicks);
             world.NextTick();
             var queue = new WorldActionQueue();
 
             int enqueued = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick);
-            StateDrivenRuleExecutionResult beforeReady = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 1), world.ServerTick + 1);
-            StateDrivenRuleExecutionResult ready = new StateDrivenRuleExecutionSystem().Tick(world, queue.DrainReady(world.ServerTick + 2), world.ServerTick + 2);
+            var system = new BehaviorRuntime();
+            BehaviorRuntimeTickResult start = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            world.NextTick();
+            BehaviorRuntimeTickResult complete = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
 
             Assert.AreEqual(1, enqueued);
-            Assert.AreEqual(0, beforeReady.ActionResults.Count);
-            Assert.AreEqual(1, ready.ActionResults.Count);
-            Assert.IsTrue(ready.ActionResults.Values.Single().Success);
+            Assert.AreEqual(0, start.ActionResults.Count);
+            Assert.AreEqual(1, complete.ActionResults.Count);
+            Assert.IsTrue(complete.ActionResults.Values.Single().Success);
             Assert.IsTrue(world.TryGetEntity(1, out GameEntity player));
             Assert.IsTrue(world.TryGetComponent(player, out PositionComponent position));
             Assert.AreEqual(new GridCoord(1, 0), position.Coord);
+        }
+
+        [Test]
+        public void PushOnEnter_DoesNotReenqueueWhileSubjectHasRunningMovementClaim()
+        {
+            var world = new GameWorld();
+            world.AddEntity(DefaultWorldConfig.ConveyorSpawn(100, new GridCoord(0, 0), Direction.Right));
+            world.AddEntity(DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+            var system = new BehaviorRuntime();
+
+            int firstEnqueued = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick, system.HasRunningMovementClaim);
+            BehaviorRuntimeTickResult start = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            world.NextTick();
+            int secondEnqueued = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick, system.HasRunningMovementClaim);
+            BehaviorRuntimeTickResult complete = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            world.NextTick();
+            int thirdEnqueued = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick, system.HasRunningMovementClaim);
+            BehaviorRuntimeTickResult afterComplete = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+
+            Assert.AreEqual(1, firstEnqueued);
+            Assert.AreEqual(0, start.ActionResults.Count);
+            Assert.AreEqual(0, secondEnqueued);
+            Assert.IsTrue(complete.ActionResults.Values.Single().Success);
+            Assert.AreEqual(0, thirdEnqueued);
+            Assert.AreEqual(0, afterComplete.ActionResults.Count);
+            AssertPosition(world, 1, new GridCoord(1, 0));
+        }
+
+        [Test]
+        public void PushOnEnter_DoesNotReenqueueEquivalentPendingOutput()
+        {
+            var world = new GameWorld();
+            world.AddEntity(DefaultWorldConfig.ConveyorSpawn(100, new GridCoord(0, 0), Direction.Right));
+            world.AddEntity(DefaultWorldConfig.PlayerSpawn(1, 1, new GridCoord(0, 0)));
+            world.NextTick();
+            var queue = new WorldActionQueue();
+
+            int first = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick);
+            int second = ExplicitOutputPolicies.EnqueuePushOnEnterActions(world, queue, world.ServerTick);
+            IReadOnlyList<WorldAction> ready = queue.DrainReady(world.ServerTick);
+
+            Assert.AreEqual(1, first);
+            Assert.AreEqual(0, second);
+            Assert.AreEqual(1, ready.Count);
         }
 
         [Test]
@@ -192,6 +243,25 @@ namespace DG.EditorTests
             public void Apply(GameWorld world, GameEntity entity, EntitySnapshot snapshot)
             {
             }
+        }
+
+        private static BehaviorRuntimeTickResult TickUntilResult(BehaviorRuntime system, GameWorld world, WorldActionQueue queue, IReadOnlyList<WorldAction> actions)
+        {
+            BehaviorRuntimeTickResult result = system.Tick(world, actions, world.ServerTick);
+            for (int i = 0; i < 8 && system.RunningBehaviorCount != 0 && result.ActionResults.Count == 0; i++)
+            {
+                world.NextTick();
+                result = system.Tick(world, queue.DrainReady(world.ServerTick), world.ServerTick);
+            }
+
+            return result;
+        }
+
+        private static void AssertPosition(GameWorld world, long entityId, GridCoord expected)
+        {
+            Assert.IsTrue(world.TryGetEntity(entityId, out GameEntity entity));
+            Assert.IsTrue(world.TryGetComponent(entity, out PositionComponent position));
+            Assert.AreEqual(expected, position.Coord);
         }
     }
 }

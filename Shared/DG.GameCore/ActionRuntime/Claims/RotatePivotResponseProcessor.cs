@@ -13,13 +13,19 @@ public enum RotatePivotDirection
 
 public sealed class RotatePivotResponseResult
 {
-    public RotatePivotResponseResult(IReadOnlyList<ActionRequest> remainingRequests, IReadOnlyList<MovePlan> movePlans, IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<WorldDeltaAnimationMetadata> animationMetadata, IReadOnlyList<string> reasons)
+    public RotatePivotResponseResult(IReadOnlyList<ActionRequest> remainingRequests, IReadOnlyList<MovePlan> movePlans, IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<ActionBehaviorInstance> behaviorInstances, IReadOnlyList<string> reasons)
+        : this(remainingRequests, movePlans, actionResults, deferredActions, Array.Empty<ActionFact>(), behaviorInstances, reasons)
+    {
+    }
+
+    public RotatePivotResponseResult(IReadOnlyList<ActionRequest> remainingRequests, IReadOnlyList<MovePlan> movePlans, IReadOnlyDictionary<long, MoveResult> actionResults, IReadOnlyList<DeferredAction> deferredActions, IReadOnlyList<ActionFact> actionFacts, IReadOnlyList<ActionBehaviorInstance> behaviorInstances, IReadOnlyList<string> reasons)
     {
         RemainingRequests = remainingRequests;
         MovePlans = movePlans;
         ActionResults = actionResults;
         DeferredActions = deferredActions;
-        AnimationMetadata = animationMetadata;
+        ActionFacts = actionFacts;
+        BehaviorInstances = behaviorInstances;
         Reasons = reasons;
     }
 
@@ -27,7 +33,8 @@ public sealed class RotatePivotResponseResult
     public IReadOnlyList<MovePlan> MovePlans { get; }
     public IReadOnlyDictionary<long, MoveResult> ActionResults { get; }
     public IReadOnlyList<DeferredAction> DeferredActions { get; }
-    public IReadOnlyList<WorldDeltaAnimationMetadata> AnimationMetadata { get; }
+    public IReadOnlyList<ActionFact> ActionFacts { get; }
+    public IReadOnlyList<ActionBehaviorInstance> BehaviorInstances { get; }
     public IReadOnlyList<string> Reasons { get; }
 }
 
@@ -49,7 +56,7 @@ public sealed class RotatePivotResponseProcessor
         var movePlans = new List<MovePlan>();
         var results = new Dictionary<long, MoveResult>();
         var deferred = new List<DeferredAction>();
-        var animationMetadata = new List<WorldDeltaAnimationMetadata>();
+        var behaviorInstances = new List<ActionBehaviorInstance>();
         var reasons = new List<string>();
         var groups = new Dictionary<string, List<ActionRequest>>();
 
@@ -121,23 +128,76 @@ public sealed class RotatePivotResponseProcessor
 
             if (contacts.Count == 0)
             {
-                movePlans.Add(plan);
-                AddRotateSuccessMetadata(plan, pivot.EntityId, pivotCoord, direction, animationMetadata);
-                AddSuccessResults(group, plan, direction);
+                int baseCost = Math.Max(1, group[0].RuntimeParams.CostTicks);
+                long endTick = serverTick + baseCost;
+                IReadOnlyList<ActionFact> startActionFacts = BuildRotateSuccessFacts(world, plan, pivot.EntityId, pivotCoord, direction, baseCost, serverTick, endTick);
+                behaviorInstances.Add(new ActionBehaviorInstance(
+                    group[0].ActionId,
+                    group[0].ActionId,
+                    group[0].OwnerActionId,
+                    group[0].SpecId,
+                    "rotate-pivot",
+                    "rotate_pivot_runner",
+                    ActionPrimitiveNames.NameOf(registry.Get(group[0].SpecId).Primitive),
+                    group[0].Source,
+                    BodyIds(body),
+                    BehaviorInstanceState.Running,
+                    string.Empty,
+                    ReservationFor(plan, BodyIds(body), BehaviorIncomingPolicy.RejectIncoming),
+                    serverTick,
+                    serverTick,
+                    string.Empty,
+                    "rotate-pivot",
+                    serverTick,
+                    endTick,
+                    baseCost,
+                    baseCost,
+                    BehaviorCompletionMode.CompleteAtEndTick,
+                    BehaviorIncomingPolicy.RejectIncoming,
+                    startActionFacts,
+                    Array.Empty<BehaviorScheduledOutput>(),
+                    new BehaviorStepOutput(new[] { plan }, BuildSuccessResults(world, group, plan, direction), Array.Empty<DeferredAction>(), BuildInternalCompletionFacts(group, BodyIds(body)))));
                 reasons.Add(direction == RotatePivotDirection.Clockwise ? "rotate-pivot-cw" : "rotate-pivot-ccw");
                 continue;
             }
 
-            if (!TryBuildDeferred(world, group[0], registry.Get(group[0].SpecId), contacts, pivot.EntityId, direction, serverTick, out IReadOnlyList<DeferredAction> groupDeferred, out string deferredReason))
+            int bounceBaseCost = Math.Max(1, group[0].RuntimeParams.CostTicks);
+            RotateBounceTiming bounceTiming = CalculateBounceTiming(serverTick, bounceBaseCost, contacts[0].Progress);
+            if (!TryBuildDeferred(world, group[0], registry.Get(group[0].SpecId), contacts, pivot.EntityId, direction, bounceTiming.ContactTick, out IReadOnlyList<DeferredAction> groupDeferred, out string deferredReason))
             {
                 AddInvalidResults(world, group, deferredReason);
                 reasons.Add(deferredReason);
                 continue;
             }
 
-            AddRotateBounceMetadata(plan, pivot.EntityId, pivotCoord, direction, contacts, animationMetadata);
-            deferred.AddRange(groupDeferred);
-            AddDeferredResults(world, group, direction, contacts[0].BlockerEntityId);
+            IReadOnlyList<ActionFact> bounceStartActionFacts = BuildRotateBounceFacts(world, plan, pivot.EntityId, pivotCoord, direction, contacts, false, serverTick, bounceTiming.ContactTick, bounceTiming.EndTick, bounceTiming.ContactProgress, bounceTiming.EffectiveCostTicks);
+            IReadOnlyList<ActionFact> impactActionFacts = BuildRotateBounceFacts(world, plan, pivot.EntityId, pivotCoord, direction, contacts, true, serverTick, bounceTiming.ContactTick, bounceTiming.EndTick, bounceTiming.ContactProgress, bounceTiming.EffectiveCostTicks);
+            behaviorInstances.Add(new ActionBehaviorInstance(
+                group[0].ActionId,
+                group[0].ActionId,
+                group[0].OwnerActionId,
+                group[0].SpecId,
+                "rotate-pivot",
+                "rotate_pivot_runner",
+                ActionPrimitiveNames.NameOf(registry.Get(group[0].SpecId).Primitive),
+                group[0].Source,
+                BodyIds(body),
+                BehaviorInstanceState.Running,
+                string.Empty,
+                ReservationFor(plan, BodyIds(body), BehaviorIncomingPolicy.RejectIncoming),
+                serverTick,
+                serverTick,
+                string.Empty,
+                "rotate-pivot",
+                serverTick,
+                bounceTiming.EndTick,
+                bounceBaseCost,
+                bounceTiming.EffectiveCostTicks,
+                BehaviorCompletionMode.CompleteAtEndTick,
+                BehaviorIncomingPolicy.RejectIncoming,
+                bounceStartActionFacts,
+                new[] { new BehaviorScheduledOutput(bounceTiming.ContactTick, new BehaviorStepOutput(Array.Empty<MovePlan>(), new Dictionary<long, MoveResult>(), groupDeferred, impactActionFacts)) },
+                new BehaviorStepOutput(Array.Empty<MovePlan>(), BuildDeferredResults(world, group, direction, contacts[0].BlockerEntityId), Array.Empty<DeferredAction>(), BuildInternalCompletionFacts(group, BodyIds(body)))));
             reasons.Add("rotate-pivot-deferred-output");
         }
 
@@ -154,7 +214,8 @@ public sealed class RotatePivotResponseProcessor
             movePlans.ToArray(),
             results,
             deferred.ToArray(),
-            animationMetadata.ToArray(),
+            Array.Empty<ActionFact>(),
+            behaviorInstances.ToArray(),
             reasons.ToArray());
 
         void AddInvalidResults(GameWorld targetWorld, IReadOnlyList<ActionRequest> targetGroup, string reason)
@@ -174,8 +235,9 @@ public sealed class RotatePivotResponseProcessor
             }
         }
 
-        void AddSuccessResults(IReadOnlyList<ActionRequest> targetGroup, MovePlan targetPlan, RotatePivotDirection rotateDirection)
+        Dictionary<long, MoveResult> BuildSuccessResults(GameWorld targetWorld, IReadOnlyList<ActionRequest> targetGroup, MovePlan targetPlan, RotatePivotDirection rotateDirection)
         {
+            var targetResults = new Dictionary<long, MoveResult>();
             Direction resultDirection = rotateDirection == RotatePivotDirection.Clockwise ? Direction.Right : Direction.Left;
             for (int i = 0; i < targetGroup.Count; i++)
             {
@@ -183,73 +245,68 @@ public sealed class RotatePivotResponseProcessor
                 GridCoord final = targetPlan.Members.FirstOrDefault(member => member.EntityId == request.EntityId).To;
                 if (final == default)
                 {
-                    final = CurrentCoord(world, request.EntityId);
+                    final = CurrentCoord(targetWorld, request.EntityId);
                 }
 
-                results[request.ActionId] = new MoveResult(true, request.EntityId, final, resultDirection, MoveErrorCode.None, string.Empty, false, default, request.ClientTick);
+                targetResults[request.ActionId] = new MoveResult(true, request.EntityId, final, resultDirection, MoveErrorCode.None, string.Empty, false, default, request.ClientTick);
             }
+
+            return targetResults;
         }
 
-        void AddDeferredResults(GameWorld targetWorld, IReadOnlyList<ActionRequest> targetGroup, RotatePivotDirection rotateDirection, long blockerEntityId)
+        Dictionary<long, MoveResult> BuildDeferredResults(GameWorld targetWorld, IReadOnlyList<ActionRequest> targetGroup, RotatePivotDirection rotateDirection, long blockerEntityId)
         {
+            var targetResults = new Dictionary<long, MoveResult>();
             Direction resultDirection = rotateDirection == RotatePivotDirection.Clockwise ? Direction.Right : Direction.Left;
             for (int i = 0; i < targetGroup.Count; i++)
             {
                 ActionRequest request = targetGroup[i];
-                results[request.ActionId] = new MoveResult(true, request.EntityId, CurrentCoord(targetWorld, request.EntityId), resultDirection, MoveErrorCode.None, "rotate-pivot-deferred-output", false, new CollisionInfo(blockerEntityId, true, false), request.ClientTick);
+                targetResults[request.ActionId] = new MoveResult(true, request.EntityId, CurrentCoord(targetWorld, request.EntityId), resultDirection, MoveErrorCode.None, "rotate-pivot-deferred-output", false, new CollisionInfo(blockerEntityId, true, false), request.ClientTick);
             }
+
+            return targetResults;
         }
     }
 
-    private static void AddRotateSuccessMetadata(MovePlan plan, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection direction, List<WorldDeltaAnimationMetadata> metadata)
+    private static IReadOnlyList<ActionFact> BuildRotateSuccessFacts(GameWorld world, MovePlan plan, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection direction, int rotateCostTicks, long startTick, long endTick)
     {
+        return new[] { CreateRotateFact(ActionFactType.RotateStarted, PresentationFactType.RotatePivotGroup, world, plan, pivotEntityId, pivotCoord, direction, PresentationFactResultKind.Success, Array.Empty<PresentationFactImpact>(), startTick, 0, endTick, 1d, Math.Max(1, rotateCostTicks)) };
+    }
+
+    private static IReadOnlyList<ActionFact> BuildInternalCompletionFacts(IReadOnlyList<ActionRequest> group, IReadOnlyList<long> subjectIds)
+    {
+        var result = new ActionFact[group.Count];
+        for (int i = 0; i < group.Count; i++)
+        {
+            result[i] = ActionFact.Internal(ActionFactType.RotateCompleted, group[i].ActionId, subjectIds);
+        }
+
+        return result;
+    }
+
+    private static BehaviorClaimSet ReservationFor(MovePlan plan, IReadOnlyList<long> subjectIds, BehaviorIncomingPolicy policy)
+    {
+        var cells = new List<GridCoord>();
         for (int i = 0; i < plan.Members.Count; i++)
         {
             BodyMember member = plan.Members[i];
-            metadata.Add(new WorldDeltaAnimationMetadata(
-                member.EntityId,
-                plan.ServerTick,
-                WorldDeltaMotionKind.RotatePivot,
-                "rotate_pivot",
-                Direction.None,
-                pivotEntityId,
-                pivotCoord,
-                member.From,
-                member.To,
-                direction,
-                false,
-                member.To));
-        }
-    }
-
-    private static void AddRotateBounceMetadata(MovePlan plan, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection direction, IReadOnlyList<ExternalPushContact> contacts, List<WorldDeltaAnimationMetadata> metadata)
-    {
-        var impactByMember = new Dictionary<long, GridCoord>();
-        for (int i = 0; i < contacts.Count; i++)
-        {
-            if (!impactByMember.ContainsKey(contacts[i].SourceEntityId))
+            cells.Add(member.From);
+            if (member.To != member.From)
             {
-                impactByMember.Add(contacts[i].SourceEntityId, contacts[i].ToCoord);
+                cells.Add(member.To);
             }
         }
 
-        for (int i = 0; i < plan.Members.Count; i++)
+        return new BehaviorClaimSet(subjectIds, cells, Array.Empty<ResourceKey>(), policy);
+    }
+
+    private static IReadOnlyList<ActionFact> BuildRotateBounceFacts(GameWorld world, MovePlan plan, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection direction, IReadOnlyList<ExternalPushContact> contacts, bool impactOnly, long startTick, long contactTick, long endTick, double contactProgress, int effectiveCostTicks)
+    {
+        var facts = new List<ActionFact>();
+        if (!impactOnly)
         {
-            BodyMember member = plan.Members[i];
-            GridCoord impact = impactByMember.TryGetValue(member.EntityId, out GridCoord foundImpact) ? foundImpact : member.To;
-            metadata.Add(new WorldDeltaAnimationMetadata(
-                member.EntityId,
-                plan.ServerTick,
-                WorldDeltaMotionKind.RotatePivotBounce,
-                "rotate_pivot_bounce",
-                Direction.None,
-                pivotEntityId,
-                pivotCoord,
-                member.From,
-                member.To,
-                direction,
-                true,
-                impact));
+            facts.Add(CreateRotateFact(ActionFactType.RotateStarted, PresentationFactType.RotatePivotGroup, world, plan, pivotEntityId, pivotCoord, direction, PresentationFactResultKind.Bounce, BuildImpacts(contacts), startTick, contactTick, endTick, contactProgress, effectiveCostTicks));
+            return facts;
         }
 
         var blockerFeedback = new HashSet<long>();
@@ -262,20 +319,99 @@ public sealed class RotatePivotResponseProcessor
             }
 
             Direction feedbackDirection = contact.PushDirection == Direction.None ? DirectionFromDelta(contact.FromCoord, contact.ToCoord) : contact.PushDirection;
-            metadata.Add(new WorldDeltaAnimationMetadata(
-                contact.BlockerEntityId,
-                plan.ServerTick,
-                WorldDeltaMotionKind.MechanismPush,
-                "rotate_pivot_impact",
-                feedbackDirection,
+            facts.Add(ActionFact.WithProjection(
+                ActionFactType.RotateContacted,
+                contactTick,
+                PresentationFactType.RotatePivotImpact,
+                PresentationFactResultKind.Impact,
+                plan.SourceActionId,
+                0,
                 pivotEntityId,
-                pivotCoord,
+                new[] { contact.BlockerEntityId },
                 contact.FromCoord,
                 contact.ToCoord,
+                feedbackDirection,
+                startTick,
+                contactTick,
+                endTick,
+                contactProgress,
+                effectiveCostTicks,
+                pivotEntityId,
+                pivotCoord,
                 direction,
-                false,
-                contact.ToCoord));
+                Array.Empty<PresentationFactMember>(),
+                new[] { new PresentationFactImpact(contact.BlockerEntityId, contact.SourceEntityId, contact.FromCoord, contact.ToCoord, feedbackDirection) }));
         }
+
+        return facts;
+    }
+
+    private static ActionFact CreateRotateFact(ActionFactType factType, PresentationFactType projectionFactType, GameWorld world, MovePlan plan, long pivotEntityId, GridCoord pivotCoord, RotatePivotDirection direction, PresentationFactResultKind resultKind, IReadOnlyList<PresentationFactImpact> impacts, long startTick, long contactTick, long endTick, double contactProgress, int effectiveCostTicks)
+    {
+        var members = new PresentationFactMember[plan.Members.Count];
+        for (int i = 0; i < plan.Members.Count; i++)
+        {
+            BodyMember member = plan.Members[i];
+            members[i] = new PresentationFactMember(member.EntityId, member.From, member.To, FromDirection(world, member.EntityId), member.Direction, FromPortLocalPorts(world, member.EntityId), DirectionMask.None);
+        }
+
+        GridCoord from = plan.Members.Count == 0 ? default : plan.Members[0].From;
+        GridCoord to = plan.Members.Count == 0 ? default : plan.Members[0].To;
+        return ActionFact.WithProjection(factType, plan.ServerTick, projectionFactType, resultKind, plan.SourceActionId, 0, pivotEntityId, SubjectIds(plan), from, to, Direction.None, startTick, contactTick, endTick, contactProgress, effectiveCostTicks, pivotEntityId, pivotCoord, direction, members, impacts);
+    }
+
+    private static IReadOnlyList<PresentationFactImpact> BuildImpacts(IReadOnlyList<ExternalPushContact> contacts)
+    {
+        if (contacts.Count == 0)
+        {
+            return Array.Empty<PresentationFactImpact>();
+        }
+
+        var result = new PresentationFactImpact[contacts.Count];
+        for (int i = 0; i < contacts.Count; i++)
+        {
+            ExternalPushContact contact = contacts[i];
+            Direction pushDirection = contact.PushDirection == Direction.None ? DirectionFromDelta(contact.FromCoord, contact.ToCoord) : contact.PushDirection;
+            result[i] = new PresentationFactImpact(contact.BlockerEntityId, contact.SourceEntityId, contact.FromCoord, contact.ToCoord, pushDirection);
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<long> SubjectIds(MovePlan plan)
+    {
+        var subjectIds = new long[plan.Members.Count];
+        for (int i = 0; i < plan.Members.Count; i++)
+        {
+            subjectIds[i] = plan.Members[i].EntityId;
+        }
+
+        return subjectIds;
+    }
+
+    private static IReadOnlyList<long> BodyIds(BehaviorBody body)
+    {
+        var ids = new long[body.Entities.Count];
+        for (int i = 0; i < body.Entities.Count; i++)
+        {
+            ids[i] = body.Entities[i].EntityId;
+        }
+
+        return ids;
+    }
+
+    private static Direction FromDirection(GameWorld world, long entityId)
+    {
+        return world.TryGetEntity(entityId, out GameEntity entity) && world.TryGetComponent(entity, out DirectionComponent direction)
+            ? direction.Direction
+            : Direction.None;
+    }
+
+    private static DirectionMask FromPortLocalPorts(GameWorld world, long entityId)
+    {
+        return world.TryGetEntity(entityId, out GameEntity entity) && world.TryGetComponent(entity, out PortConnectorComponent connector)
+            ? connector.LocalPorts
+            : DirectionMask.None;
     }
 
     private bool IsPushContribution(ActionSpec spec, ActionRequest request)
@@ -393,15 +529,40 @@ public sealed class RotatePivotResponseProcessor
                 continue;
             }
 
-            foundContacts.Add(new ExternalPushContact(blocker.EntityId, sweptCell.EntityId, sweptCell.From, sweptCell.Coord, request.ActionId, sweptCell.PushDirection));
+            foundContacts.Add(new ExternalPushContact(blocker.EntityId, sweptCell.EntityId, sweptCell.From, sweptCell.Coord, request.ActionId, sweptCell.PushDirection, sweptCell.Progress, sweptCell.SampleOrder));
         }
 
         plan = new MovePlan(request.Priority, request.ActionId, request.Source.SourceStateId, request.EntityId, serverTick, body.BodyId, body.Kind, request.Target.Direction, members);
-        contacts = foundContacts.OrderBy(contact => contact.ToCoord.X).ThenBy(contact => contact.ToCoord.Y).ThenBy(contact => contact.BlockerEntityId).ToArray();
+        contacts = SelectEarliestContacts(foundContacts);
         return true;
     }
 
-    private bool TryBuildDeferred(GameWorld world, ActionRequest request, ActionSpec spec, IReadOnlyList<ExternalPushContact> contacts, long pivotEntityId, RotatePivotDirection rotateDirection, long serverTick, out IReadOnlyList<DeferredAction> deferredActions, out string reason)
+    private static IReadOnlyList<ExternalPushContact> SelectEarliestContacts(IReadOnlyList<ExternalPushContact> contacts)
+    {
+        if (contacts.Count == 0)
+        {
+            return Array.Empty<ExternalPushContact>();
+        }
+
+        double earliest = contacts.Min(contact => contact.Progress);
+        return contacts
+            .Where(contact => Math.Abs(contact.Progress - earliest) < 0.000001d)
+            .OrderBy(contact => contact.SampleOrder)
+            .ThenBy(contact => contact.SourceEntityId)
+            .ThenBy(contact => contact.BlockerEntityId)
+            .ThenBy(contact => contact.ToCoord.X)
+            .ThenBy(contact => contact.ToCoord.Y)
+            .ToArray();
+    }
+
+    private static RotateBounceTiming CalculateBounceTiming(long startTick, int baseCostTicks, double contactProgress)
+    {
+        int outTicks = Math.Max(1, (int)Math.Ceiling(Math.Max(0.000001d, contactProgress) * Math.Max(1, baseCostTicks)));
+        int effective = outTicks + outTicks;
+        return new RotateBounceTiming(Math.Min(1d, Math.Max(0d, contactProgress)), startTick + outTicks, startTick + effective, outTicks, effective);
+    }
+
+    private bool TryBuildDeferred(GameWorld world, ActionRequest request, ActionSpec spec, IReadOnlyList<ExternalPushContact> contacts, long pivotEntityId, RotatePivotDirection rotateDirection, long releaseTick, out IReadOnlyList<DeferredAction> deferredActions, out string reason)
     {
         var result = new List<DeferredAction>();
         var seenSubjects = new HashSet<string>();
@@ -445,7 +606,7 @@ public sealed class RotatePivotResponseProcessor
                 pivotEntityId,
                 rotateDirection == RotatePivotDirection.Clockwise ? Direction.Right : Direction.Left,
                 request.OwnerActionId);
-            result.Add(new DeferredAction(spec.Handoff.SpecId, blocker.EntityId, subjectIds, outputDirection, serverTick, serverTick + spec.DefaultCostTicks, spec.DefaultCostTicks, request.OwnerActionId, BlockedOutcomeUtility.BuildDeferredDedupeKey(request, blocker.EntityId, subjectIds, outputDirection, serverTick), new[] { context }));
+            result.Add(new DeferredAction(spec.Handoff.SpecId, blocker.EntityId, subjectIds, outputDirection, releaseTick, releaseTick, spec.DefaultCostTicks, request.OwnerActionId, BlockedOutcomeUtility.BuildDeferredDedupeKey(request, blocker.EntityId, subjectIds, outputDirection, releaseTick), new[] { context }));
         }
 
         deferredActions = result;
@@ -496,20 +657,42 @@ public sealed class RotatePivotResponseProcessor
     }
 }
 
+public readonly struct RotateBounceTiming
+{
+    public RotateBounceTiming(double contactProgress, long contactTick, long endTick, int outTicks, int effectiveCostTicks)
+    {
+        ContactProgress = contactProgress;
+        ContactTick = contactTick;
+        EndTick = endTick;
+        OutTicks = outTicks;
+        EffectiveCostTicks = effectiveCostTicks;
+    }
+
+    public double ContactProgress { get; }
+    public long ContactTick { get; }
+    public long EndTick { get; }
+    public int OutTicks { get; }
+    public int EffectiveCostTicks { get; }
+}
+
 public readonly struct RotateSweepCell
 {
-    public RotateSweepCell(long entityId, GridCoord from, GridCoord coord, Direction pushDirection)
+    public RotateSweepCell(long entityId, GridCoord from, GridCoord coord, Direction pushDirection, double progress, int sampleOrder)
     {
         EntityId = entityId;
         From = from;
         Coord = coord;
         PushDirection = pushDirection;
+        Progress = progress;
+        SampleOrder = sampleOrder;
     }
 
     public long EntityId { get; }
     public GridCoord From { get; }
     public GridCoord Coord { get; }
     public Direction PushDirection { get; }
+    public double Progress { get; }
+    public int SampleOrder { get; }
 }
 
 internal readonly struct RotateSweepStep
@@ -580,13 +763,15 @@ public sealed class RotateSweepPlanner
                     continue;
                 }
 
-                swept.Add(new RotateSweepCell(member.EntityId, member.From, coord, step.PushDirection));
+                swept.Add(new RotateSweepCell(member.EntityId, member.From, coord, step.PushDirection, step.Order / 90d, step.Order));
             }
         }
 
         members = plannedMembers;
         sweptCells = swept
-            .OrderBy(cell => cell.Coord.X)
+            .OrderBy(cell => cell.SampleOrder)
+            .ThenBy(cell => cell.EntityId)
+            .ThenBy(cell => cell.Coord.X)
             .ThenBy(cell => cell.Coord.Y)
             .ThenBy(cell => cell.EntityId)
             .ToArray();
